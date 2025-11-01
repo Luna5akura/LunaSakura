@@ -1,0 +1,133 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"childIndexes" : 
+					[
+						1
+					],
+					"jsonFile" : "directory-.-Debug-d0094a50bb2071803777.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.29"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						6
+					]
+				},
+				{
+					"build" : "src",
+					"jsonFile" : "directory-src-Debug-c94b7c2814d5a21df52c.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.29"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 0,
+					"source" : "src",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						5
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0,
+						1
+					],
+					"name" : "Sakura",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						5,
+						6
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 1,
+					"id" : "FileIOTest::@145eef247bfb46b6828c",
+					"jsonFile" : "target-FileIOTest-Debug-5e4a348a4728a1bfb57c.json",
+					"name" : "FileIOTest",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 1,
+					"id" : "NALUTest::@145eef247bfb46b6828c",
+					"jsonFile" : "target-NALUTest-Debug-7d2707b193efddb7b5f1.json",
+					"name" : "NALUTest",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 1,
+					"id" : "RBSPTest::@145eef247bfb46b6828c",
+					"jsonFile" : "target-RBSPTest-Debug-be4c4fb50818802a3258.json",
+					"name" : "RBSPTest",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 1,
+					"id" : "SEITest::@145eef247bfb46b6828c",
+					"jsonFile" : "target-SEITest-Debug-3b4feccc40ebfea5f4c3.json",
+					"name" : "SEITest",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 1,
+					"id" : "SPSTest::@145eef247bfb46b6828c",
+					"jsonFile" : "target-SPSTest-Debug-8b40d0d11441b3a89713.json",
+					"name" : "SPSTest",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 1,
+					"id" : "Sakura::@145eef247bfb46b6828c",
+					"jsonFile" : "target-Sakura-Debug-0eda47d388f7caac364f.json",
+					"name" : "Sakura",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "SakuraMain::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-SakuraMain-Debug-0187b4dabdc9adff387f.json",
+					"name" : "SakuraMain",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "D:/Clion/Luna/sakura/cmake-build-debug",
+		"source" : "D:/Clion/Luna/sakura"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 7
+	}
+}

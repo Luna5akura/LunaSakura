@@ -1,0 +1,2338 @@
+// mp4decoder.c
+
+#include "std/stdio.h"
+#include "std/fileio.h"
+#include "std/math.h"
+
+#include "util/mem.h"
+#include "util/string_util.h"
+#include "decoder/mp4decoder.h"
+
+
+
+static const uint8_t zigzag_scan[16] = {
+  0,  1,  5,  6,
+  2,  4,  7,  12,
+  3,  8,  11, 13,
+  9,  10, 14, 15
+};
+
+static const uint8_t field_scan[16] = {
+  0,  2,  8,  10,
+  1,  3,  9,  11,
+  4,  6,  12, 14,
+  5,  7,  13, 15
+};
+
+void align_to_next_byte(Bitstream *bs) {
+  if (bs->bit_pos != 0) {
+    bs->bit_pos = 0;
+    bs->byte_pos++;
+  }
+}
+
+uint16_t read_uint16(FILE* fp) {
+  uint8_t buffer[2];
+  read_file(buffer, 1, 2, fp);
+  return (buffer[0] << 8) | buffer[1];
+}
+
+uint32_t read_uint32(FILE *fp) {
+  uint8_t buffer[4];
+  read_file(buffer, 1, 4, fp);
+  return (buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
+}
+
+uint64_t read_uint64(FILE *fp) {
+  uint8_t buffer[8];
+  read_file(buffer, 1, 8, fp);
+  return ((uint64_t)buffer[0] << 56) | ((uint64_t)buffer[1] << 48)
+    | ((uint64_t)buffer[2] << 40) | ((uint64_t)buffer[3] << 32)
+    | (buffer[4] << 24) | (buffer[5] << 16) | (buffer[6] << 8) | buffer[7];
+}
+
+void read_type(FILE *fp, char *type) {
+  read_file(type, 1, 4, fp);
+  type[4] = '\0';
+}
+
+void parse_nalu_header(uint8_t nal_header, NALU_t *nalu) {
+  nalu->forbidden_zero_bit = (nal_header >> 7) & 0x1;
+  nalu->nal_ref_idc = (nal_header >> 5) & 0x3;
+  nalu->nal_unit_type = nal_header & 0x1F;
+}
+
+void remove_emulation_bytes(uint8_t *data, uint32_t *size) {
+    uint32_t i = 0, j = 0;
+    uint8_t *new_data = (uint8_t *)mmalloc(*size);
+    while (i < *size) {
+        if (i + 2 < *size && data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x03) {
+            new_data[j++] = data[i++];
+            new_data[j++] = data[i++];
+            i++; // Skip the emulation prevention byte
+        } else {
+            new_data[j++] = data[i++];
+        }
+    }
+    mcopy(data, new_data, j);
+    *size = j;
+    mfree(new_data);
+}
+
+
+
+void init_bitstream(Bitstream *bs, uint8_t *data, uint32_t size) {
+  bs->data = data;
+  bs->size = size;
+  bs->byte_pos = 0;
+  bs->bit_pos = 0;
+}
+
+uint8_t read_bit(Bitstream *bs) {
+  if (bs->byte_pos >= bs->size) {
+    return 0;
+  }
+  uint8_t bit = (bs->data[bs->byte_pos] >> (7 - bs->bit_pos)) & 0x1;
+  bs->bit_pos++;
+  if (bs->bit_pos > 7) {
+    bs->bit_pos = 0;
+    bs->byte_pos++;
+  }
+  return bit;
+}
+
+uint32_t read_bits(Bitstream *bs, uint8_t num_bits) {
+  uint32_t value = 0;
+  for (uint8_t i = 0; i < num_bits; i++) {
+    value = (value << 1) | read_bit(bs);
+  }
+  return value;
+}
+
+uint32_t read_ue(Bitstream *bs) {
+    uint32_t zero_count = 0;
+    while (read_bit(bs) == 0 && bs->byte_pos < bs->size) {
+        zero_count++;
+    }
+    uint32_t value = (1 << zero_count) - 1 + read_bits(bs, zero_count);
+    return value;
+}
+
+int32_t read_se(Bitstream *bs) {
+typedef struct {
+    uint8_t profile_idc;
+    uint8_t constraint_set_flags;
+    uint8_t level_idc;
+    uint32_t seq_parameter_set_id;
+    uint32_t log2_max_frame_num_minus4;
+    uint32_t pic_order_cnt_type;
+    uint32_t log2_max_pic_order_cnt_lsb_minus4;
+    uint32_t pic_width_in_mbs_minus1;
+    uint32_t pic_height_in_map_units_minus1;
+    uint8_t frame_mbs_only_flag;
+    uint8_t mb_adaptive_frame_field_flag;
+    uint8_t direct_8x8_inference_flag;
+    uint8_t frame_cropping_flag;
+    uint32_t frame_crop_left_offset;
+    uint32_t frame_crop_right_offset;
+    uint32_t frame_crop_top_offset;
+    uint32_t frame_crop_bottom_offset;
+    uint8_t vui_parameters_present_flag;
+    uint32_t chroma_format_idc;
+    uint8_t separate_colour_plane_flag;
+    uint8_t delta_pic_order_always_zero_flag;
+    int32_t offset_for_non_ref_pic;
+    int32_t offset_for_top_to_bottom_field;
+    uint32_t num_ref_frames_in_pic_order_cnt_cycle;
+} SPS_t;
+    uint32_t code_num = read_ue(bs);
+    int32_t value = (code_num % 2 == 0) ? -(int32_t)(code_num / 2) : (int32_t)((code_num + 1) / 2);
+    return value;
+}
+
+
+void parse_sps(NALU_t *nalu, SPS_t *sps) {
+    Bitstream bs;
+    init_bitstream(&bs, nalu->rbsp, nalu->rbsp_size);
+
+    sps->profile_idc = read_bits(&bs, 8);
+    sps->constraint_set_flags = read_bits(&bs, 8);
+    sps->level_idc = read_bits(&bs, 8);
+    sps->seq_parameter_set_id = read_ue(&bs);
+
+    if (sps->profile_idc == 100 || sps->profile_idc == 110 ||
+        sps->profile_idc == 122 || sps->profile_idc == 244 ||
+        sps->profile_idc == 44 || sps->profile_idc == 83 ||
+        sps->profile_idc == 86 || sps->profile_idc == 118) {
+        // High profile
+        sps->chroma_format_idc = read_ue(&bs);
+        if (sps->chroma_format_idc == 3) {
+            sps->separate_colour_plane_flag = read_bit(&bs);
+        }
+        sps->bit_depth_luma_minus8 = read_ue(&bs);
+        sps->bit_depth_chroma_minus8 = read_ue(&bs);
+        sps->qpprime_y_zero_transform_bypass_flag = read_bit(&bs);
+        sps->seq_scaling_matrix_present_flag = read_bit(&bs);
+        if (sps->seq_scaling_matrix_present_flag) {
+            // Scaling matrix parsing (omitted for brevity)
+        }
+    } else {
+        // Baseline profile
+        sps->chroma_format_idc = 1;
+    }
+
+    sps->log2_max_frame_num_minus4 = read_ue(&bs);
+    sps->pic_order_cnt_type = read_ue(&bs);
+    if (sps->pic_order_cnt_type == 0) {
+        sps->log2_max_pic_order_cnt_lsb_minus4 = read_ue(&bs);
+    } else if (sps->pic_order_cnt_type == 1) {
+        sps->delta_pic_order_always_zero_flag = read_bit(&bs);
+        sps->offset_for_non_ref_pic = read_se(&bs);
+        sps->offset_for_top_to_bottom_field = read_se(&bs);
+        sps->num_ref_frames_in_pic_order_cnt_cycle = read_ue(&bs);
+        // Read offset_for_ref_frame (omitted for brevity)
+    }
+
+    sps->max_num_ref_frames = read_ue(&bs);
+    sps->gaps_in_frame_num_value_allowed_flag = read_bit(&bs);
+    sps->pic_width_in_mbs_minus1 = read_ue(&bs);
+    sps->pic_height_in_map_units_minus1 = read_ue(&bs);
+    sps->frame_mbs_only_flag = read_bit(&bs);
+    if (!sps->frame_mbs_only_flag) {
+        sps->mb_adaptive_frame_field_flag = read_bit(&bs);
+    }
+    sps->direct_8x8_inference_flag = read_bit(&bs);
+    sps->frame_cropping_flag = read_bit(&bs);
+    if (sps->frame_cropping_flag) {
+        sps->frame_crop_left_offset = read_ue(&bs);
+        sps->frame_crop_right_offset = read_ue(&bs);
+        sps->frame_crop_top_offset = read_ue(&bs);
+        sps->frame_crop_bottom_offset = read_ue(&bs);
+    }
+    sps->vui_parameters_present_flag = read_bit(&bs);
+    if (sps->vui_parameters_present_flag) {
+        // VUI parameters parsing (omitted for brevity)
+    }
+
+    // Calculate the width and height of the frame
+    uint32_t PicWidthInMbs = sps->pic_width_in_mbs_minus1 + 1;
+    uint32_t PicHeightInMapUnits = sps->pic_height_in_map_units_minus1 + 1;
+    uint32_t FrameHeightInMbs = (2 - sps->frame_mbs_only_flag) * PicHeightInMapUnits;
+    uint32_t width = PicWidthInMbs * 16;
+    uint32_t height = FrameHeightInMbs * 16;
+
+    pprintf("Video resolution: %u x %u\n", width, height);
+}
+
+
+void parse_pps(NALU_t *nalu, PPS_t *pps) {
+    Bitstream bs;
+    init_bitstream(&bs, nalu->rbsp, nalu->rbsp_size);
+
+    pps->pic_parameter_set_id = read_ue(&bs);
+    pps->seq_parameter_set_id = read_ue(&bs);
+    pps->entropy_coding_mode_flag = read_bit(&bs);
+    pps->bottom_field_pic_order_in_frame_present_flag = read_bit(&bs);
+    pps->num_slice_groups_minus1 = read_ue(&bs);
+    if (pps->num_slice_groups_minus1 > 0) {
+        // Parsing of slice groups (omitted for brevity)
+    }
+    pps->num_ref_idx_l0_default_active_minus1 = read_ue(&bs);
+    pps->num_ref_idx_l1_default_active_minus1 = read_ue(&bs);
+    pps->weighted_pred_flag = read_bit(&bs);
+    pps->weighted_bipred_idc = read_bits(&bs, 2);
+    pps->pic_init_qp_minus26 = read_se(&bs);
+    pps->pic_init_qs_minus26 = read_se(&bs);
+    pps->chroma_qp_index_offset = read_se(&bs);
+    pps->deblocking_filter_control_present_flag = read_bit(&bs);
+    pps->constrained_intra_pred_flag = read_bit(&bs);
+    pps->redundant_pic_cnt_present_flag = read_bit(&bs);
+    // Additional PPS fields can be parsed here as needed
+}
+
+
+void parse_slice_header(NALU_t *nalu, SliceHeader_t *slice_header, PPS_t *pps, SPS_t *sps) {
+    Bitstream bs;
+    init_bitstream(&bs, nalu->rbsp, nalu->rbsp_size);
+
+    slice_header->first_mb_in_slice = read_ue(&bs);
+    slice_header->slice_type = read_ue(&bs);
+    slice_header->pic_parameter_set_id = read_ue(&bs);
+
+    slice_header->frame_num = read_bits(&bs, sps->log2_max_frame_num_minus4 + 4);
+
+    if (!sps->frame_mbs_only_flag) {
+        slice_header->field_pic_flag = read_bit(&bs);
+        if (slice_header->field_pic_flag) {
+            slice_header->bottom_field_flag = read_bit(&bs);
+        }
+    }
+
+    if (nalu->nal_unit_type == 5) { // IDR picture
+        slice_header->idr_pic_id = read_ue(&bs);
+    }
+
+    if (sps->pic_order_cnt_type == 0) {
+        slice_header->pic_order_cnt_lsb = read_bits(&bs, sps->log2_max_pic_order_cnt_lsb_minus4 + 4);
+        // Handle delta_pic_order_cnt_bottom if necessary
+    } else if (sps->pic_order_cnt_type == 1 && !sps->delta_pic_order_always_zero_flag) {
+        slice_header->delta_pic_order_cnt[0] = read_se(&bs);
+        // Handle delta_pic_order_cnt[1] if necessary
+    }
+
+    if (pps->redundant_pic_cnt_present_flag) {
+        slice_header->redundant_pic_cnt = read_ue(&bs);
+    }
+
+    // Handle slice_type specific fields
+    if (slice_header->slice_type == 1 || slice_header->slice_type == 6) { // B slice
+        slice_header->direct_spatial_mv_pred_flag = read_bit(&bs);
+    }
+
+    // Handle num_ref_idx_active_override_flag
+    slice_header->num_ref_idx_active_override_flag = read_bit(&bs);
+    if (slice_header->num_ref_idx_active_override_flag) {
+        slice_header->num_ref_idx_l0_active_minus1 = read_ue(&bs);
+        if (slice_header->slice_type == 1 || slice_header->slice_type == 6) { // B slice
+            slice_header->num_ref_idx_l1_active_minus1 = read_ue(&bs);
+        }
+    }
+
+    // Reference picture list reordering (omitted for brevity)
+
+    // Handle weighted prediction (omitted for brevity)
+
+    // Handle dec_ref_pic_marking for IDR frames (omitted for brevity)
+
+    // Read slice_qp_delta
+    slice_header->slice_qp_delta = read_se(&bs);
+    slice_header->slice_qp = 26 + pps->pic_init_qp_minus26 + slice_header->slice_qp_delta;
+
+    // Additional fields can be parsed as required
+}
+
+int decode_level(Bitstream *bs, int *suffix_length) {
+    int level_prefix = 0;
+    while (!read_bit(bs) && level_prefix < 15) {
+        level_prefix++;
+    }
+
+    int level_code = 0;
+    if (level_prefix < 14) {
+        int level_suffix = 0;
+        if (*suffix_length > 0) {
+            level_suffix = read_bits(bs, *suffix_length);
+        }
+        level_code = (level_prefix << (*suffix_length)) + level_suffix;
+    } else if (level_prefix == 14 && *suffix_length == 0) {
+        int level_suffix = read_bits(bs, 4);
+        level_code = (14 << (*suffix_length)) + level_suffix;
+    } else if (level_prefix == 15) {
+        int level_suffix = read_bits(bs, 12);
+        level_code = (15 << (*suffix_length)) + level_suffix;
+    }
+
+    if (*suffix_length == 0) {
+        *suffix_length = 1;
+    }
+
+    if (abs(level_code) > (3 << (*suffix_length - 1)) && *suffix_length < 6) {
+        (*suffix_length)++;
+    }
+
+    int level = (level_code % 2 == 0) ? (level_code + 2) >> 1 : -(level_code + 1) >> 1;
+
+    return level;
+}
+
+uint32_t read_coeff_token(Bitstream *bs) {
+    // Coeff_token parsing involves variable-length codes
+    // For simplicity, assume a function exists that maps the bitstream to coeff_token
+    // In practice, this would involve using look-up tables and bit patterns
+    // Here's a placeholder implementation:
+    uint32_t coeff_token = read_ue(bs);
+    return coeff_token;
+}
+
+int read_level(Bitstream *bs, int *suffix_length) {
+    int level_prefix = 0;
+    while (read_bit(bs) == 0 && level_prefix < 15) {
+        level_prefix++;
+    }
+
+    int level_code = 0;
+    if (level_prefix < 14) {
+        int level_suffix = 0;
+        if (*suffix_length > 0) {
+            level_suffix = read_bits(bs, *suffix_length);
+        }
+        level_code = (level_prefix << *suffix_length) + level_suffix;
+    } else if (level_prefix == 14 && *suffix_length == 0) {
+        int level_suffix = read_bits(bs, 4);
+        level_code = (14 << *suffix_length) + level_suffix;
+    } else if (level_prefix == 15) {
+        int level_suffix = read_bits(bs, 12);
+        level_code = (15 << *suffix_length) + level_suffix;
+    }
+
+    if (level_code % 2 == 0) {
+        level_code = (level_code + 2) >> 1;
+        level_code = -level_code;
+    } else {
+        level_code = (level_code + 1) >> 1;
+    }
+
+    // Adjust suffix length
+    if (*suffix_length == 0) {
+        *suffix_length = 1;
+    }
+    if (abs(level_code) > (3 << (*suffix_length - 1)) && *suffix_length < 6) {
+        (*suffix_length)++;
+    }
+
+    return level_code;
+}
+
+int read_total_zeros(Bitstream *bs, int total_coeff) {
+    // In practice, total_zeros is read using VLC tables that vary with total_coeff
+    // Placeholder implementation:
+    int total_zeros = read_ue(bs);
+    return total_zeros;
+}
+
+int read_run_before(Bitstream *bs, int zeros_left) {
+    // Run_before is read using VLC tables that vary with zeros_left
+    // Placeholder implementation:
+    int run_before = read_ue(bs);
+    return run_before;
+}
+
+void decode_residual(Bitstream *bs, int16_t *coeff_level, int max_coeff_num, uint8_t *scan) {
+    uint32_t coeff_token = read_coeff_token(bs);
+    int total_coeff = get_total_coeff(coeff_token);
+    int trailing_ones = get_trailing_ones(coeff_token);
+
+    int16_t coeffs[16] = {0};
+    int suffix_length = (total_coeff > 10 && trailing_ones < 3) ? 1 : 0;
+
+    for (int i = 0; i < trailing_ones; i++) {
+        uint8_t sign = read_bit(bs);
+        coeffs[i] = sign ? -1 : 1;
+    }
+
+    for (int i = trailing_ones; i < total_coeff; i++) {
+        int level = read_level(bs, &suffix_length);
+        coeffs[i] = level;
+    }
+
+    int total_zeros = 0;
+    if (total_coeff < max_coeff_num) {
+        total_zeros = read_total_zeros(bs, total_coeff);
+    }
+
+    int zeros_left = total_zeros;
+    int coeff_index = total_coeff - 1;
+    for (int i = 0; i < total_coeff - 1; i++) {
+        int run_before = read_run_before(bs, zeros_left);
+        zeros_left -= run_before;
+        coeff_level[scan[coeff_index]] = coeffs[coeff_index];
+        coeff_index--;
+    }
+    // Place last coefficient
+    coeff_level[scan[coeff_index]] = coeffs[coeff_index];
+}
+
+
+
+int get_chroma_qp(int luma_qp, int chroma_qp_index_offset) {
+  int chroma_qp = luma_qp + chroma_qp_index_offset;
+  if (chroma_qp < 0) {
+    chroma_qp = 0;
+  } else if (chroma_qp > 51) {
+    chroma_qp = 51;
+  }
+  return chroma_qp;
+}
+
+void inverse_quantization(int16_t *coeff_level, int qp) {
+  static const int dequant_coeff[6][4][4] = {
+  {
+    {10, 13, 10, 13},
+    {13, 16, 13, 16},
+    {10, 13, 10, 13},
+    {13, 16, 13, 16}
+    },
+  {
+    {11, 14, 11, 14},
+    {14, 18, 14, 18},
+    {11, 14, 11, 14},
+    {14, 18, 14, 18}
+    },
+  {
+    {13, 16, 13, 16},
+    {16, 20, 16, 20},
+    {13, 16, 13, 16},
+    {16, 20, 16, 20}
+    },
+  {
+    {14, 18, 14, 18},
+    {18, 23, 18, 23},
+    {14, 18, 14, 18},
+    {18, 23, 18, 23}
+    },
+  {
+    {16, 20, 16, 20},
+    {20, 25, 20, 25},
+    {16, 20, 16, 20},
+    {20, 25, 20, 25}
+    },
+  {
+    {18, 23, 18, 23},
+    {23, 29, 23, 29},
+    {18, 23, 18, 23},
+    {23, 29, 23, 29}
+    }
+  };
+
+    int qpi = qp % 6;
+    int qpo = qp / 6;
+
+    for (int i = 0; i < 16; i++) {
+        int row = i / 4;
+        int col = i % 4;
+        coeff_level[i] = coeff_level[i] * dequant_coeff[qpi][row][col] << (qpo - 4);
+    }
+}
+
+
+void inverse_quantization_chroma_dc(int16_t *coeff_level, int qp) {
+  int qpi = qp % 6;
+  int qpo = qp / 6;
+
+  static const int dequant_coeff_chroma_dc[6] = { 10, 11, 13, 14, 16, 18 };
+
+  for (int i = 0; i < 4; i++) {
+    coeff_level[i] = coeff_level[i] * dequant_coeff_chroma_dc[qpi] << (qpo - 5);
+  }
+}
+
+void inverse_transform(int16_t *block) {
+    int16_t tmp[4][4];
+
+    for (int i = 0; i < 4; i++) {
+        int a0 = block[i * 4 + 0] + block[i * 4 + 2];
+        int a1 = block[i * 4 + 0] - block[i * 4 + 2];
+        int a2 = block[i * 4 + 1] - block[i * 4 + 3];
+        int a3 = block[i * 4 + 1] + block[i * 4 + 3];
+
+        tmp[i][0] = a0 + a3;
+        tmp[i][1] = a1 + a2;
+        tmp[i][2] = a1 - a2;
+        tmp[i][3] = a0 - a3;
+    }
+
+    for (int i = 0; i < 4; i++) {
+        int a0 = tmp[0][i] + tmp[2][i];
+        int a1 = tmp[0][i] - tmp[2][i];
+        int a2 = tmp[1][i] - tmp[3][i];
+        int a3 = tmp[1][i] + tmp[3][i];
+
+        block[0 * 4 + i] = (a0 + a3 + 32) >> 6;
+        block[1 * 4 + i] = (a1 + a2 + 32) >> 6;
+        block[2 * 4 + i] = (a1 - a2 + 32) >> 6;
+        block[3 * 4 + i] = (a0 - a3 + 32) >> 6;
+    }
+}
+
+
+void inverse_transform_chroma_dc(int16_t *block) {
+  int16_t tmp[4];
+
+  int a0 = block[0] + block[2];
+  int a1 = block[0] - block[2];
+  int a2 = block[1] - block[3];
+  int a3 = block[1] + block[3];
+
+  tmp[0] = a0 + a3;
+  tmp[1] = a1 + a2;
+  tmp[2] = a1 - a2;
+  tmp[3] = a0 - a3;
+
+  for (int i = 0; i < 4; i++) {
+    block[i] = (tmp[i] + 1) >> 1;
+  }
+}
+
+void parse_motion_vector(Bitstream *bs, int16_t *mvd_x, int16_t *mvd_y) {
+  *mvd_x = read_se(bs);
+  *mvd_y = read_se(bs);
+}
+
+void derive_motion_vector(
+  int16_t mvd_x, int16_t mvd_y, int16_t *mv_x, int16_t *mv_y,
+  int16_t mv_l_x, int16_t mv_u_x, int16_t mv_ul_x,
+  int16_t mv_l_y, int16_t mv_u_y, int16_t mv_ul_y) {
+
+  int16_t mv_pred_x = median(mv_l_x, mv_u_x, mv_ul_x);
+  int16_t mv_pred_y = median(mv_l_y, mv_u_y, mv_ul_y);
+
+  *mv_x = mv_pred_x + mvd_x;
+  *mv_y = mv_pred_y + mvd_y;
+}
+
+uint8_t get_interpolated_pixel(uint8_t *ref_frame, int x, int y, int frame_width, int frame_height, int mv_frac_x, int mv_frac_y) {
+    int x_int = x >> 2;
+    int y_int = y >> 2;
+    int x_frac = x & 0x03;
+    int y_frac = y & 0x03;
+
+    // Get the pixels around the reference point
+    uint8_t p00 = ref_frame[y_int * frame_width + x_int];
+    uint8_t p01 = ref_frame[y_int * frame_width + clamp(x_int + 1, 0, frame_width - 1)];
+    uint8_t p10 = ref_frame[clamp(y_int + 1, 0, frame_height - 1) * frame_width + x_int];
+    uint8_t p11 = ref_frame[clamp(y_int + 1, 0, frame_height - 1) * frame_width + clamp(x_int + 1, 0, frame_width - 1)];
+
+    // Perform bilinear interpolation
+    int result = ( (16 - x_frac) * (16 - y_frac) * p00 +
+                   x_frac * (16 - y_frac) * p01 +
+                   (16 - x_frac) * y_frac * p10 +
+                   x_frac * y_frac * p11 + 128 ) >> 8;
+
+    return clamp(result, 0, 255);
+}
+
+void motion_compensation(uint8_t *ref_frame, uint8_t *curr_frame,
+                         int16_t mv_x, int16_t mv_y, int mb_x, int mb_y,
+                         int frame_width, int frame_height) {
+    int ref_x = (mb_x * 16 << 2) + mv_x; // Multiply by 4 for quarter-pixel precision
+    int ref_y = (mb_y * 16 << 2) + mv_y;
+
+    for (int y = 0; y < 16; y++) {
+        for (int x = 0; x < 16; x++) {
+            int pos_x = ref_x + (x << 2);
+            int pos_y = ref_y + (y << 2);
+            uint8_t pixel_value = get_interpolated_pixel(ref_frame, pos_x, pos_y, frame_width, frame_height, mv_x & 0x03, mv_y & 0x03);
+
+            curr_frame[(mb_y * 16 + y) * frame_width + (mb_x * 16 + x)] = pixel_value;
+        }
+    }
+}
+
+
+void init_frame_buffer(FrameBuffer *fb) {
+  fb->current_index = 0;
+  for (int i = 0; i < MAX_REF_FRAMES; i++) {
+    fb->frames[i] = NULL;
+  }
+}
+
+void store_reference_frame(FrameBuffer *fb, Frame *current_frame) {
+  int idx = fb->current_index % MAX_REF_FRAMES
+  if (fb->frames[idx]->data_y) {
+      mfree(fb->frames[idx]->data_y);
+      mfree(fb->frames[idx]->data_u);
+      mfree(fb->frames[idx]->data_v);
+  }
+  fb->frames[idx]->width = current_frame->width;
+  fb->frames[idx]->height = current_frame->height;
+  int frame_size_y = current_frame->width * current_frame->height;
+  int frame_size_uv = (current_frame->width / 2) * (current_frame->height / 2);
+  fb->frames[idx]->data_y = mmalloc(frame_size_y);
+  fb->frames[idx]->data_u = mmalloc(frame_size_uv);
+  fb->frames[idx]->data_v = mmalloc(frame_size_uv);
+  mcopy(fb->frames[idx]->data_y, current_frame->data_y, frame_size_y);
+  mcopy(fb->frames[idx]->data_u, current_frame->data_u, frame_size_uv);
+  mcopy(fb->frames[idx]->data_v, current_frame->data_v, frame_size_uv);
+  fb->current_index++;
+}
+
+
+void yuv_to_rgb(uint8_t y, uint8_t u, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b) {
+  int c = y - 16;
+  int d = u - 128;
+  int e = v - 128;
+
+  int r_tmp = (298 * c + 409 * e + 128) >> 8;
+  int g_tmp = (298 * c - 100 * e - 208 * e + 128) >> 8;
+  int b_tmp = (298 * c + 516 * d + 128) >> 8;
+
+  *r = (uint8_t)clamp(r_tmp, 0, 255);
+  *g = (uint8_t)clamp(g_tmp, 0, 255);
+  *b = (uint8_t)clamp(b_tmp, 0, 255);
+}
+
+void save_frame_as_ppm(Frame *frame, int frame_number) {
+  char filename[50];
+  FILE *fp = open_file_write(filename);
+  ffprintf(fp, "P6\n%d %d\n 255\n", frame->width, frame->height);
+  for (int y = 0; y < frame->height; y++) {
+    for (int x = 0; x < frame->width; x++) {
+      uint8_t Y = frame->data_y[y*frame->width + x];
+      int chroma_x = x / 2;
+      int chroma_y = y / 2;
+      uint8_t U = frame->data_u[chroma_y * (frame->width / 2) + chroma_x];
+      uint8_t V = frame->data_v[chroma_y * (frame->width / 2) + chroma_x];
+      uint8_t R, G, B;
+      yuv_to_rgb(Y, U, V, &R, &G, &B);
+      ffputc(R, fp);
+      ffputc(G, fp);
+      ffputc(B, fp);
+    }
+  }
+  close_file(fp);
+}
+
+void parse_ftyp(FILE *fp, uint32_t box_size) {
+  uint32_t bytes_read = 0;
+  char major_brand[5] = {0};
+  read_file(major_brand, 1, 4, fp);
+  bytes_read += 4;
+
+  uint32_t minor_version = read_uint32(fp);
+  bytes_read += 4;
+
+  uint32_t compatible_brands_count = (box_size - 8) / 4;
+
+  char **compatible_brands = (char **)mmalloc(sizeof(char *) * compatible_brands_count);
+  for (uint32_t i = 0; i < compatible_brands_count; i++) {
+    compatible_brands[i] = (char *)mmalloc(5);
+    read_file(compatible_brands[i], 1, 4, fp);
+    compatible_brands[i][4] = '\0';
+    bytes_read += 4;
+  }
+
+  pprintf("FTYP Box: \n");
+  pprintf("  Major Brand: %s\n", major_brand);
+  pprintf(" Minor Version: %u\n", minor_version);
+  pprintf("  Compatible Brands:\n");
+  for (uint32_t i = 0; i < compatible_brands_count; i++) {
+    pprintf("    %s\n", compatible_brands[i]);
+    mfree(compatible_brands[i]);
+  }
+  mfree(compatible_brands);
+
+  if (bytes_read < box_size - 8) {
+    seek_file(fp, box_size - 8 - bytes_read, SEEK_CUR);
+  }
+}
+
+void parse_avcc(FILE *fp, uint32_t box_size, Track *track) {
+  uint8_t configurationVersion = ffgetc(fp);
+  uint8_t AVCProfileIndication = ffgetc(fp);
+  uint8_t profile_compatibility = ffgetc(fp);
+  uint8_t AVCLevelIndication = ffgetc(fp);
+  uint8_t lengthSizeMinusOne = ffgetc(fp) & 0x3;
+
+  uint8_t numOfSequenceParameterSets = ffgetc(fp) & 0x1F;
+
+  track->sps_count = numOfSequenceParameterSets;
+  track->sps_list = (uint8_t **)mmalloc(numOfSequenceParameterSets * sizeof(uint8_t *));
+  track->sps_length = (uint16_t *)mmalloc(numOfSequenceParameterSets * sizeof(uint16_t));
+
+  size_t bytes_read = 6;
+
+  for (uint8_t i = 0; i < numOfSequenceParameterSets; i++) {
+    uint16_t sps_length = read_uint16(fp);
+    bytes_read += 2;
+
+    uint8_t *sps = (uint8_t *)mmalloc(sps_length);
+    read_file(sps, 1, sps_length, fp);
+    bytes_read += sps_length;
+
+    track->sps_list[i] = sps;
+    track->sps_length[i] = sps_length;
+  }
+
+  uint8_t numOfPictureParameterSets = ffgetc(fp);
+  bytes_read +=1;
+
+  track->pps_count = numOfPictureParameterSets;
+  track->pps_list = (uint8_t **)mmalloc(numOfPictureParameterSets * sizeof(uint8_t *));
+  track->pps_length = (uint16_t *)mmalloc(numOfPictureParameterSets * sizeof(uint16_t));
+
+  for (uint8_t i = 0; i < numOfPictureParameterSets; i++) {
+    uint16_t pps_length = read_uint16(fp);
+    bytes_read += 2;
+
+    uint8_t *pps = (uint8_t *)mmalloc(pps_length);
+    read_file(pps, 1, pps_length, fp);
+
+    track->pps_list[i] = pps;
+    track->pps_length[i] = pps_length;
+  }
+
+  uint32_t remaining_bytes = box_size - (bytes_read + 8);
+  seek_file(fp, remaining_bytes, SEEK_CUR);
+}
+
+uint8_t read_esds_size(FILE* fp) {
+  uint8_t size = 9;
+  uint8_t byte = 0;
+  do {
+    byte = ffgetc(fp);
+    size = (size << 7) | (byte & 0x7F);
+  } while (byte & 0x80);
+  return size;
+}
+
+void parse_esds(FILE *fp, uint32_t box_size, Track *track) {
+  uint32_t version_and_flags = read_uint32(fp);
+  uint32_t bytes_read = 4;
+
+  uint8_t tag = ffgetc(fp);
+  bytes_read += 1;
+  uint8_t size = read_esds_size(fp);
+
+  uint16_t ES_ID = read_uint16(fp);
+  bytes_read += 2;
+  uint8_t stream_priority = ffgetc(fp);
+  bytes_read += 1;
+
+  tag = ffgetc(fp);
+  bytes_read += 1;
+  size = read_esds_size(fp);
+
+  uint8_t objectiveTypeIndication = ffgetc(fp);
+  bytes_read += 1;
+  uint8_t streamType = ffgetc(fp) >> 2;
+  bytes_read += 1;
+
+  seek_file(fp, 3 + 4 + 4, SEEK_CUR);
+  bytes_read += 11;
+
+  tag = ffgetc(fp);
+  bytes_read += 1;
+  size = read_esds_size(fp);
+
+  uint8_t *decoder_specific_info = (uint8_t *)mmalloc(size);
+  read_file(decoder_specific_info, 1, size, fp);
+  bytes_read += size;
+
+  track->audio_specific_config = decoder_specific_info;
+  track->audio_specific_config_size = size;
+
+  uint32_t remaining_bytes = box_size - bytes_read - 8;
+  seek_file(fp, remaining_bytes, SEEK_CUR);
+}
+
+void parse_stsd(FILE *fp, uint32_t box_size, Track *track) {
+  uint32_t version_and_flags = read_uint32(fp);
+  uint32_t entry_count = read_uint32(fp);
+
+  for (uint32_t i = 0; i < entry_count; i++) {
+    uint32_t entry_size = read_uint32(fp);
+    char format[5] = {0};
+    read_file(format, 1, 4, fp);
+
+    seek_file(fp, 6 + 2, SEEK_CUR);
+
+    if (scmp(format, "avc1") == 0 || scmp(format, "h264") == 0) {
+      seek_file(fp, 16, SEEK_CUR);
+
+      uint16_t width = read_uint16(fp);
+      uint16_t height = read_uint16(fp);
+      seek_file(fp, 50, SEEK_CUR);
+
+      uint32_t remaining = entry_size - (8 + 4 + (6 + 2) + 16 + 2 + 2 + 50);
+
+      while (remaining > 8) {
+        uint32_t box_size = read_uint32(fp);
+        char box_type[5] = {0};
+        read_file(box_type, 1, 4, fp);
+        remaining -= 8;
+
+        if (scmp(box_type, "avcC") == 0) {
+          parse_avcc(fp, box_size, track);
+        } else {
+          seek_file(fp, box_size - 8, SEEK_CUR);
+        }
+        remaining -= (box_size - 8);
+      }
+    } else if (scmp(format, "mp4a") == 0) {
+      seek_file(fp, 8, SEEK_CUR);
+      uint16_t channelcount = read_uint16(fp);
+      uint16_t samplesize = read_uint16(fp);
+      seek_file(fp, 4, SEEK_CUR);
+      uint32_t samplerate = read_uint32(fp) >> 16;
+
+      uint32_t remaining = entry_size - (8 + 4 + (6 + 2) + 8 + 2 + 2 + 4 + 4);
+
+      while (remaining > 8) {
+        uint32_t box_size = read_uint32(fp);
+        char box_type[5] = {0};
+        read_file(box_type, 1, 4, fp);
+        remaining -= 8;
+
+        if (scmp(box_type, "esds") == 0) {
+          parse_esds(fp, box_size, track);
+        } else {
+          seek_file(fp, box_size - 8, SEEK_CUR);
+        }
+        remaining -= (box_size - 8);
+      }
+    } else {
+      seek_file(fp, entry_size - 8 - 4 - (6 + 2), SEEK_CUR);
+    }
+  }
+}
+
+void parse_stts(FILE *fp, uint32_t box_size, Track *track) {
+  uint32_t version_and_flags = read_uint32(fp);
+  uint32_t entry_count = read_uint32(fp);
+
+  seek_file(fp, entry_count * 8, SEEK_CUR);
+
+  uint32_t bytes_remaining = box_size - 8 - 8 - entry_count * 8;
+  seek_file(fp, bytes_remaining, SEEK_CUR);
+}
+
+void parse_stsc(FILE *fp, uint32_t box_size, Track *track) {
+  uint32_t version_and_flags = read_uint32(fp);
+  uint32_t entry_count = read_uint32(fp);
+
+  track->stsc_table.entry_count = entry_count;
+  track->stsc_table.first_chunk = (uint32_t *)mmalloc(entry_count * sizeof(uint32_t));
+  track->stsc_table.samples_per_chunk = (uint32_t *)mmalloc(entry_count * sizeof(uint32_t));
+  track->stsc_table.sample_description_index = (uint32_t *)mmalloc(entry_count * sizeof(uint32_t));
+
+  for (uint32_t i = 0; i < entry_count; i++) {
+    track->stsc_table.first_chunk[i] = read_uint32(fp);
+    track->stsc_table.samples_per_chunk[i] = read_uint32(fp);
+    track->stsc_table.sample_description_index[i] = read_uint32(fp);
+  }
+
+  uint32_t bytes_remaining = box_size - 8 - 8 - entry_count * 12;
+  seek_file(fp, bytes_remaining, SEEK_CUR);
+}
+
+void parse_stsz(FILE *fp, uint32_t box_size, Track *track) {
+  uint32_t version_and_flgags = read_uint32(fp);
+  uint32_t sample_size = read_uint32(fp);
+  uint32_t sample_count = read_uint32(fp);
+
+  track->size_table.sample_count = sample_count;
+  track->size_table.sample_sizes = (uint32_t *)mmalloc(sample_count * sizeof(uint32_t));
+
+  if (sample_size == 0) {
+    for (uint32_t i = 0; i < sample_count; i++) {
+      track->size_table.sample_sizes[i] = read_uint32(fp);
+    }
+  } else {
+    for (uint32_t i = 0; i < sample_count; i++) {
+      track->size_table.sample_sizes[i] = sample_size;
+    }
+  }
+
+  uint32_t bytes_remaining = box_size - 8 - 12 - (sample_size == 0 ? sample_count * 4 : 0);
+  seek_file(fp, bytes_remaining, SEEK_CUR);
+
+  pprintf("STSZ Box:\n");
+  pprintf("  Sample Count:%u\n", sample_count);
+  pprintf("  Sample Size: %u\n", sample_size);
+}
+
+void parse_stco(FILE *fp, uint32_t box_size, Track *track) {
+  uint32_t version_and_flags = read_uint32(fp);
+  uint32_t entry_count = read_uint32(fp);
+
+  track->offset_table.chunk_count = entry_count;
+  track->offset_table.chunk_offsets = (uint64_t *)mmalloc(entry_count * sizeof(uint64_t));
+
+  for (uint32_t i = 0; i < entry_count; i++) {
+    track->offset_table.chunk_offsets[i] = read_uint32(fp);
+  }
+
+  uint32_t bytes_remaining = box_size - 8 - 8 - entry_count * 4;
+  seek_file(fp, bytes_remaining, SEEK_CUR);
+}
+
+void parse_co64(FILE *fp, uint32_t box_size, Track *track) {
+  uint32_t version_and_flags = read_uint32(fp);
+  uint32_t entry_count = read_uint32(fp);
+
+  track->offset_table.chunk_count = entry_count;
+  track->offset_table.chunk_offsets = (uint64_t *)mmalloc(entry_count * sizeof(uint64_t));
+
+  for (uint32_t i = 0; i < entry_count; i++) {
+    track->offset_table.chunk_offsets[i] = read_uint64(fp);
+  }
+
+  uint32_t bytes_remaining = box_size - 8 - 8 - entry_count * 8;
+  seek_file(fp, bytes_remaining, SEEK_CUR);
+}
+
+void  parse_stbl(FILE *fp, uint64_t box_size, Track *track) {
+  uint64_t start_offset = fftell(fp);
+  uint64_t bytes_read = 0;
+
+  while (bytes_read < box_size - 8) {
+    uint32_t size = read_uint32(fp);
+    char type[5] = {0};
+    read_file(type, 1, 4, fp);
+
+    bytes_read += 8;
+
+    if (size == 1) {
+      size = read_uint64(fp);
+      bytes_read += 8;
+    }
+
+    uint64_t next_box = fftell(fp) + size - 8;
+    bytes_read += size - 8;
+
+    if (scmp(type, "stsd") == 0) {
+      parse_stsd(fp, size, track);
+    } else if (scmp(type, "stts") == 0) {
+      parse_stts(fp, size, track);
+    } else if (scmp(type, "stsc") == 0) {
+      parse_stsc(fp, size, track);
+    } else if (scmp(type, "stsz") == 0) {
+      parse_stsz(fp, size, track);
+    } else if (scmp(type, "stco") == 0) {
+      parse_stco(fp, size, track);
+    } else if (scmp(type, "co64") == 0) {
+      parse_co64(fp, size, track);
+    } else {
+      seek_file(fp, size - 8, SEEK_CUR);
+    }
+
+    seek_file(fp, next_box, SEEK_SET);
+  }
+}
+
+void build_sample_offsets(Track *track) {
+  uint32_t sample_index = 0;
+  track->offset_table.offsets = (uint64_t *)mmalloc(track->size_table.sample_count * sizeof(uint64_t));
+
+  for (uint32_t i = 0; i < track->stsc_table.entry_count; i++) {
+    uint32_t first_chunk = track->stsc_table.first_chunk[i];
+    uint32_t samples_per_chunk = track->stsc_table.samples_per_chunk[i];
+    uint32_t chunk_count = 0;
+
+    uint32_t next_chunk = (i + 1 < track->stsc_table.entry_count) ? track->stsc_table.first_chunk[i + 1] : track->offset_table.chunk_count + 1;
+    chunk_count = next_chunk - first_chunk;
+
+    for (uint32_t j = 0; j < chunk_count; j++) {
+      uint64_t chunk_offset = track->offset_table.chunk_offsets[first_chunk - 1 + j];
+      for (uint32_t k = 0; k < samples_per_chunk; k++) {
+        if (sample_index >= track->size_table.sample_count) break;
+        track->offset_table.offsets[sample_index] = chunk_offset;
+        chunk_offset += track->size_table.sample_sizes[sample_index];
+        sample_index++;
+      }
+    }
+  }
+}
+
+void parse_tkhd(FILE *fp, uint32_t box_size, Track *track) {
+  uint32_t version_and_flags = read_uint32(fp);
+  uint8_t version = version_and_flags >> 24;
+
+  uint32_t creation_time, modification_time, track_ID, duration;
+
+  if (version == 1) {
+    creation_time = read_uint64(fp);
+    modification_time = read_uint64(fp);
+    track_ID = read_uint32(fp);
+    read_uint32(fp);
+    duration = read_uint64(fp);
+  } else {
+    creation_time = read_uint32(fp);
+    modification_time = read_uint32(fp);
+    track_ID = read_uint32(fp);
+    read_uint32(fp);
+    duration = read_uint32(fp);
+  }
+
+  seek_file(fp, 8, SEEK_CUR);
+  seek_file(fp, 2 + 2 + 2 + 2, SEEK_CUR);
+
+  seek_file(fp, 36, SEEK_CUR);
+
+  uint32_t width = read_uint32(fp);
+  uint32_t height = read_uint32(fp);
+
+  uint32_t bytes_remaining = box_size - 8 - ((version == 1) ? 104 : 92);
+  seek_file(fp, bytes_remaining, SEEK_CUR);
+}
+
+void parse_hdlr(FILE *fp, uint32_t box_size, Track *track) {
+  uint32_t version_and_flags = read_uint32(fp);
+  uint32_t pre_defined = read_uint32(fp);
+  char handler_type[5] = {0};
+  read_file(handler_type, 1, 4, fp);
+
+
+  if (scmp(handler_type, "vide") == 0) {
+    track->media_type = MEDIA_TYPE_VIDEO;
+  } else if (scmp(handler_type, "soun") == 0) {
+    track->media_type = MEDIA_TYPE_AUDIO;
+  }
+
+  pprintf("HDLR Box:\n");
+  pprintf("  Handler Type: %s\n", handler_type);
+
+  seek_file(fp, box_size - 8 - 12, SEEK_CUR);
+}
+
+void parse_minf(FILE *fp, uint64_t box_size, Track *track) {
+  uint64_t start_offset = fftell(fp);
+  uint64_t bytes_read = 0;
+
+  while (bytes_read < box_size - 8) {
+    uint32_t size = read_uint32(fp);
+    char type[5] = {0};
+    read_file(type, 1, 4, fp);
+
+    bytes_read += 8;
+
+    if (size == 1) {
+      size = read_uint64(fp);
+      bytes_read += 8;
+    }
+
+    uint64_t next_box = fftell(fp) + size - 8;
+    bytes_read += size - 8;
+
+    if (scmp(type, "stbl") == 0) {
+      parse_stbl(fp, size, track);
+    } else {
+      seek_file(fp, size - 8, SEEK_CUR);
+    }
+
+    seek_file(fp, next_box, SEEK_SET);
+  }
+}
+
+void parse_mdia(FILE *fp, uint64_t box_size, Track *track) {
+  uint64_t start_offset = fftell(fp);
+  uint64_t bytes_read = 0;
+
+  while (bytes_read < box_size - 8) {
+    uint32_t size = read_uint32(fp);
+    char type[5] = {0};
+    read_file(type, 1, 4, fp);
+
+    bytes_read += 8;
+
+    if (size == 1) {
+      size = read_uint64(fp);
+      bytes_read += 8;
+    }
+
+    uint64_t next_box = fftell(fp) + size - 8;
+    bytes_read += size - 8;
+
+    if (scmp(type, "hdlr") == 0) {
+      parse_hdlr(fp, size, track);
+    } else if (scmp(type, "minf") == 0) {
+      parse_minf(fp, size, track);
+    } else {
+      seek_file(fp, size - 8, SEEK_CUR);
+    }
+
+    seek_file(fp, next_box, SEEK_SET);
+  }
+}
+
+void parse_mvhd(FILE *fp, uint32_t box_size) {
+  uint32_t version_and_flags = read_uint32(fp);
+  uint8_t version = (version_and_flags >> 24) & 0xFF;
+
+  uint64_t creation_time, modification_time, timescale, duration;
+
+  if (version == 1) {
+    creation_time = read_uint64(fp);
+    modification_time = read_uint64(fp);
+    timescale = read_uint32(fp);
+    duration = read_uint64(fp);
+  } else {
+    creation_time = read_uint32(fp);
+    modification_time = read_uint32(fp);
+    timescale = read_uint32(fp);
+    duration = read_uint32(fp);
+  }
+
+  pprintf("MVHD Box: \n");
+  pprintf("  Timescale: %llu\n", timescale);
+  pprintf("  Duration: %llu\n", duration);
+
+  uint64_t bytes_to_skip = box_size - ((version == 1) ? 104 : 92);
+  seek_file(fp, bytes_to_skip, SEEK_CUR);
+}
+
+void parse_trak(FILE *fp, uint64_t box_size, Track *track) {
+  uint64_t start_offset = fftell(fp);
+  uint64_t bytes_read = 0;
+
+  while (bytes_read < box_size - 8) {
+    uint32_t size = read_uint32(fp);
+    char type[5] = {0};
+    read_file(type, 1, 4, fp);
+
+    bytes_read += 8;
+
+    if (size == 1) {
+      size = read_uint64(fp);
+      bytes_read += 8;
+    }
+
+    uint64_t next_box = fftell(fp) + size - 8;
+    bytes_read += size - 8;
+
+    if (scmp(type, "tkhd") == 0) {
+      parse_tkhd(fp, size, track);
+    } else if (scmp(type, "mdia") == 0) {
+      parse_mdia(fp, size, track);
+    } else {
+      seek_file(fp, size - 8, SEEK_CUR);
+    }
+    seek_file(fp, next_box, SEEK_SET);
+  }
+}
+
+void parse_moov(FILE *fp, uint64_t box_size, Track *track) {
+  uint64_t start_offset = fftell(fp);
+  uint64_t bytes_read = 0;
+
+  while (bytes_read < box_size - 8) {
+    uint32_t size = read_uint32(fp);
+    char type[5] = {0};
+    read_file(type, 1, 4, fp);
+
+    bytes_read += 8;
+
+    if (size == 1) {
+      size = read_uint64(fp);
+      bytes_read += 8;
+    }
+
+    uint64_t next_box = fftell(fp) + size - 8;
+    bytes_read += size - 8;
+
+    if (scmp(type, "mvhd") == 0) {
+      parse_mvhd(fp, size);
+    } else if (scmp(type, "trak") == 0) {
+      parse_trak(fp, size, track);
+    } else {
+      seek_file(fp, size - 8, SEEK_CUR);
+    }
+
+    seek_file(fp, next_box, SEEK_SET);
+  }
+}
+
+void decode_audio_sample(uint8_t *sample_data, uint32_t size, Track *track) {
+  static FILE *audio_fp = NULL;
+  if (!audio_fp) {
+    audio_fp = open_file_write("output.aac");
+  }
+  write_file(sample_data, 1, size, audio_fp);
+}
+
+void parse_boxes(FILE *fp, uint64_t end_offset, Track *track) {
+  while (fftell(fp) < end_offset) {
+    uint64_t start_offset = fftell(fp);
+    uint32_t size = read_uint32(fp);
+    char type[5];
+    read_type(fp, type);
+
+    if (size == 1) {
+      size = read_uint64(fp);
+    } else if (size == 0) {
+      size = end_offset - start_offset;
+    }
+
+    uint64_t next_box = start_offset + size;
+
+    if (scmp(type, "ftyp") == 0) {
+      parse_ftyp(fp, size);
+    } else if (scmp(type, "moov") == 0) {
+      parse_moov(fp, size, track);
+    } else if (scmp(type, "mdat") == 0) {
+      track->mdat_offset = fftell(fp);
+      track->mdat_size = size - (fftell(fp) - start_offset);
+      seek_file(fp, next_box, SEEK_SET);
+    } else {
+      seek_file(fp, next_box, SEEK_SET);
+    }
+  }
+}
+
+uint64_t get_file_size(FILE *fp) {
+  uint64_t current_pos = fftell(fp);
+  seek_file(fp, 0, SEEK_END);
+  uint64_t size = fftell(fp);
+  seek_file(fp, current_pos, SEEK_SET);
+  return size;
+}
+
+void intra_prediction(uint8_t *frame_data, int mb_x, int mb_y, int *intra4x4_pred_mode,
+  uint8_t *pred_block, int frame_width, int frame_height) {
+  for (int i = 0; i < 16; i++) {
+    int block_x = mb_x * 16 + (i % 4) * 4;
+    int block_y = mb_y * 16 + (i / 4) * 4;
+
+    int dc_value = 128;
+
+    int has_left = (block_x > 0);
+    int has_top = (block_y > 0);
+
+    if (has_left && has_top) {
+      int sum = 0;
+      for (int k = 0; k < 4; k++) {
+        sum += frame_data[(block_y + k) * frame_width + (block_x - 1)];
+        sum += frame_data[(block_y - 1) * frame_width + (block_x + k)];
+      }
+      dc_value = (sum + 4) / 8;
+    } else if (has_left) {
+      int sum = 0;
+      for (int k = 0; k < 4; k++) {
+        sum += frame_data[(block_y + k) * frame_width + (block_x - 1)];
+      }
+      dc_value = (sum + 2) / 4;
+    } else if (has_top) {
+      int sum = 0;
+      for (int k = 0; k < 4; k++) {
+        sum += frame_data[(block_y - 1) * frame_width + (block_x + k)];
+      }
+      dc_value = (sum + 2) / 4;
+    } else {
+      dc_value = 128;
+    }
+    for (int y = 0; y < 4; y++) {
+      for (int x = 0; x < 4; x++) {
+        pred_block[(i * 16) + y * 4 + x] = dc_value;
+      }
+    }
+  }
+}
+
+void intra_prediction_chroma(uint8_t *frame_data, int mb_x, int mb_y, uint8_t *pred_block,
+  int frame_width, int frame_height) {
+  int block_x = mb_x * 8;
+  int block_y = mb_y * 8;
+
+  int dc_value = 128;
+
+  int has_left = (block_x > 0);
+  int has_top = (block_y > 0);
+
+  if (has_left && has_top) {
+    int sum = 0;
+    for (int k = 0; k < 8; k++) {
+      sum += frame_data[(block_y + k) * frame_width + (block_x - 1)];
+      sum += frame_data[(block_y - 1) * frame_width + (block_x + k)];
+    }
+    dc_value = (sum + 8) / 16;
+  } else if (has_left) {
+    int sum = 0;
+    for (int k = 0; k < 8; k++) {
+      sum += frame_data[(block_y + k) * frame_width + (block_x - 1)];
+    }
+    dc_value = (sum + 4) / 8;
+  } else if (has_top) {
+    int sum = 0;
+    for (int k = 0; k < 8; k++) {
+      sum += frame_data[(block_y - 1) * frame_width + (block_x + k)];
+    }
+    dc_value = (sum + 4) / 8;
+  } else {
+    dc_value = 128;
+  }
+
+  for (int y = 0; y < 8; y++) {
+    for (int x = 0; x < 8; x++) {
+      pred_block[y * 8 + x] = dc_value;
+    }
+  }
+}
+
+void intra_prediction_16x16_plane(uint8_t *frame_data, int block_x, int block_y, uint8_t *block,
+  int frame_width, int frame_height) {
+  int H = 0, V = 0;
+
+  for (int i = 1; i <= 16; i++) {
+    int a =  frame_data[(block_y + 15) * frame_width + block_x - 1 + i]
+      - frame_data[(block_y + 15) * frame_width + block_x - 1 - i];
+    int b = frame_data[(block_y - 1 + i) *frame_width + block_x + 15]
+      - frame_data[(block_y - 1 - i) * frame_width + block_x + 15];
+    H += i * a;
+    H += i * b;
+  }
+
+  int a = 16 * (frame_data[(block_y - 1) * frame_width + block_x + 15]
+    + frame_data[(block_y + 15) * frame_width + block_x - 1]);
+  int b = (5 * H + 32) >> 6;
+  int c = (5 * V + 32) >> 6;
+
+  for (int y = 0; y < 16; y++) {
+    for (int x = 0; x < 16; x++) {
+      int val = (a + b * (x - 7) + c * (y - 7) + 16) >> 5;
+      block[y * 16 + x] = clamp(val, 0, 255);
+    }
+  }
+}
+
+void intra_prediction_16x16_dc(uint8_t *frame_data, int block_x, int block_y,
+                               uint8_t *pred_block, int frame_width, int frame_height) {
+    int dc_value = 128;
+    int sum = 0;
+    int count = 0;
+
+    // Check for availability of neighboring pixels
+    if (block_y > 0) { // Top is available
+        for (int i = 0; i < 16; i++) {
+            sum += frame_data[(block_y - 1) * frame_width + block_x + i];
+        }
+        count += 16;
+    }
+    if (block_x > 0) { // Left is available
+        for (int i = 0; i < 16; i++) {
+            sum += frame_data[(block_y + i) * frame_width + block_x - 1];
+        }
+        count += 16;
+    }
+    if (block_x > 0 && block_y > 0) { // Top-left is available
+        // Do nothing, already included in top and left
+    }
+
+    if (count > 0) {
+        dc_value = (sum + count / 2) / count;
+    } else {
+        dc_value = 128;
+    }
+
+    for (int y = 0; y < 16; y++) {
+        mset(&pred_block[y * 16], dc_value, 16);
+    }
+}
+
+intra_prediction_16x16(uint8_t *frame_data, int mb_x, int mb_y, int intra16x16_pred_mode,
+  uint8_t *pred_block, int frame_width, int frame_height) {
+  int block_x = mb_x * 16;
+  int block_y = mb_y * 16;
+
+  switch (intra16x16_pred_mode) {
+    case 0: {
+      for (int y = 0; y < 16; y++) {
+        mcopy(&pred_block[y * 16], &frame_data[(block_y - 1) * frame_width + block_x], 16);
+      }
+      break;
+    }
+    case 1: {
+      for (int y = 0; y < 16; y++) {
+        uint8_t val = frame_data[(block_y + y) * frame_width + block_x - 1];
+        mset(&pred_block[y * 16], val, 16);
+      }
+      break;
+    }
+    case 2: {
+      intra_prediction_16x16_dc(frame_data, block_x, block_y, pred_block, frame_width, frame_height);
+      break;
+    }
+    case 3: {
+      intra_prediction_16x16_plane(frame_data, block_x, block_y, pred_block, frame_width, frame_height);
+      break;
+    }
+    default: {
+      pprintf("Unsupported Intra 16x16 prediction mode: %d\n", intra16x16_pred_mode);
+      break;
+    }
+  }
+}
+
+void decode_intra16x16_macroblock(Bitstream *bs, Macroblock *mb, SliceHeader_t *slice_header, Frame *current_frame, int mb_x, int mb_y,
+  SPS_t *sps, PPS_t *pps, uint32_t mb_type) {
+  uint32_t intrapred_mode = (mb_type - 1) % 4;
+  mb->intra16x16_pred_mode = intrapred_mode;
+
+  uint32_t coded_block_pattern = ((mb_type - 1) / 4) % 3;
+  mb->coded_block_pattern = coded_block_pattern;
+
+  int32_t mb_qp_delta = read_se(bs);
+  mb->qp = (slice_header->slice_qp + mb_qp_delta + 52) % 52;
+
+  int16_t coeff_level_luma[16 * 16];
+  mset(coeff_level_luma, 0, sizeof(coeff_level_luma));
+
+  int16_t coeff_level_chroma_u[8 * 8];
+  mset(coeff_level_chroma_u, 0, sizeof(coeff_level_chroma_u));
+
+  int16_t coeff_level_chroma_v[8 * 8];
+  mset(coeff_level_chroma_v, 0, sizeof(coeff_level_chroma_v));
+
+  if (mb->coded_block_pattern & 0x01) {
+    decode_residual(bs, coeff_level_luma, 16, zigzag_scan);
+    inverse_quantization(coeff_level_luma, mb->qp);
+    inverse_transform(coeff_level_luma);
+  }
+
+  if (mb->coded_block_pattern & 0x02) {
+    int qp_uv = get_chroma_qp(mb->qp, pps->chroma_qp_index_offset);
+
+    decode_residual(bs, coeff_level_chroma_u, 4, zigzag_scan);
+    inverse_quantization_chroma_dc(coeff_level_chroma_u,qp_uv);
+    inverse_transform_chroma_dc(coeff_level_chroma_u);
+
+    for (int i = 0; i < 4; i++) {
+      int16_t coeff_ac[16];
+      mset(coeff_ac, 0, sizeof(coeff_ac));
+      decode_residual(bs, coeff_ac, 15, zigzag_scan);
+      inverse_quantization(coeff_ac, qp_uv);
+      inverse_transform(coeff_ac);
+
+      coeff_level_chroma_u[i * 16 + 0] = coeff_level_chroma_u[i];
+      mcopy(&coeff_level_chroma_u[i * 16 + 1], &coeff_ac[1], sizeof(int16_t) * 15);
+    }
+
+    decode_residual(bs, coeff_level_chroma_v, 4, zigzag_scan);
+    inverse_quantization_chroma_dc(coeff_level_chroma_v, qp_uv);
+    inverse_transform_chroma_dc(coeff_level_chroma_v);
+
+    for (int i = 0; i < 4; i++) {
+      int16_t coeff_ac[16];
+      mset(coeff_ac, 0, sizeof(coeff_ac));
+      decode_residual(bs, coeff_ac, 15, zigzag_scan);
+      inverse_quantization(coeff_ac, qp_uv);
+      inverse_transform(coeff_ac);
+
+      coeff_level_chroma_v[i * 16 + 0] = coeff_level_chroma_v[i];
+      mcopy(&coeff_level_chroma_v[i * 16 + 1], &coeff_ac[1], sizeof(int16_t) * 15);
+    }
+  }
+
+  uint8_t pred_block_luma[16 * 16];
+  intra_prediction_16x16(current_frame->data_y, mb_x, mb_y, mb->intra16x16_pred_mode, pred_block_luma,
+    current_frame->width, current_frame->height);
+
+  for (int i = 0; i < 16 * 16; i++) {
+    int value = pred_block_luma[i] + coeff_level_luma[i];
+    current_frame->data_y[(mb_y * 16 + i / 16) * current_frame->width + (mb_x * 16 + i % 16)] = clamp(value, 0, 255);
+  }
+
+  uint8_t pred_block_u[8 * 8];
+  intra_prediction_chroma(current_frame->data_u, mb_x, mb_y, pred_block_u,
+    current_frame->width / 2, current_frame->height / 2);
+
+  for (int i = 0; i < 8 * 8; i++) {
+    int value = pred_block_u[i] + coeff_level_chroma_u[i];
+    current_frame->data_u[(mb_y * 8 + i / 8) * (current_frame->width / 2) + (mb_x * 8 + i % 8)] = clamp(value, 0, 255);
+  }
+
+  uint8_t pred_block_v[8 * 8];
+  intra_prediction_chroma(current_frame->data_v, mb_x, mb_y, pred_block_v,
+    current_frame->width / 2, current_frame->height / 2);
+
+  for (int i = 0; i < 8 * 8; i++) {
+    int value = pred_block_v[i] + coeff_level_chroma_v[i];
+    current_frame->data_v[(mb_y * 8 + i / 8) * (current_frame->width / 2) + (mb_x * 8 + i % 8)] = clamp(value, 0, 255);
+  }
+}
+
+void motion_compensation_8x8(uint8_t *ref_frame, uint8_t *curr_frame,
+  int16_t mv_x, int16_t mv_y, int sub_mb_x, int sub_mb_y,
+  int frame_width, int frame_height) {
+  int ref_x = sub_mb_x * 8 + (mv_x >> 2);
+  int ref_y = sub_mb_y * 8 + (mv_y >> 2);
+
+  for (int y = 0; y < 8; y++) {
+    for (int x = 0; x < 8; x++) {
+      int src_x = ref_x + x;
+      int src_y = ref_y + y;
+
+      if (src_x < 0) src_x = 0;
+      if (src_y < 0) src_y = 0;
+      if (src_x >= frame_width) src_x = frame_width - 1;
+      if (src_y >= frame_height) src_y = frame_height - 1;
+
+      curr_frame[(sub_mb_y * 8 + y) * frame_width + (sub_mb_x * 8 + x)] = ref_frame[src_y * frame_width + src_x];
+    }
+  }
+}
+
+void decode_inter8x8_macroblock(Bitstream *bs, Macroblock *mb, SliceHeader_t *slice_header, Frame *current_frame, int mb_x, int mb_y,
+  FrameBuffer *fb) {
+  uint32_t sub_mb_type[4];
+  for (int i = 0; i < 4; i++) {
+    sub_mb_type[i] = read_ue(bs);
+  }
+
+  for (int sub_mb_idx = 0; sub_mb_idx < 4; sub_mb_idx++) {
+    uint32_t ref_idx_l0 = 0;
+    int16_t mv_x = 0, mv_y = 0;
+
+    int sub_mb_x = mb_x * 2 + (sub_mb_idx % 2);
+    int sub_mb_y = mb_y * 2 + (sub_mb_idx / 2);
+
+    motion_compensation_8x8(fb->frames[ref_idx_l0], current_frame->data_y, mb_x, mb_y, sub_mb_x, sub_mb_y,
+      current_frame->width, current_frame->height);
+  }
+
+  uint32_t coded_block_pattern = read_ue(bs);
+  mb->coded_block_pattern = coded_block_pattern;
+
+  int32_t mb_qp_delta = read_se(bs);
+  mb->qp = (slice_header->slice_qp + mb_qp_delta + 52) % 52;
+
+  // TODO
+}
+
+void intra_prediction_4x4_dc(uint8_t *frame_data, int block_x, int block_y, uint8_t *block,
+  int frame_width, int frame_height) {
+  int sum = 0;
+  int count = 0;
+
+  if (block_y > 0) {
+    for (int i = 0; i < 4; i++) {
+      sum += frame_data[(block_y - 1) * frame_width + block_x + i];
+      count++;
+    }
+  }
+
+  if (block_x > 0) {
+    for (int i = 0; i < 4; i++) {
+      sum += frame_data[(block_y + i) * frame_width + block_x - 1];
+      count++;
+    }
+  }
+
+  uint8_t dc_value = (count > 0) ? (sum + count / 2) / count : 128;
+
+  for (int y = 0; y < 4; y++) {
+    for (int x = 0; x < 4; x++) {
+      block[y * 4 + x] = dc_value;
+    }
+  }
+}
+
+void intra_prediction_4x4_diagonal_down_left(uint8_t *P, uint8_t *block) {
+    uint8_t pred[4][4];
+    for (int i = 0; i < 4; i++) {
+        pred[0][i] = (P[i] + P[i + 1] + 1) >> 1;
+        pred[1][i] = (P[i + 1] + P[i + 2] + 1) >> 1;
+        pred[2][i] = (P[i + 2] + P[i + 3] + 1) >> 1;
+        pred[3][i] = (P[i + 3] + P[i + 4] + 1) >> 1;
+    }
+    for (int y = 0; y < 4; y++) {
+        mcopy(&block[y * 4], pred[y], 4);
+    }
+}
+
+void intra_prediction_4x4_diagonal_down_right(uint8_t *P, uint8_t *block) {
+    uint8_t s0 = P[4];
+    uint8_t s1 = P[0];
+    uint8_t s2 = P[1];
+    uint8_t s3 = P[2];
+    uint8_t s4 = P[3];
+
+    block[0] = (s0 + s1 + 1) >> 1;
+    block[1] = (s1 + s2 + 1) >> 1;
+    block[2] = (s2 + s3 + 1) >> 1;
+    block[3] = (s3 + s4 + 1) >> 1;
+
+    block[4] = (s0 + 2 * s1 + s2 + 2) >> 2;
+    block[5] = (s1 + 2 * s2 + s3 + 2) >> 2;
+    block[6] = (s2 + 2 * s3 + s4 + 2) >> 2;
+    block[7] = (s3 + 2 * s4 + s4 + 2) >> 2;
+
+    block[8] = (s1 + 2 * s0 + s4 + 2) >> 2;
+    block[9] = (s2 + 2 * s1 + s4 + 2) >> 2;
+    block[10] = (s3 + 2 * s2 + s4 + 2) >> 2;
+    block[11] = (s4 + 2 * s3 + s4 + 2) >> 2;
+
+    block[12] = (s0 + s4 + 1) >> 1;
+    block[13] = (s1 + s4 + 1) >> 1;
+    block[14] = (s2 + s4 + 1) >> 1;
+    block[15] = (s3 + s4 + 1) >> 1;
+}
+
+void intra_prediction_4x4_vertical_right(uint8_t *P, uint8_t *block) {
+    // 计算预测值
+    block[0] = (P[0] + P[1] + 1) >> 1;
+    block[1] = (P[1] + P[2] + 1) >> 1;
+    block[2] = (P[2] + P[3] + 1) >> 1;
+    block[3] = (P[3] + P[8] + 1) >> 1;
+    block[4] = (P[0] + 2 * P[1] + P[2] + 2) >> 2;
+    block[5] = (P[1] + 2 * P[2] + P[3] + 2) >> 2;
+    block[6] = (P[2] + 2 * P[3] + P[8] + 2) >> 2;
+    block[7] = (P[3] + 2 * P[8] + P[9] + 2) >> 2;
+    block[8] = (P[1] + 2 * P[0] + P[4] + 2) >> 2;
+    block[9] = (P[2] + 2 * P[1] + P[0] + 2) >> 2;
+    block[10] = (P[3] + 2 * P[2] + P[1] + 2) >> 2;
+    block[11] = (P[8] + 2 * P[3] + P[2] + 2) >> 2;
+    block[12] = (P[0] + P[4] + 1) >> 1;
+    block[13] = (P[1] + P[0] + 1) >> 1;
+    block[14] = (P[2] + P[1] + 1) >> 1;
+    block[15] = (P[3] + P[2] + 1) >> 1;
+}
+
+void intra_prediction_4x4_horizontal_down(uint8_t *P, uint8_t *block) {
+    block[0] = (P[4] + P[0] + 1) >> 1;
+    block[1] = (P[0] + P[1] + 1) >> 1;
+    block[2] = (P[1] + P[2] + 1) >> 1;
+    block[3] = (P[2] + P[3] + 1) >> 1;
+    block[4] = (P[4] + 2 * P[0] + P[1] + 2) >> 2;
+    block[5] = (P[0] + 2 * P[1] + P[2] + 2) >> 2;
+    block[6] = (P[1] + 2 * P[2] + P[3] + 2) >> 2;
+    block[7] = (P[2] + 2 * P[3] + P[8] + 2) >> 2;
+    block[8] = (P[0] + P[4] + 1) >> 1;
+    block[9] = (P[1] + P[0] + 1) >> 1;
+    block[10] = (P[2] + P[1] + 1) >> 1;
+    block[11] = (P[3] + P[2] + 1) >> 1;
+    block[12] = (P[4] + P[4] + 1) >> 1;
+    block[13] = (P[0] + P[4] + 1) >> 1;
+    block[14] = (P[1] + P[0] + 1) >> 1;
+    block[15] = (P[2] + P[1] + 1) >> 1;
+}
+
+void intra_prediction_4x4_vertical_left(uint8_t *P, uint8_t *block) {
+    block[0] = (P[0] + P[1] + 1) >> 1;
+    block[1] = (P[1] + P[2] + 1) >> 1;
+    block[2] = (P[2] + P[3] + 1) >> 1;
+    block[3] = (P[3] + P[8] + 1) >> 1;
+    block[4] = (P[1] + P[2] + 1) >> 1;
+    block[5] = (P[2] + P[3] + 1) >> 1;
+    block[6] = (P[3] + P[8] + 1) >> 1;
+    block[7] = (P[8] + P[9] + 1) >> 1;
+    block[8] = (P[2] + P[3] + 1) >> 1;
+    block[9] = (P[3] + P[8] + 1) >> 1;
+    block[10] = (P[8] + P[9] + 1) >> 1;
+    block[11] = (P[9] + P[10] + 1) >> 1;
+    block[12] = (P[3] + P[8] + 1) >> 1;
+    block[13] = (P[8] + P[9] + 1) >> 1;
+    block[14] = (P[9] + P[10] + 1) >> 1;
+    block[15] = (P[10] + P[11] + 1) >> 1;
+}
+
+void intra_prediction_4x4_horizontal_up(uint8_t *P, uint8_t *block) {
+    block[0] = (P[4] + P[5] + 1) >> 1;
+    block[1] = (P[5] + P[6] + 1) >> 1;
+    block[2] = (P[6] + P[7] + 1) >> 1;
+    block[3] = (P[7] + P[7] + 1) >> 1;
+    block[4] = (P[5] + P[6] + 1) >> 1;
+    block[5] = (P[6] + P[7] + 1) >> 1;
+    block[6] = (P[7] + P[7] + 1) >> 1;
+    block[7] = (P[7] + P[7] + 1) >> 1;
+    block[8] = (P[6] + P[7] + 1) >> 1;
+    block[9] = (P[7] + P[7] + 1) >> 1;
+    block[10] = (P[7] + P[7] + 1) >> 1;
+    block[11] = (P[7] + P[7] + 1) >> 1;
+    block[12] = (P[7] + P[7] + 1) >> 1;
+    block[13] = (P[7] + P[7] + 1) >> 1;
+    block[14] = (P[7] + P[7] + 1) >> 1;
+    block[15] = (P[7] + P[7] + 1) >> 1;
+}
+
+void intra_prediction_4x4(uint8_t *frame_data, int mb_x, int mb_y,int blk_idx, int *pred_mode,
+  uint8_t *block, int frame_width, int frame_height) {
+  int block_x = mb_x * 16 + (blk_idx % 4) * 4;
+  int block_y = mb_y * 16 + (blk_idx / 4) * 4;
+
+  uint8_t P[13];
+
+  if (block_y > 0) {
+      for (int i = 0; i < 4; i++) {
+          P[i] = frame_data[(block_y - 1) * frame_width + block_x + i];
+      }
+  } else {
+      mset(P, 128, 4);
+  }
+
+  if (block_x > 0) {
+      for (int i = 0; i < 4; i++) {
+          P[4 + i] = frame_data[(block_y + i) * frame_width + block_x - 1];
+      }
+  } else {
+      mset(P + 4, 128, 4);
+  }
+
+  if (block_y > 0) {
+      if (block_x + 4 < frame_width) {
+          for (int i = 0; i < 4; i++) {
+              P[8 + i] = frame_data[(block_y - 1) * frame_width + block_x + 4 + i];
+          }
+      } else {
+          mset(P + 8, P[3], 4);
+      }
+  } else {
+      mset(P + 8, P[3], 4);
+  }
+
+  if (block_x > 0 && block_y + 4 < frame_height) {
+      P[12] = frame_data[(block_y + 4) * frame_width + block_x - 1];
+  } else {
+      P[12] = P[7];
+  }
+
+
+  switch (pred_mode) {
+    case 0: {
+      for (int y = 0; y < 4; y++) {
+        mcopy(&block[y * 4], &P[0], 4);
+      }
+      break;
+    }
+    case 1: {
+      for (int y = 0; y < 4; y++) {
+        mset(&block[y * 4], P[4 + y], 4);
+      }
+      break;
+    }
+    case 2: {
+      intra_prediction_4x4_dc(frame_data, block_x, block_y, block, frame_width, frame_height);
+      break;
+    }
+    case 3:
+      intra_prediction_4x4_diagonal_down_left(P, block);
+      break;
+    case 4:
+      intra_prediction_4x4_diagonal_down_right(P, block);
+      break;
+    case 5:
+      intra_prediction_4x4_vertical_right(P, block);
+      break;
+    case 6:
+      intra_prediction_4x4_horizontal_down(P, block);
+      break;
+    case 7:
+      intra_prediction_4x4_vertical_left(P, block);
+      break;
+    case 8:
+      intra_prediction_4x4_horizontal_up(P, block);
+      break;
+    default:
+      pprintf("Unsupported Intra4x4 prediction mode: %d\n", pred_mode);
+      break;
+  }
+}
+
+void decode_intra4x4_macroblock(Bitstream *bs, Macroblock *mb, SliceHeader_t *slice_header, Frame *current_frame, int mb_x, int mb_y,
+  SPS_t *sps, PPS_t *pps) {
+  for (int i = 0; i < 16; i++) {
+    uint32_t prev_intra4x4_pred_mode_flag = read_bit(bs);
+    if (prev_intra4x4_pred_mode_flag == 0) {
+      uint32_t rem_intra4x4_pred_mode = read_bits(bs, 3);
+      mb->intra4x4_pred_mode[i] = rem_intra4x4_pred_mode;
+    } else {
+      mb->intra4x4_pred_mode[i] = -1;
+    }
+  }
+
+  uint32_t coded_block_pattern = read_ue(bs);
+  mb->coded_block_pattern = coded_block_pattern;
+
+  int32_t mb_qp_delta = read_se(bs);
+  mb->qp = (slice_header->slice_qp + mb_qp_delta + 52) % 52;
+
+  int16_t coeff_level_luma[16 * 16];
+  mset(coeff_level_luma, 0, sizeof(coeff_level_luma));
+
+  int16_t coeff_level_chroma_u[8 * 8];
+  mset(coeff_level_chroma_u, 0, sizeof(coeff_level_chroma_u));
+
+  int16_t coeff_level_chroma_v[8 * 8];
+  mset(coeff_level_chroma_v, 0, sizeof(coeff_level_chroma_v));
+
+  for (int i = 0; i < 16; i++) {
+    if (mb->coded_block_pattern & (1 << (i / 4))) {
+      int16_t coeff_block[16];
+      mset(coeff_block, 0, sizeof(coeff_block));
+      decode_residual(bs, coeff_block, 16, zigzag_scan);
+      inverse_quantization(coeff_block, mb->qp);
+      inverse_transform(coeff_block);
+      mcopy(&coeff_level_luma[i * 16], coeff_block, sizeof(coeff_block));
+    }
+  }
+
+  int qp_uv = get_chroma_qp(mb->qp, pps->chroma_qp_index_offset);
+  if (mb->coded_block_pattern & 0x10) {
+    decode_residual(bs, coeff_level_chroma_u, 4, zigzag_scan);
+    inverse_quantization_chroma_dc(coeff_level_chroma_u, qp_uv);
+    inverse_transform_chroma_dc(coeff_level_chroma_u);
+
+    for (int i = 0; i < 4; i++) {
+      int16_t coeff_ac[16];
+      mset(coeff_ac, 0, sizeof(coeff_ac));
+      decode_residual(bs, coeff_ac, 15, zigzag_scan);
+      inverse_quantization(coeff_ac, qp_uv);
+      inverse_transform(coeff_ac);
+
+      coeff_level_chroma_u[i * 16 + 0] = coeff_level_chroma_u[i];
+      mcopy(&coeff_level_chroma_u[i * 16 + 1], &coeff_ac[1], sizeof(int16_t) * 15);
+    }
+  }
+
+  if (mb->coded_block_pattern & 0x20) {
+    decode_residual(bs, coeff_level_chroma_v, 4, zigzag_scan);
+    inverse_quantization_chroma_dc(coeff_level_chroma_v, qp_uv);
+    inverse_transform_chroma_dc(coeff_level_chroma_v);
+
+    for (int i = 0; i < 4; i++) {
+      int16_t coeff_ac[16];
+      mset(coeff_ac, 0, sizeof(coeff_ac));
+      decode_residual(bs, coeff_ac, 15, zigzag_scan);
+      inverse_quantization(coeff_ac, qp_uv);
+      inverse_transform(coeff_ac);
+
+      coeff_level_chroma_v[i * 16 + 0] = coeff_level_chroma_v[i];
+      mcopy(&coeff_level_chroma_v[i * 16 + 1], &coeff_ac[1], sizeof(int16_t) * 15);
+    }
+  }
+
+  uint8_t pred_block_luma[16 * 16];
+  intra_prediction_4x4(current_frame->data_y, mb_x, mb_y, mb->intra4x4_pred_mode, pred_block_luma,
+                       current_frame->width, current_frame->height);
+
+  for (int blk_idx = 0; blk_idx < 16; blk_idx++) {
+    int block_x = mb_x * 16 + (blk_idx % 4) * 4;
+    int block_y = mb_y * 16 + (blk_idx / 4) * 4;
+    for (int y = 0; y < 4; y++) {
+      for (int x = 0; x < 4; x++) {
+        int idx = blk_idx * 16 + y * 4 + x;
+        int value = pred_block_luma[idx] + coeff_level_luma[idx];
+        current_frame->data_y[(block_y + y) * current_frame->width + (block_x + x)] = clamp(value, 0, 255);
+      }
+    }
+  }
+
+  uint8_t pred_block_u[8 * 8];
+  intra_prediction_chroma(current_frame->data_u, mb_x, mb_y, pred_block_u,
+                          current_frame->width / 2, current_frame->height / 2);
+
+  for (int i = 0; i < 8 * 8; i++) {
+      int value = pred_block_u[i] + coeff_level_chroma_u[i];
+      current_frame->data_u[(mb_y * 8 + i / 8) * (current_frame->width / 2) + (mb_x * 8 + i % 8)] = clamp(value, 0, 255);
+  }
+
+  uint8_t pred_block_v[8 * 8];
+  intra_prediction_chroma(current_frame->data_v, mb_x, mb_y, pred_block_v,
+                          current_frame->width / 2, current_frame->height / 2);
+
+  for (int i = 0; i < 8 * 8; i++) {
+      int value = pred_block_v[i] + coeff_level_chroma_v[i];
+      current_frame->data_v[(mb_y * 8 + i / 8) * (current_frame->width / 2) + (mb_x * 8 + i % 8)] = clamp(value, 0, 255);
+  }
+}
+
+void decode_ipcm_macroblock(Bitstream *bs, Macroblock *mb, Frame *current_frame,
+  int mb_x, int mb_y, SPS_t *sps, PPS_t *pps, uint32_t mb_type) {
+  align_to_next_byte(bs);
+
+  for (int y = 0; y < 16; y++) {
+    for (int x = 0; x < 16; x++) {
+      uint8_t sample = read_bits(bs, 8);
+      current_frame->data_y[(mb_y * 16 + y) * current_frame->width + (mb_x * 16 + x)] = sample;
+    }
+  }
+
+  for (int y = 0; y < 8; y++) {
+    for (int x = 0; x < 8; x++) {
+      uint8_t sample_u = read_bits(bs, 8);
+      current_frame->data_u[(mb_y * 8 + y) * (current_frame->width / 2) + (mb_x * 8 + x)] = sample_u;
+
+      uint8_t sample_v = read_bits(bs, 8);
+      current_frame->data_v[(mb_y * 8 + y) * (current_frame->width / 2) + (mb_x * 8 + x)] = sample_v;
+    }
+  }
+}
+
+void motion_compensation_16x8(uint8_t *ref_frame, uint8_t *curr_frame, int16_t mv_x, int16_t mv_y,
+                              int mb_x, int sub_mb_y, int frame_width, int frame_height) {
+    int ref_x = mb_x * 16 + (mv_x >> 2);
+    int ref_y = sub_mb_y * 8 + (mv_y >> 2);
+
+    for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 16; x++) {
+            int src_x = ref_x + x;
+            int src_y = ref_y + y;
+            src_x = clamp(src_x, 0, frame_width - 1);
+            src_y = clamp(src_y, 0, frame_height - 1);
+            curr_frame[(sub_mb_y * 8 + y) * frame_width + (mb_x * 16 + x)] = ref_frame[src_y * frame_width + src_x];
+        }
+    }
+}
+
+void motion_compensation_8x16(uint8_t *ref_frame, uint8_t *curr_frame, int16_t mv_x, int16_t mv_y,
+                              int sub_mb_x, int mb_y, int frame_width, int frame_height) {
+    int ref_x = sub_mb_x * 8 + (mv_x >> 2);
+    int ref_y = mb_y * 16 + (mv_y >> 2);
+
+    for (int y = 0; y < 16; y++) {
+        for (int x = 0; x < 8; x++) {
+            int src_x = ref_x + x;
+            int src_y = ref_y + y;
+            src_x = clamp(src_x, 0, frame_width - 1);
+            src_y = clamp(src_y, 0, frame_height - 1);
+            curr_frame[(mb_y * 16 + y) * frame_width + (sub_mb_x * 8 + x)] = ref_frame[src_y * frame_width + src_x];
+        }
+    }
+}
+
+
+void decode_inter_macroblock(Bitstream *bs, Macroblock *mb, SliceHeader_t *slice_header, Frame *current_frame, int mb_x, int mb_y,
+  FrameBuffer *fb, uint32_t mb_type) {
+
+  int partition_mode = mb_type;
+
+  int16_t mv_x[4] = {0}, mv_y[4] = {0};
+
+  if (partition_mode == 0) {
+    parse_motion_vector(bs, &mv_x[0], &mv_y[0]);
+    motion_compensation(fb->frames[0], current_frame->data_y, mv_x[0], mv_y[0], mb_x, mb_y,
+      current_frame->width, current_frame->height);
+  } else if (partition_mode == 1) {
+    for (int i = 0; i < 2; i++) {
+      parse_motion_vector(bs, &mv_x[i], mv_y[i]);
+      motion_compensation_16x8(fb->frames[0], current_frame->data_y, mv_x[i], mv_y[i], mb_x, mb_y,
+        current_frame->width, current_frame->height);
+    }
+  } else if (partition_mode == 2) {
+    for (int i = 0; i < 2; i++) {
+      parse_motion_vector(bs, &mv_x[i], mv_y[i]);
+      motion_compensation_8x16(fb->frames[0], current_frame->data_y, mv_x[i], mv_y[i], mb_x, mb_y,
+        current_frame->width, current_frame->height);
+    }
+  }
+
+  uint32_t coded_block_pattern = read_ue(bs);
+  mb->coded_block_pattern = coded_block_pattern;
+
+  int32_t mb_qp_delta = read_se(bs);
+  mb->qp = (slice_header->slice_qp + mb_qp_delta + 52) % 52;
+
+  // TODO
+}
+
+void motion_compensation_bi(uint8_t *ref_frame_l0, uint8_t *ref_frame_l1, uint8_t *curr_frame,
+                            int16_t mv_x_l0, int16_t mv_y_l0, int16_t mv_x_l1, int16_t mv_y_l1,
+                            int mb_x, int mb_y, int frame_width, int frame_height) {
+  int ref_x_l0 = mb_x * 16 + (mv_x_l0 >> 2);
+  int ref_y_l0 = mb_y * 16 + (mv_y_l0 >> 2);
+
+  int ref_x_l1 = mb_x * 16 + (mv_x_l1 >> 2);
+  int ref_y_l1 = mb_y * 16 + (mv_y_l1 >> 2);
+
+  for (int y = 0; y < 16; y++) {
+    for (int x = 0; x < 16; x++) {
+      int src_x_l0 = clamp(ref_x_l0 + x, 0, frame_width - 1);
+      int src_y_l0 = clamp(ref_y_l0 + y, 0, frame_height - 1);
+
+      int src_x_l1 = clamp(ref_x_l1 + x, 0, frame_width - 1);
+      int src_y_l1 = clamp(ref_y_l1 + y, 0, frame_height - 1);
+
+      uint8_t val_l0 = ref_frame_l0[src_y_l0 * frame_width + src_x_l0];
+      uint8_t val_l1 = ref_frame_l1[src_y_l1 * frame_width + src_x_l1];
+
+      curr_frame[(mb_y * 16 + y) * frame_width + (mb_x * 16 + x)] = (val_l0 + val_l1 + 1) >> 1;
+    }
+  }
+}
+
+void motion_compensation_direct(FrameBuffer *fb, Frame *current_frame, int mb_x, int mb_y) {
+  Frame *ref_frame_l0 = fb->frames[fb->current_index - 1];
+  Frame *ref_frame_l1 = fb->frames[fb->current_index];
+
+  int16_t mv_x_l0 = 0, mv_y_l0 = 0;
+  int16_t mv_x_l1 = 0, mv_y_l1 = 0;
+  // TODO
+
+  motion_compensation_bi(ref_frame_l0->data_y, ref_frame_l1->data_y, current_frame->data_y,
+                         mv_x_l0, mv_y_l0, mv_x_l1, mv_y_l1, mb_x, mb_y, current_frame->width, current_frame->height);
+}
+
+void update_reference_lists(FrameBuffer *fb) {
+    fb->ref_count0 = 1;
+    fb->ref_list0[0] = fb->frames[fb->current_index - 1];
+
+    fb->ref_count1 = 1;
+    fb->ref_list1[0] = fb->frames[fb->current_index];
+}
+
+void decode_b_macroblock(Bitstream *bs, Macroblock *mb, Frame *current_frame, int mb_x, int mb_y,
+                         FrameBuffer *fb, uint32_t mb_type, SliceHeader_t *slice_header) {
+    if (mb_type == 1) {
+        decode_b_direct_macroblock(bs, mb, current_frame, mb_x, mb_y, fb);
+    } else if (mb_type == 2) {
+        int16_t mvd_x = read_se(bs);
+        int16_t mvd_y = read_se(bs);
+
+        int16_t mv_x = mvd_x;
+        int16_t mv_y = mvd_y;
+
+        motion_compensation(fb->frames[fb->current_index - 1]->data_y, current_frame->data_y,
+                            mv_x, mv_y, mb_x, mb_y, current_frame->width, current_frame->height);
+    } else if (mb_type == 3) {
+        int16_t mvd_x = read_se(bs);
+        int16_t mvd_y = read_se(bs);
+
+        int16_t mv_x = mvd_x;
+        int16_t mv_y = mvd_y;
+
+        motion_compensation(fb->frames[fb->current_index]->data_y, current_frame->data_y,
+                            mv_x, mv_y, mb_x, mb_y, current_frame->width, current_frame->height);
+    } else if (mb_type == 4) {
+        int16_t mvd_x_l0 = read_se(bs);
+        int16_t mvd_y_l0 = read_se(bs);
+        int16_t mvd_x_l1 = read_se(bs);
+        int16_t mvd_y_l1 = read_se(bs);
+
+        int16_t mv_x_l0 = mvd_x_l0;
+        int16_t mv_y_l0 = mvd_y_l0;
+        int16_t mv_x_l1 = mvd_x_l1;
+        int16_t mv_y_l1 = mvd_y_l1;
+
+        motion_compensation_bi(fb->frames[fb->current_index - 1]->data_y, fb->frames[fb->current_index]->data_y,
+                               current_frame->data_y, mv_x_l0, mv_y_l0, mv_x_l1, mv_y_l1,
+                               mb_x, mb_y, current_frame->width, current_frame->height);
+    } else {
+        pprintf("Unsupported B-slice mb_type: %d\n", mb_type);
+    }
+
+    uint32_t coded_block_pattern = read_ue(bs);
+    mb->coded_block_pattern = coded_block_pattern;
+
+    int32_t mb_qp_delta = read_se(bs);
+    mb->qp = (slice_header->slice_qp + mb_qp_delta + 52) % 52;
+
+    // TODO
+}
+
+void decode_b_macroblock(Bitstream *bs, Macroblock *mb, Frame *current_frame, int mb_x, int mb_y,
+                         FrameBuffer *fb, SPS_t *sps, PPS_t *pps, SliceHeader_t *slice_header) {
+  uint32_t mb_type = mb->mb_type;
+
+  if (mb_type == 0) {
+      motion_compensation_direct(fb, current_frame, mb_x, mb_y);
+  } else if (mb_type >= 1 && mb_type <= 22) {
+    if (mb_type == 1) {
+      int16_t mv_x, mv_y;
+      parse_motion_vector(bs, &mv_x, &mv_y);
+
+      motion_compensation(fb->frames[fb->current_index - 1], current_frame->data_y, mv_x, mv_y, mb_x, mb_y,
+                          current_frame->width, current_frame->height);
+    }
+  } else {
+    pprintf("Unsupported B-slice mb_type: %d\n", mb_type);
+    return;
+  }
+
+  uint32_t coded_block_pattern = read_ue(bs);
+  mb->coded_block_pattern = coded_block_pattern;
+
+  int32_t mb_qp_delta = read_se(bs);
+  mb->qp = (slice_header->slice_qp + mb_qp_delta + 52) % 52;
+
+  // TODO
+}
+
+void decode_macroblock(Bitstream *bs, SPS_t *sps, PPS_t *pps, SliceHeader_t *slice_header,
+  Frame *current_frame, int mb_x, int mb_y, FrameBuffer *fb) {
+
+  Macroblock mb;
+  mset(&mb, 0, sizeof(Macroblock));
+
+  uint32_t mb_type = read_ue(bs);
+  mb.mb_type = mb_type;
+
+  if (slice_header->slice_type % 5 == 2 || slice_header->slice_type % 5 == 7) {
+    if (mb_type == 0) {
+      mb.is_intra = 1;
+      decode_intra4x4_macroblock(bs, &mb, slice_header, current_frame, mb_x, mb_y, sps, pps);
+    } else if (mb_type >= 1 && mb_type <= 24) {
+      mb.is_intra = 1;
+      decode_intra16x16_macroblock(bs, &mb, slice_header, current_frame, mb_x, mb_y, sps, pps, mb_type);
+    } else if (mb_type == 25) {
+      mb.is_intra = 1;
+      decode_ipcm_macroblock(bs, &mb, current_frame, mb_x, mb_y, sps, pps, mb_type);
+    } else {
+      pprintf("Unsupported I-slice mb_type: %d\n", mb_type);
+    }
+  } else if (slice_header->slice_type % 5 == 0 || slice_header->slice_type % 5 == 5) {
+    if (mb_type >= 0 && mb_type <= 4) {
+      mb.is_intra = 0;
+      decode_inter_macroblock(bs, &mb, slice_header, current_frame, mb_x, mb_y, fb, mb_type);
+    } else if (slice_header->slice_type % 5 == 0 || slice_header->slice_type % 5 == 5) {
+      mb.is_intra = 0;
+      decode_inter8x8_macroblock(bs, &mb, slice_header, current_frame, mb_x, mb_y, fb);
+    } else if (mb_type >= 6 && mb_type <= 30) {
+      mb.is_intra = 1;
+      decode_intra16x16_macroblock(bs, &mb, slice_header, current_frame, mb_x, mb_y, sps, pps, mb_type - 5);
+    }  else if (slice_header->slice_type % 5 == 1 || slice_header->slice_type % 5 == 6) {
+      decode_b_macroblock(bs, &mb, current_frame, mb_x, mb_y, fb, sps, pps, slice_header);
+    } else if (slice_header->slice_type % 5 == 1 || slice_header->slice_type % 5 == 6) {
+      if (mb_type == 0) {
+          decode_b_direct_macroblock(bs, &mb, current_frame, mb_x, mb_y, fb);
+      } else if (mb_type >= 1 && mb_type <= 22) {
+          decode_b_macroblock(bs, &mb, current_frame, mb_x, mb_y, fb, mb_type, slice_header);
+      } else {
+          pprintf("Unsupported B-slice mb_type: %d\n", mb_type);
+      }
+    } else {
+      pprintf("Unsupported P-slice mb_type: %d\n", mb_type);
+    }
+  }
+
+  if (slice_header->nal_unit_type == 5) {
+    // store_reference_frame(fb, current_frame->data_y, current_frame->width * current_frame->height);
+    fb->current_index = 0;
+  }
+}
+
+void decode_slice_data(Bitstream *bs, SPS_t *sps, PPS_t *pps, SliceHeader_t *slice_header, Frame *current_frame, FrameBuffer *fb) {
+    int PicWidthInMbs = sps->pic_width_in_mbs_minus1 + 1;
+    int PicHeightInMapUnits = sps->pic_height_in_map_units_minus1 + 1;
+
+    for (int mb_y = 0; mb_y < PicHeightInMapUnits; mb_y++) {
+        for (int mb_x = 0; mb_x < PicWidthInMbs; mb_x++) {
+            decode_macroblock(bs, sps, pps, slice_header, current_frame, mb_x, mb_y, fb);
+        }
+    }
+}
+
+void process_nalu(NALU_t *nalu, SPS_t *sps, PPS_t *pps, FrameBuffer *fb, int *frame_number) {
+  if (nalu->nal_unit_type == 7) {
+    parse_sps(nalu, sps);
+  } else if (nalu->nal_unit_type == 8) {
+    parse_pps(nalu, pps);
+  } else if (nalu->nal_unit_type == 5 || nalu->nal_unit_type == 1) {
+    SliceHeader_t slice_header;
+    parse_slice_header(nalu, &slice_header, pps);
+
+    Bitstream bs;
+    init_bitstream(&bs, nalu->rbsp, nalu->rbsp_size);
+
+    Frame current_frame;
+    current_frame.width = (sps->pic_width_in_mbs_minus1 + 1) * 16;
+    current_frame.height = (sps->pic_height_in_map_units_minus1 + 1) * 16;
+    current_frame.data_y = (uint8_t *)mmalloc(current_frame.width * current_frame.height);
+    current_frame.data_u = (uint8_t)mmalloc((current_frame.width / 2) * (current_frame.height / 2));
+    current_frame.data_v = (uint8_t)mmalloc((current_frame.width / 2) * (current_frame.height / 2));
+    mset(current_frame.data_y, 0, current_frame.width * current_frame.height);
+    mset(current_frame.data_u, 128, (current_frame.width / 2) * (current_frame.height / 2));
+    mset(current_frame.data_v, 128, (current_frame.width / 2) * (current_frame.height / 2));
+
+    decode_slice_data(&bs, sps, pps, &slice_header, &current_frame, fb);
+
+    save_frame_as_ppm(&current_frame, *frame_number);
+    (*frame_number)++;
+
+    mfree(current_frame.data_y);
+    mfree(current_frame.data_u);
+    mfree(current_frame.data_v);
+  }
+}
+
+void parse_h264_nal_units(uint8_t *data, uint32_t size) {
+  uint32_t offset = 0;
+  SPS_t sps;
+  PPS_t pps;
+  FrameBuffer fb;
+  init_frame_buffer(&fb);
+
+  int frame_number = 0;
+
+  while (offset < size) {
+    if (offset + 3 >= size) break;
+
+    if (data[offset] == 0x00 && data[offset + 1] == 0x00) {
+      uint32_t start_code_length = 0;
+
+      if (data[offset + 2] == 0x01) {
+        start_code_length = 3;
+      } else if (offset + 4 < size && data[offset + 2] == 0x00 && data[offset + 3] == 0x01) {
+        start_code_length = 4;
+      }
+
+      if (start_code_length > 0) {
+        offset += start_code_length;
+
+        uint8_t nal_header = data[offset++];
+        NALU_t nalu;
+        parse_nalu_header(nal_header, &nalu);
+
+        uint32_t nal_unit_end = offset;
+        while (nal_unit_end + 3 < size
+          && !(data[nal_unit_end] == 0x00 && data[nal_unit_end + 1] == 0x00
+            && (data[nal_unit_end + 2] == 0x01 || (data[nal_unit_end + 2] == 0x00 && data[nal_unit_end + 3] == 0x01)))) {
+          nal_unit_end++;
+        }
+
+        if (nal_unit_end + 3 >= size) {
+          nal_unit_end = size;
+        }
+
+        uint32_t nal_unit_size = nal_unit_end - offset;
+
+        pprintf("NAL Unit Type: %d, Size: %u bytes\n", nalu.nal_unit_type, nal_unit_size);
+
+        nalu.rbsp_size = nal_unit_size;
+        nalu.rbsp = mmalloc(nal_unit_size);
+        mcopy(nalu.rbsp, &data[offset], nal_unit_size);
+
+        remove_emulation_bytes(nalu.rbsp, &nalu.rbsp_size);
+
+        process_nalu(&nalu, &sps, &pps, &fb, &frame_number);
+
+        mfree(nalu.rbsp);
+
+        offset = nal_unit_end;
+      } else {
+        offset++;
+      }
+    } else {
+      offset++;
+    }
+  }
+}
+
+void read_media_data(FILE *fp, Track *track) {
+  for (uint32_t i = 0; i < track->size_table.sample_count; i++) {
+    uint32_t size = track->size_table.sample_sizes[i];
+    uint64_t offset = track->offset_table.offsets[i];
+
+    seek_file(fp, offset,SEEK_SET);
+
+    uint8_t *sample_data = (uint8_t *)mmalloc(size);
+    read_file(sample_data, 1, size, fp);
+
+    if (track->media_type == MEDIA_TYPE_VIDEO) {
+      parse_h264_nal_units(sample_data, size);
+    } else if (track->media_type == MEDIA_TYPE_AUDIO) {
+      decode_audio_sample(sample_data, size, track);
+    }
+
+    mfree(sample_data);
+  }
+}
+
+void read_mp4(FILE *fp, Track *track) {
+  parse_boxes(fp, get_file_size(fp), track);
+
+  build_sample_offsets(track);
+}
+
+int main(int argc, char *argv[]) {
+  if (argc < 2) {
+    pprintf("Usage: %s input.mp4\n", argv[0]);
+    return -1;
+  }
+
+  const char *input_filename = argv[1];
+  FILE *fp = open_file(input_filename);
+  if (!fp) {
+    pprintf("Failed to open input file: %s\n", input_filename);
+    return -1;
+  }
+
+  Track track;
+  mset(&track, 0, sizeof(Track));
+
+  read_mp4(fp, &track);
+
+  read_media_data(fp, &track);
+
+  close_file(fp);
+
+  return 0;
+}

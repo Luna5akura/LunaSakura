@@ -1,0 +1,8 @@
+{
+    "cmake.sourceDirectory": "/home/luna/Projects/VSCode/Clion/Luna/luna",
+    "files.associations": {
+        "stdarg.h": "c",
+        "common.h": "c",
+        "stdlib.h": "c"
+    }
+}

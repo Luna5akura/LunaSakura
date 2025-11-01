@@ -1,0 +1,11 @@
+D:/Clion/Luna/luna/luna/cmake-build-debug/CMakeFiles/LunaMain.dir
+D:/Clion/Luna/luna/luna/cmake-build-debug/CMakeFiles/edit_cache.dir
+D:/Clion/Luna/luna/luna/cmake-build-debug/CMakeFiles/rebuild_cache.dir
+D:/Clion/Luna/luna/luna/cmake-build-debug/src/CMakeFiles/Luna.dir
+D:/Clion/Luna/luna/luna/cmake-build-debug/src/CMakeFiles/edit_cache.dir
+D:/Clion/Luna/luna/luna/cmake-build-debug/src/CMakeFiles/rebuild_cache.dir
+D:/Clion/Luna/luna/luna/cmake-build-debug/src/test/CMakeFiles/LunaTestLexer.dir
+D:/Clion/Luna/luna/luna/cmake-build-debug/src/test/CMakeFiles/LunaTestParser.dir
+D:/Clion/Luna/luna/luna/cmake-build-debug/src/test/CMakeFiles/LunaTestStdio.dir
+D:/Clion/Luna/luna/luna/cmake-build-debug/src/test/CMakeFiles/edit_cache.dir
+D:/Clion/Luna/luna/luna/cmake-build-debug/src/test/CMakeFiles/rebuild_cache.dir
