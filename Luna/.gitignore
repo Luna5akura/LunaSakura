@@ -1,0 +1,38 @@
+# C语言编译文件
+*.o
+*.so
+*.exe
+*.dll
+*.a
+*.obj
+*.mp4
+
+# 编辑器文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 备份和临时文件
+*.bak
+*.tmp
+*.temp
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# 配置文件（如果包含敏感信息）
+config.ini
+secrets.json
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# 构建目录
+out/
+release/
+target/
