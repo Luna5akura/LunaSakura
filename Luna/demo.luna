@@ -7,7 +7,7 @@ var proj = Project(580, 270, 30.0);
 var bg = Video("test.mp4");
 # 稍微放大一点背景，测试缩放
 setScale(bg, 0.3, 0.3); 
-setPos(bg, 50, -88); # 居中裁剪
+setPos(bg, 50, 22); # 居中裁剪
 add(proj, 0, bg, 0.0);
 
 # 2. 画中画 1 (轨道 1) - 右上角

@@ -1,22 +1,22 @@
 { pkgs ? import <nixpkgs> {} }:
 
 pkgs.mkShell {
-  # 1. 编译时需要的工具 (nativeBuildInputs)
+  # 1. 编译时需要的工具
   nativeBuildInputs = with pkgs; [
     gcc
     gnumake
-    pkg-config  # 必须！用于让 Makefile 找到库路径
+    pkg-config
   ];
 
-  # 2. 链接时需要的库 (buildInputs)
+  # 2. 链接时需要的库
   buildInputs = with pkgs; [
-    ffmpeg      # 包含了 libavcodec, libavformat 等头文件和动态库
-    SDL2        # 如果你后面打算用 SDL2 做预览窗口
+    ffmpeg      # 包含了 libavcodec, libavformat 等
+    SDL2        # 窗口和上下文管理
+    libGL       # OpenGL 核心库 (Mesa)
+    # libglad   <-- 删除这一行，Nixpkgs 里没有这个
   ];
 
-  # 可选：设置环境变量，防止某些工具找不到库
   shellHook = ''
-    echo "进入 Luna 开发环境 (NixOS)"
-    echo "FFmpeg 路径: ${pkgs.ffmpeg}"
+    echo "进入 Luna 开发环境"
   '';
 }
