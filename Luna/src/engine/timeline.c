@@ -129,8 +129,8 @@ int timeline_add_clip(Timeline* tl, int track_index, ObjClip* media, double star
     clip->transform.scale_y = (float)media->default_scale_y;
     clip->transform.x = (float)media->default_x;
     clip->transform.y = (float)media->default_y;
-   
-    clip->transform.opacity = 1.0f;
+    clip->transform.opacity = (float)media->default_opacity; 
+
     clip->transform.rotation = 0.0f;
     // Sorted Insertion (by timeline_start)
     int insert_idx = track->clip_count;

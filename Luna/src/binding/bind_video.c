@@ -176,6 +176,22 @@ Value nativeSetPos(int argCount, Value* args) {
     return NIL_VAL;
 }
 
+// [新增] setOpacity(clip, 0.5)
+Value nativeSetOpacity(int argCount, Value* args) {
+    if (argCount != 2 || !IS_CLIP(args[0]) || !IS_NUMBER(args[1])) {
+        return NIL_VAL;
+    }
+    ObjClip* clip = AS_CLIP(args[0]);
+    double val = AS_NUMBER(args[1]);
+    
+    // 限制范围在 0.0 到 1.0 之间
+    if (val < 0.0) val = 0.0;
+    if (val > 1.0) val = 1.0;
+    
+    clip->default_opacity = val;
+    return NIL_VAL;
+}
+
 void registerVideoBindings() {
     defineNative(&vm, "Video", nativeCreateClip);  // 传入 &vm
     defineNative(&vm, "Project", nativeProject);
@@ -187,4 +203,5 @@ void registerVideoBindings() {
     // === [新增] ===
     defineNative(&vm, "setScale", nativeSetScale);
     defineNative(&vm, "setPos", nativeSetPos);
+    defineNative(&vm, "setOpacity", nativeSetOpacity);
 }

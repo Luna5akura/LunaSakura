@@ -111,6 +111,7 @@ ObjClip* newClip(ObjString* path) {
     clip->default_scale_y = 1.0;
     clip->default_x = 0.0;
     clip->default_y = 0.0;
+    clip->default_opacity = 1.0; 
    
     return clip;
 }

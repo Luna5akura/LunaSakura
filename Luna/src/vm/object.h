@@ -52,6 +52,7 @@ struct sObjClip {
     double default_scale_y;
     double default_x;
     double default_y;
+    double default_opacity; 
    
     // 4-byte aligned (Ints) - Grouped together
     u32 width;
