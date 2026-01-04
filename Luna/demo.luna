@@ -1,0 +1,28 @@
+# 画中画 (Picture-in-Picture) 演示
+
+print "Creating Project...";
+var proj = Project(580, 270, 30.0);
+
+# 1. 背景层 (轨道 0)
+var bg = Video("test.mp4");
+# 稍微放大一点背景，测试缩放
+setScale(bg, 0.3, 0.3); 
+setPos(bg, 50, -88); # 居中裁剪
+add(proj, 0, bg, 0.0);
+
+# 2. 画中画 1 (轨道 1) - 右上角
+var pip1 = Video("test2.mp4");
+setScale(pip1, 0.4, 0.4); # 缩小为 40%
+setPos(pip1, 0, 50);    # 放在右上角
+trim(pip1, 10, 5.0);      # 截取不同的片段
+add(proj, 1, pip1, 1.0);  # 第 1 秒出现
+
+# 3. 画中画 2 (轨道 2) - 左下角
+var pip2 = Video("test.mp4");
+setScale(pip2, 0.4, 0.4);
+setPos(pip2, 50, 400);    # 放在左下角
+trim(pip2, 20, 5.0);
+add(proj, 2, pip2, 2.0);  # 第 2 秒出现
+
+print "Starting Preview...";
+preview(proj);

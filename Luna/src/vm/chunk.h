@@ -1,49 +1,83 @@
 // src/vm/chunk.h
 
-#ifndef LUNA_CHUNK_H
-#define LUNA_CHUNK_H
-
+#pragma once
 #include "common.h"
 #include "value.h"
 
-// 1. 指令集 (OpCode)
+// --- Instruction Set ---
 typedef enum {
-    OP_CONSTANT, // 加载常量
-    OP_NEGATE,   // <--- 新增：取负号 (比如 -10)
-
+    OP_CONSTANT,
+    OP_CONSTANT_LONG, // 预留：处理 >256 个常量
+    OP_NEGATE,
     OP_ADD,
     OP_SUBTRACT,
     OP_MULTIPLY,
     OP_DIVIDE,
-
-    OP_POP,           // 弹出栈顶（用于语句结束）
-    OP_DEFINE_GLOBAL, // 定义全局变量
-    OP_GET_GLOBAL,    // 获取全局变量
-    OP_SET_GLOBAL,    // 设置全局变量
-
-    OP_PRINT, // 新增
-    OP_CALL, // <--- 新增：函数调用
-    OP_RETURN,   // 返回/结束
+    OP_LESS,
+    OP_POP,
+    OP_DEFINE_GLOBAL,
+    OP_GET_GLOBAL,
+    OP_SET_GLOBAL,
+    OP_PRINT,
+    OP_CALL,
+    OP_RETURN,
 } OpCode;
 
-// 2. 字节码块 (Chunk)
+// --- Line Info (RLE) ---
 typedef struct {
-    int count;
-    int capacity;
-    uint8_t* code;      // 指令流 (一堆字节)
-    ValueArray constants; // 常量池 (存数字、字符串等)
-    // int* lines;      // 将来用于报错时显示行号
+    int line;
+    u32 count;
+} LineStart;
+
+typedef struct {
+    u32 count;
+    u32 capacity;
+    LineStart* lines;
+} LineInfo;
+
+// --- Bytecode Chunk ---
+typedef struct {
+    u32 count;
+    u32 capacity;
+    u8* code; // Hot Data
+    ValueArray constants; // Hot Data
+   
+    // --- RLE Optimization Buffer ---
+    // 将行号写入逻辑内联化，避免频繁调用 addLine
+    int bufferedLine;
+    u32 bufferedCount;
+    LineInfo lineInfo; // Cold Data (Separated for cache locality)
 } Chunk;
 
 void initChunk(Chunk* chunk);
 void freeChunk(Chunk* chunk);
-// 写入指令
-void writeChunk(Chunk* chunk, uint8_t byte);
-// 写入常量，返回常量在池中的索引
+// 慢路径：扩容
+void growChunkCode(Chunk* chunk);
+// 慢路径：刷新行号缓冲
+void flushLineBuffer(Chunk* chunk, int newLine);
 int addConstant(Chunk* chunk, Value value);
 
-int disassembleInstruction(Chunk* chunk, int offset);
-// 反汇编（调试用）：把二进制指令打印成人类能看的汇编代码
-void disassembleChunk(Chunk* chunk, const char* name);
+// --- Hot Path: Bytecode Writer ---
+static INLINE void writeChunk(Chunk* chunk, u8 byte, int line) {
+    // 1. 扩容检查
+    if (UNLIKELY(chunk->count == chunk->capacity)) {
+        growChunkCode(chunk);
+    }
+   
+    // 2. 写入指令
+    chunk->code[chunk->count++] = byte;
+    // 3. 极速行号记录 (寄存器级操作)
+    if (LIKELY(chunk->lineInfo.count > 0 && line == chunk->bufferedLine)) {
+        chunk->bufferedCount++;
+    } else {
+        flushLineBuffer(chunk, line);
+    }
+}
+// 辅助：写入操作数（沿用当前行号）
+static INLINE void writeChunkByte(Chunk* chunk, u8 byte) {
+    writeChunk(chunk, byte, chunk->bufferedLine);
+}
 
-#endif
+// --- Debugging ---
+int disassembleInstruction(Chunk* chunk, int offset);
+void disassembleChunk(Chunk* chunk, const char* name);

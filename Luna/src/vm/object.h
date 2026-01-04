@@ -1,82 +1,94 @@
 // src/vm/object.h
 
-#ifndef LUNA_OBJECT_H
-#define LUNA_OBJECT_H
-
+#pragma once
 #include "common.h"
 #include "value.h"
 
-// 1. 定义对象类型枚举
+// --- Object Types ---
 typedef enum {
     OBJ_STRING,
     OBJ_NATIVE,
     OBJ_CLIP,
-    // ... 其他类型
+    OBJ_TIMELINE,
 } ObjType;
 
-// 2. 🔴 关键！先定义基类结构体 (struct sObj)
-// 只有先定义了它，后面的结构体才能包含 "Obj obj;"
+// --- Base Object Header ---
 struct sObj {
-    ObjType type;
-    struct sObj* next;
+    struct sObj* next; // Offset 0: 放在首位，优化 GC 链表遍历 (Ptr chasing)
+    u8 type; // Offset 8: 显式 u8
+    bool isMarked; // Offset 9
+    // Padding: 6 bytes (Compiler auto-filled to 16 bytes)
 };
 
-// 3. 定义函数指针类型 (用于 Native Function)
+// --- Native Function ---
 typedef Value (*NativeFn)(int argCount, Value* args);
-
-// 4. 定义原生函数对象
-typedef struct {
-    Obj obj; // 这里使用 obj，必须保证上面的 struct sObj 已经定义
+typedef struct sObjNative {
+    Obj obj;
     NativeFn function;
 } ObjNative;
 
-// 5. 定义字符串对象
+// --- String Object ---
+// Layout: [Obj(16)] [Len(4)] [Hash(4)] [Chars...]
 struct sObjString {
     Obj obj;
-    int length;
-    char* chars;
-    uint32_t hash;
+    u32 length;
+    u32 hash;
+    char chars[];
 };
 
-// 6. 定义视频片段对象 (Clip)
-typedef struct {
-    Obj obj;
-    struct sObjString* path;
-    
-    // === 新增/确认这些字段 ===
-    double duration;    // 秒
-    double start_time;  // 轨道时间
-    int width;          // 视频宽
-    int height;         // 视频高
-    double fps;         // 帧率
-    // ======================
-    
+// --- Clip Object ---
+// Optimized Layout: Sorted by size to remove all internal padding.
+struct sObjClip {
+    Obj obj; // 16 bytes
+    struct sObjString* path; // 8 bytes
+   
+    // 8-byte aligned (Doubles) - Grouped together
+    double duration;
+    double start_time;
     double in_point;
     double out_point;
-    int layer;
-} ObjClip;
+    double fps;
+    double default_scale_x;
+    double default_scale_y;
+    double default_x;
+    double default_y;
+   
+    // 4-byte aligned (Ints) - Grouped together
+    u32 width;
+    u32 height;
+    i32 layer;
+   
+    // Padding: 4 bytes at the end (for 8-byte alignment)
+};
 
-// 7. 宏定义
-#define OBJ_TYPE(value)   (AS_OBJ(value)->type)
+// Forward Declaration
+struct Timeline;
+typedef struct sObjTimeline {
+    Obj obj;
+    struct Timeline* timeline;
+} ObjTimeline;
 
-#define IS_STRING(value)  isObjType(value, OBJ_STRING)
-#define IS_NATIVE(value)  isObjType(value, OBJ_NATIVE)
-#define IS_CLIP(value)    isObjType(value, OBJ_CLIP)
-
-#define AS_STRING(value)  ((ObjString*)AS_OBJ(value))
+// --- Macros ---
+#define OBJ_TYPE(value) (AS_OBJ(value)->type)
+#define IS_STRING(value) isObjType(value, OBJ_STRING)
+#define IS_NATIVE(value) isObjType(value, OBJ_NATIVE)
+#define IS_CLIP(value) isObjType(value, OBJ_CLIP)
+#define IS_TIMELINE(value) isObjType(value, OBJ_TIMELINE)
+#define AS_STRING(value) ((ObjString*)AS_OBJ(value))
 #define AS_CSTRING(value) (((ObjString*)AS_OBJ(value))->chars)
-#define AS_NATIVE(value)  (((ObjNative*)AS_OBJ(value))->function)
-#define AS_CLIP(value)    ((ObjClip*)AS_OBJ(value))
+#define AS_NATIVE(value) (((ObjNative*)AS_OBJ(value))->function)
+#define AS_CLIP(value) ((ObjClip*)AS_OBJ(value))
+#define AS_TIMELINE(value) ((ObjTimeline*)AS_OBJ(value))
 
-// 内联函数
-static inline bool isObjType(Value value, ObjType type) {
-    return IS_OBJ(value) && AS_OBJ(value)->type == type;
+// --- Inline Helpers ---
+static INLINE bool isObjType(Value value, ObjType type) {
+    return IS_OBJ(value) && AS_OBJ(value)->type == (u8)type;
 }
 
-// 函数声明
+// --- API ---
 ObjString* copyString(const char* chars, int length);
+ObjString* takeString(char* chars, int length);
 ObjNative* newNative(NativeFn function);
-ObjClip* newClip(ObjString* path); // 记得确保 object.c 里有实现
+ObjClip* newClip(ObjString* path);
+ObjTimeline* newTimeline(u32 width, u32 height, double fps);
 void printObject(Value value);
-
-#endif
