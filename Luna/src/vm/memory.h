@@ -1,7 +1,6 @@
 // src/vm/memory.h
 
 #pragma once
-#include "common.h"
 #include "object.h"
 
 // [新增] 前置声明 VM，防止循环依赖

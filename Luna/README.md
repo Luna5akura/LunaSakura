@@ -32,30 +32,30 @@ main.c
 
 ### ⚠️ 发现的技术不一致 (Technical Inconsistencies)
 
-**1. VM 上下文管理的精神分裂 (Schizophrenic Context)**
-*   **现象**: `src/vm/vm.h` 中的 API 设计为支持多实例（如 `interpret(VM* vm, ...)` 接收指针），看起来很现代。
-*   **冲突**: 但 `src/vm/object.c`、`src/vm/memory.c` 和 `src/binding/bind_video.c` 内部却硬编码使用了 `extern VM vm;`（全局变量）。
-*   **后果**: 目前虽然 API 看着像面向对象的，但实际上底层还是单例模式。如果尝试创建两个 VM，程序状态会乱套。
+**1. vm 上下文管理的精神分裂 (schizophrenic context)**
+*   **现象**: `src/vm/vm.h` 中的 api 设计为支持多实例（如 `interpret(vm* vm, ...)` 接收指针），看起来很现代。
+*   **冲突**: 但 `src/vm/object.c`、`src/vm/memory.c` 和 `src/binding/bind_video.c` 内部却硬编码使用了 `extern vm vm;`（全局变量）。
+*   **后果**: 目前虽然 api 看着像面向对象的，但实际上底层还是单例模式。如果尝试创建两个 vm，程序状态会乱套。
 
-**2. 内存分配器的割裂 (Allocator Split)**
-*   **现象**: VM 层 (`vm/`) 严格使用 `reallocate` 函数，这不仅负责分配，还负责**GC 内存统计**。
+**2. 内存分配器的割裂 (allocator split)**
+*   **现象**: vm 层 (`vm/`) 严格使用 `reallocate` 函数，这不仅负责分配，还负责**gc 内存统计**。
 *   **冲突**: 引擎层 (`engine/`)，如 `compositor.c` 和 `timeline.c`，直接使用了标准库的 `malloc/calloc/free`。
-*   **后果**: 视频处理消耗了大量内存（如帧缓冲区、解码器），但 VM 的 GC 系统对此一无所知。这会导致 VM 以为内存很空闲而不触发 GC，最终导致物理内存耗尽被系统杀掉。
+*   **后果**: 视频处理消耗了大量内存（如帧缓冲区、解码器），但 vm 的 gc 系统对此一无所知。这会导致 vm 以为内存很空闲而不触发 gc，最终导致物理内存耗尽被系统杀掉。
 
-**3. 基础类型定义的混乱 (Type Chaos)**
+**3. 基础类型定义的混乱 (type chaos)**
 *   **现象**: `common.h` 精心地定义了跨平台的 `u8`, `u32`, `i32`, `f32`。
-*   **冲突**: `engine/` 目录下的代码（特别是 `compositor.c` 和 `video_player.c`）混合使用了原生 C 类型 `int`, `unsigned char`, `uint8_t`。
+*   **冲突**: `engine/` 目录下的代码（特别是 `compositor.c` 和 `video_player.c`）混合使用了原生 c 类型 `int`, `unsigned char`, `uint8_t`。
 *   **后果**: 代码风格不统一，且在不同编译器下的位宽保证可能失效。
 
-**4. OpenGL 上下文的重复初始化 (Context Collision)**
-*   **现象**: `main.c` 初始化了 SDL 和 OpenGL (GLAD)。
-*   **冲突**: `video_player.c` 中的 `play_video_clip` 函数**再次**调用了 `SDL_Init` 并创建了**新的**窗口和 GL Context。
-*   **后果**: 虽然目前 `main.c` 还没调用 `play_video_clip`，但如果未来作为“预览子窗口”调用它，会导致 GLAD 的函数指针状态错乱（GLAD 是进程全局的），可能引发渲染崩溃。
+**4. opengl 上下文的重复初始化 (context collision)**
+*   **现象**: `main.c` 初始化了 sdl 和 opengl (glad)。
+*   **冲突**: `video_player.c` 中的 `play_video_clip` 函数**再次**调用了 `sdl_init` 并创建了**新的**窗口和 gl context。
+*   **后果**: 虽然目前 `main.c` 还没调用 `play_video_clip`，但如果未来作为“预览子窗口”调用它，会导致 glad 的函数指针状态错乱（glad 是进程全局的），可能引发渲染崩溃。
 
-**5. 资源句柄的浪费 (Resource Duplication)**
-*   **现象**: `compositor.c` 为每个 Clip 实例创建一个 `ClipDecoder`。
+**5. 资源句柄的浪费 (resource duplication)**
+*   **现象**: `compositor.c` 为每个 clip 实例创建一个 `clipdecoder`。
 *   **冲突**: 如果时间轴上有 50 个切片都来自同一个 `video.mp4`，引擎会打开这个文件 50 次 (`avformat_open_input`)。
-*   **后果**: 极易触发生产环境的 "Too many open files" 错误，且浪费大量内存。
+*   **后果**: 极易触发生产环境的 "too many open files" 错误，且浪费大量内存。
 
 ---
 

@@ -10,10 +10,11 @@
 #include <libavutil/imgutils.h>
 #include <libavutil/time.h> 
 
-#include "common.h"
-#include "engine/video.h"
-#include "engine/compositor.h"
-#include "engine/timeline.h"
+#include "video.h"
+#include "compositor.h"
+#include "timeline.h"
+#include "vm/memory.h"
+#include "vm/vm.h"  // Added for full struct VM definition
 
 // --- Helper: Frame Timing ---
 static double get_clock() {
@@ -21,7 +22,7 @@ static double get_clock() {
 }
 
 // --- 单个素材播放 (保持使用 SDL_Renderer 以获得最快启动速度) ---
-void play_video_clip(ObjClip* clip) {
+void play_video_clip(VM* vm, ObjClip* clip) {
     // Resources
     AVFormatContext* fmt_ctx = NULL;
     AVCodecContext* dec_ctx = NULL;
@@ -49,6 +50,7 @@ void play_video_clip(ObjClip* clip) {
     const AVCodec* decoder = avcodec_find_decoder(video_stream->codecpar->codec_id);
     if (!decoder) goto cleanup;
     dec_ctx = avcodec_alloc_context3(decoder);
+    vm->bytesAllocated += sizeof(AVCodecContext);  // Track
     avcodec_parameters_to_context(dec_ctx, video_stream->codecpar);
     
     if (decoder->capabilities & AV_CODEC_CAP_FRAME_THREADS) {
@@ -86,11 +88,15 @@ void play_video_clip(ObjClip* clip) {
 
     // --- 4. Buffer Allocation ---
     pkt = av_packet_alloc();
+    vm->bytesAllocated += sizeof(AVPacket);  // Track
     frame = av_frame_alloc();
+    vm->bytesAllocated += sizeof(AVFrame);
     frame_yuv = av_frame_alloc(); 
+    vm->bytesAllocated += sizeof(AVFrame);
     if (!pkt || !frame || !frame_yuv) goto cleanup;
     int num_bytes = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, width, height, 1);
     yuv_buffer = (u8*)av_malloc(num_bytes);
+    if (yuv_buffer) vm->bytesAllocated += num_bytes;
     av_image_fill_arrays(frame_yuv->data, frame_yuv->linesize, yuv_buffer,
                          AV_PIX_FMT_YUV420P, width, height, 1);
 
@@ -130,6 +136,7 @@ void play_video_clip(ObjClip* clip) {
                             sws_ctx = sws_getContext(width, height, dec_ctx->pix_fmt,
                                                      width, height, AV_PIX_FMT_YUV420P,
                                                      SWS_BILINEAR, NULL, NULL, NULL);
+                            vm->bytesAllocated += sizeof(struct SwsContext);  // Approximate
                         }
                         sws_scale(sws_ctx, (const u8* const*)frame->data, frame->linesize,
                                   0, height, frame_yuv->data, frame_yuv->linesize);
@@ -153,18 +160,36 @@ cleanup:
     if (renderer) SDL_DestroyRenderer(renderer);
     if (window) SDL_DestroyWindow(window);
     // SDL_Quit(); // 注意：通常由 host 管理，这里如果是独立调用可能会导致 host 退出，暂且注释
-    if (yuv_buffer) av_free(yuv_buffer);
-    if (frame) av_frame_free(&frame);
-    if (frame_yuv) av_frame_free(&frame_yuv);
-    if (pkt) av_packet_free(&pkt);
-    if (sws_ctx) sws_freeContext(sws_ctx);
-    if (dec_ctx) avcodec_free_context(&dec_ctx);
+    if (yuv_buffer) {
+        av_free(yuv_buffer);
+        vm->bytesAllocated -= num_bytes;
+    }
+    if (frame) {
+        av_frame_free(&frame);
+        vm->bytesAllocated -= sizeof(AVFrame);
+    }
+    if (frame_yuv) {
+        av_frame_free(&frame_yuv);
+        vm->bytesAllocated -= sizeof(AVFrame);
+    }
+    if (pkt) {
+        av_packet_free(&pkt);
+        vm->bytesAllocated -= sizeof(AVPacket);
+    }
+    if (sws_ctx) {
+        sws_freeContext(sws_ctx);
+        vm->bytesAllocated -= sizeof(struct SwsContext);
+    }
+    if (dec_ctx) {
+        avcodec_free_context(&dec_ctx);
+        vm->bytesAllocated -= sizeof(AVCodecContext);
+    }
     if (fmt_ctx) avformat_close_input(&fmt_ctx);
     printf("[Preview] Closed.\n");
 }
 
 // --- 时间轴播放 (更新为支持 OpenGL Compositor) ---
-void play_timeline(Timeline* tl) {
+void play_timeline(VM* vm, Timeline* tl) {
     if (!tl) return;
     printf("[Preview] Starting Timeline Playback (%dx%d @ %.2f fps)...\n",
            tl->width, tl->height, tl->fps);
@@ -210,7 +235,7 @@ void play_timeline(Timeline* tl) {
     SDL_GL_SetSwapInterval(1);
 
     // 2. 创建合成器 (现在 GL 环境已就绪)
-    Compositor* comp = compositor_create(tl);
+    Compositor* comp = compositor_create(vm, tl);
     if (!comp) {
         fprintf(stderr, "Failed to create compositor.\n");
         SDL_GL_DeleteContext(gl_context);
@@ -262,7 +287,7 @@ void play_timeline(Timeline* tl) {
     }
 
     // 4. 清理
-    compositor_free(comp);
+    compositor_free(vm, comp);
     SDL_GL_DeleteContext(gl_context);
     SDL_DestroyWindow(window);
 }

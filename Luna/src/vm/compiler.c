@@ -2,12 +2,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include "common.h"
 #include "compiler.h"
 #include "scanner.h"
-#include "object.h"
-#include "vm.h" // 引入 VM 定义
+#include "vm.h"
 
 // --- Parser Structure ---
 typedef struct {

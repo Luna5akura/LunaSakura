@@ -2,9 +2,10 @@
 
 #ifndef LUNA_ENGINE_VIDEO_H
 #define LUNA_ENGINE_VIDEO_H
-#include <stdbool.h>
-#include "common.h" // for u32
 #include "vm/object.h"
+
+// Forward declare VM
+typedef struct VM VM;
 
 // --- Video Metadata ---
 // Layout optimized for alignment:
@@ -22,9 +23,9 @@ typedef struct {
 // Synchronously probes video file headers.
 VideoMeta load_video_metadata(const char* filepath);
 // Previews the clip in a window (Blocking/UI thread).
-void play_video_clip(ObjClip* clip);
-void play_timeline(struct Timeline* tl);
+void play_video_clip(VM* vm, ObjClip* clip);
+void play_timeline(VM* vm, struct Timeline* tl);
 // Renders the clip to a file (Blocking/Worker thread).
-void export_video_clip(ObjClip* clip, const char* output_filename);
+void export_video_clip(VM* vm, ObjClip* clip, const char* output_filename);
 
 #endif

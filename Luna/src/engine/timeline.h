@@ -1,7 +1,10 @@
 // src/engine/timeline.h
+
 #pragma once // 1. 编译优化
-#include "common.h"
 #include "vm/object.h"
+
+// Forward declare VM to avoid including vm.h
+typedef struct VM VM;
 
 // === 基础组件 ===
 // 变换属性 (Transform)
@@ -80,16 +83,16 @@ typedef struct Timeline {
 } Timeline;
 
 // === API 声明 ===
-Timeline* timeline_create(u32 width, u32 height, double fps);
-void timeline_free(Timeline* tl);
+Timeline* timeline_create(VM* vm, u32 width, u32 height, double fps);
+void timeline_free(VM* vm, Timeline* tl);
 // Track
-int timeline_add_track(Timeline* tl);
-void timeline_remove_track(Timeline* tl, int track_index);
+int timeline_add_track(VM* vm, Timeline* tl);
+void timeline_remove_track(VM* vm, Timeline* tl, int track_index);
 Track* timeline_get_track(Timeline* tl, int track_index);
 // Clip 管理
 // 注意：由于改为数组存储，add_clip 可能会触发 realloc，导致之前的 TimelineClip* 指针失效。
 // 因此，API 最好返回索引 (int) 而非指针，或者明确文档说明指针不持久。
-int timeline_add_clip(Timeline* tl, int track_index, ObjClip* media, double start_time);
+int timeline_add_clip(VM* vm, Timeline* tl, int track_index, ObjClip* media, double start_time);
 void timeline_remove_clip(Timeline* tl, int track_index, int clip_index);
 // 查询优化
 // 内部使用二分查找 (Binary Search) + 游标缓存

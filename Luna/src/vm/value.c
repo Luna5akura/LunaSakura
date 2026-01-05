@@ -1,10 +1,7 @@
 // src/vm/value.c
 
 #include <stdio.h>
-#include <string.h>
 #include "memory.h"
-#include "value.h"
-#include "object.h"
 #include "vm.h"
 
 

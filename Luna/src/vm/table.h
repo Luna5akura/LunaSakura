@@ -1,9 +1,6 @@
 // src/vm/table.h
 
-#ifndef LUNA_TABLE_H
-#define LUNA_TABLE_H
-
-#include "common.h"
+#pragma once
 #include "value.h"
 
 // 前置声明
@@ -38,5 +35,3 @@ ObjString* tableFindString(Table* table, const char* chars, int length, u32 hash
 // [新增] GC 辅助函数声明
 void markTable(VM* vm, Table* table);
 void tableRemoveWhite(Table* table);
-
-#endif

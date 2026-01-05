@@ -1,11 +1,11 @@
 // src/vm/vm.h
 
 #pragma once
-#include "common.h"
-#include "value.h"
+
 #include "table.h"
 #include "chunk.h"
 #include "object.h"
+#include "engine/timeline.h"  // Added for Timeline* definition
 
 // --- Configuration ---
 #define STACK_MAX 1024
@@ -19,7 +19,6 @@ typedef struct {
 } CallFrame;
 
 // --- Result Code ---
-// [新增] 补回枚举定义
 typedef enum {
     INTERPRET_OK,
     INTERPRET_COMPILE_ERROR,
@@ -27,31 +26,26 @@ typedef enum {
 } InterpretResult;
 
 // --- VM Structure ---
-// object.h 已经做了 typedef struct VM VM;
-// 这里直接定义结构体内容
 struct VM {
     // --- Hot Path Data ---
     Value* stackTop;
-   
+  
     int frameCount;
     CallFrame frames[FRAMES_MAX];
     Chunk* chunk;
     u8* ip;
-
     // --- Global State ---
     Table globals;
     Table strings;
-
     // --- Garbage Collection ---
     Obj* objects;
-   
+  
     int grayCount;
     int grayCapacity;
     Obj** grayStack;
-
     size_t bytesAllocated;
     size_t nextGC;
-
+    Timeline* active_timeline;  // Added: Instance-specific active timeline
     // --- Storage ---
     Value stack[STACK_MAX];
 };
@@ -84,5 +78,4 @@ static INLINE Value pop(VM* vm) {
 static INLINE Value peek(VM* vm, int distance) {
     return vm->stackTop[-1 - distance];
 }
-
 void runtimeError(VM* vm, const char* format, ...);

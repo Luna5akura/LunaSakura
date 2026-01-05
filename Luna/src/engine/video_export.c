@@ -6,11 +6,12 @@
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
 #include <libavutil/rational.h> // For av_d2q
-#include "engine/video.h"
-#include "common.h"
+#include "video.h"
+#include "vm/memory.h"
+#include "vm/vm.h"  // Added for VM struct
 
 // --- Helper: Initialize H.264 Encoder ---
-static int open_encoder(AVFormatContext* out_fmt_ctx, AVCodecContext** enc_ctx,
+static int open_encoder(VM* vm, AVFormatContext* out_fmt_ctx, AVCodecContext** enc_ctx,
                         AVStream** out_stream, int width, int height, double fps) {
    
     const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
@@ -21,6 +22,7 @@ static int open_encoder(AVFormatContext* out_fmt_ctx, AVCodecContext** enc_ctx,
     *out_stream = avformat_new_stream(out_fmt_ctx, NULL);
     if (!*out_stream) return -1;
     *enc_ctx = avcodec_alloc_context3(codec);
+    vm->bytesAllocated += sizeof(AVCodecContext);
     if (!*enc_ctx) return -1;
     // Optimization: Convert double FPS to rational number to handle NTSC (29.97) correctly
     AVRational fps_rat = av_d2q(fps, 100000); // Max precision 1/100000
@@ -49,7 +51,7 @@ static int open_encoder(AVFormatContext* out_fmt_ctx, AVCodecContext** enc_ctx,
 }
 
 // --- Export Logic ---
-void export_video_clip(ObjClip* clip, const char* output_filename) {
+void export_video_clip(VM* vm, ObjClip* clip, const char* output_filename) {
     // Resources
     AVFormatContext* in_fmt_ctx = NULL;
     AVCodecContext* dec_ctx = NULL;
@@ -71,13 +73,14 @@ void export_video_clip(ObjClip* clip, const char* output_filename) {
     AVStream* in_stream = in_fmt_ctx->streams[video_stream_idx];
     const AVCodec* dec = avcodec_find_decoder(in_stream->codecpar->codec_id);
     dec_ctx = avcodec_alloc_context3(dec);
+    vm->bytesAllocated += sizeof(AVCodecContext);
     avcodec_parameters_to_context(dec_ctx, in_stream->codecpar);
     if (avcodec_open2(dec_ctx, dec, NULL) < 0) goto cleanup;
     // --- Output Setup ---
     avformat_alloc_output_context2(&out_fmt_ctx, NULL, NULL, output_filename);
     if (!out_fmt_ctx) goto cleanup;
     AVStream* out_stream = NULL;
-    if (open_encoder(out_fmt_ctx, &enc_ctx, &out_stream,
+    if (open_encoder(vm, out_fmt_ctx, &enc_ctx, &out_stream,
                      clip->width, clip->height, clip->fps) < 0) {
         goto cleanup;
     }
@@ -97,8 +100,11 @@ void export_video_clip(ObjClip* clip, const char* output_filename) {
     }
     // --- Allocation ---
     pkt = av_packet_alloc();
+    vm->bytesAllocated += sizeof(AVPacket);
     out_pkt = av_packet_alloc();
+    vm->bytesAllocated += sizeof(AVPacket);
     frame = av_frame_alloc();
+    vm->bytesAllocated += sizeof(AVFrame);
     if (!pkt || !out_pkt || !frame) goto cleanup;
     int64_t encoded_frame_count = 0;
     int64_t total_frames = (int64_t)(clip->duration * clip->fps);
@@ -166,11 +172,26 @@ void export_video_clip(ObjClip* clip, const char* output_filename) {
     av_write_trailer(out_fmt_ctx);
     printf("\n[Export] Done.\n");
 cleanup:
-    if (dec_ctx) avcodec_free_context(&dec_ctx);
-    if (enc_ctx) avcodec_free_context(&enc_ctx);
-    if (frame) av_frame_free(&frame);
-    if (pkt) av_packet_free(&pkt);
-    if (out_pkt) av_packet_free(&out_pkt);
+    if (dec_ctx) {
+        avcodec_free_context(&dec_ctx);
+        vm->bytesAllocated -= sizeof(AVCodecContext);
+    }
+    if (enc_ctx) {
+        avcodec_free_context(&enc_ctx);
+        vm->bytesAllocated -= sizeof(AVCodecContext);
+    }
+    if (frame) {
+        av_frame_free(&frame);
+        vm->bytesAllocated -= sizeof(AVFrame);
+    }
+    if (pkt) {
+        av_packet_free(&pkt);
+        vm->bytesAllocated -= sizeof(AVPacket);
+    }
+    if (out_pkt) {
+        av_packet_free(&out_pkt);
+        vm->bytesAllocated -= sizeof(AVPacket);
+    }
     if (in_fmt_ctx) avformat_close_input(&in_fmt_ctx);
     if (out_fmt_ctx) {
         if (!(out_fmt_ctx->oformat->flags & AVFMT_NOFILE)) {

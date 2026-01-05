@@ -47,7 +47,6 @@ void freeObject(VM* vm, Obj* object) {
     switch (object->type) {
         case OBJ_STRING: {
             ObjString* string = (ObjString*)object;
-            // [修改] 增加 (void) 转换以抑制 warn_unused_result 警告
             (void)reallocate(vm, object, sizeof(ObjString) + string->length + 1, 0);
             break;
         }
@@ -62,7 +61,7 @@ void freeObject(VM* vm, Obj* object) {
         case OBJ_TIMELINE: {
             ObjTimeline* obj = (ObjTimeline*)object;
             if (obj->timeline) {
-                timeline_free(obj->timeline);
+                timeline_free(vm, obj->timeline);
                 obj->timeline = NULL;
             }
             (void)reallocate(vm, object, sizeof(ObjTimeline), 0);
@@ -97,7 +96,7 @@ void markObject(VM* vm, Obj* object) {
 
     if (vm->grayCapacity < vm->grayCount + 1) {
         vm->grayCapacity = GROW_CAPACITY(vm->grayCapacity);
-        // grayStack 只是指针数组，不通过 VM 统计分配（避免递归 GC），直接用 realloc
+        // grayStack 是纯指针数组，不通过 VM 统计分配（避免递归 GC），直接用 realloc
         vm->grayStack = (Obj**)realloc(vm->grayStack, sizeof(Obj*) * vm->grayCapacity);
         if (vm->grayStack == NULL) exit(1);
     }

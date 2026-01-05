@@ -6,19 +6,22 @@
 #include <libswscale/swscale.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
-#include "engine/timeline.h"
-#include "engine/compositor.h"
-#include "engine/video.h" // 假设这里有 VideoMeta 定义
+#include "timeline.h"
+#include "compositor.h"
+#include "video.h" // 假设这里有 VideoMeta 定义
+#include "vm/memory.h"
+#include "vm/vm.h"  // Added for VM struct
 
 // ... (复用 video_export.c 中的 open_encoder 实现) ...
 // 请确保 open_encoder 函数可见，或在此处重新复制一遍
 
-static int open_encoder(AVFormatContext* out_fmt_ctx, AVCodecContext** enc_ctx,
+static int open_encoder(VM* vm, AVFormatContext* out_fmt_ctx, AVCodecContext** enc_ctx,
                         AVStream** out_stream, int width, int height, double fps) {
     const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
     if (!codec) return -1;
     *out_stream = avformat_new_stream(out_fmt_ctx, NULL);
     *enc_ctx = avcodec_alloc_context3(codec);
+    vm->bytesAllocated += sizeof(AVCodecContext);
     AVRational fps_rat = av_d2q(fps, 100000);
     (*enc_ctx)->width = width;
     (*enc_ctx)->height = height;
@@ -35,35 +38,38 @@ static int open_encoder(AVFormatContext* out_fmt_ctx, AVCodecContext** enc_ctx,
     return 0;
 }
 
-void export_timeline(Timeline* tl, const char* output_filename) {
+void export_timeline(VM* vm, Timeline* tl, const char* output_filename) {
     if (!tl) return;
     printf("[Export] GL Rendering to '%s'...\n", output_filename);
 
     // 1. 创建 Compositor (注意：当前线程必须有 GL Context)
     // 在 main.c 的调用链中，主线程已经有 Context 了。
-    Compositor* comp = compositor_create(tl);
+    Compositor* comp = compositor_create(vm, tl);
     
     // 2. FFmpeg Encoder Setup
     AVFormatContext* out_fmt_ctx = NULL;
     AVCodecContext* enc_ctx = NULL;
     AVStream* out_stream = NULL;
     avformat_alloc_output_context2(&out_fmt_ctx, NULL, NULL, output_filename);
-    if (open_encoder(out_fmt_ctx, &enc_ctx, &out_stream, tl->width, tl->height, tl->fps) < 0) {
+    if (open_encoder(vm, out_fmt_ctx, &enc_ctx, &out_stream, tl->width, tl->height, tl->fps) < 0) {
         printf("[Export] Encoder init failed.\n");
         goto cleanup;
     }
     if (!(out_fmt_ctx->oformat->flags & AVFMT_NOFILE)) {
         if (avio_open(&out_fmt_ctx->pb, output_filename, AVIO_FLAG_WRITE) < 0) goto cleanup;
     }
-    avformat_write_header(out_fmt_ctx, NULL);
+    (void)avformat_write_header(out_fmt_ctx, NULL);  // Ignore return value with cast to void
 
     // 3. SWS Context (RGBA -> YUV420P)
-    struct SwsContext* sws_ctx = sws_getContext(
+    struct SwsContext* sws_ctx = NULL;  // Initialize to NULL to fix uninitialized warning
+    sws_ctx = sws_getContext(
         tl->width, tl->height, AV_PIX_FMT_RGBA,
         tl->width, tl->height, AV_PIX_FMT_YUV420P,
         SWS_BILINEAR, NULL, NULL, NULL
     );
+    vm->bytesAllocated += sizeof(struct SwsContext);
     AVFrame* yuv_frame = av_frame_alloc();
+    vm->bytesAllocated += sizeof(AVFrame);
     yuv_frame->format = enc_ctx->pix_fmt;
     yuv_frame->width = enc_ctx->width;
     yuv_frame->height = enc_ctx->height;
@@ -71,6 +77,7 @@ void export_timeline(Timeline* tl, const char* output_filename) {
 
     // 4. Render Loop
     AVPacket* pkt = av_packet_alloc();
+    vm->bytesAllocated += sizeof(AVPacket);
     int total_frames = (int)(tl->duration * tl->fps);
     double step = 1.0 / tl->fps;
     
@@ -116,11 +123,23 @@ void export_timeline(Timeline* tl, const char* output_filename) {
     printf("\n[Export] Done.\n");
 
 cleanup:
-    if (comp) compositor_free(comp); // Release GL resources
-    if (sws_ctx) sws_freeContext(sws_ctx);
-    if (yuv_frame) av_frame_free(&yuv_frame);
-    if (pkt) av_packet_free(&pkt);
-    if (enc_ctx) avcodec_free_context(&enc_ctx);
+    if (comp) compositor_free(vm, comp); // Release GL resources
+    if (sws_ctx) {
+        sws_freeContext(sws_ctx);
+        vm->bytesAllocated -= sizeof(struct SwsContext);
+    }
+    if (yuv_frame) {
+        av_frame_free(&yuv_frame);
+        vm->bytesAllocated -= sizeof(AVFrame);
+    }
+    if (pkt) {
+        av_packet_free(&pkt);
+        vm->bytesAllocated -= sizeof(AVPacket);
+    }
+    if (enc_ctx) {
+        avcodec_free_context(&enc_ctx);
+        vm->bytesAllocated -= sizeof(AVCodecContext);
+    }
     if (out_fmt_ctx) {
         if (!(out_fmt_ctx->oformat->flags & AVFMT_NOFILE)) avio_closep(&out_fmt_ctx->pb);
         avformat_free_context(out_fmt_ctx);

@@ -2,9 +2,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <math.h>
-#include "engine/timeline.h"
+#include "timeline.h"
+#include "vm/memory.h"
 
 #define INITIAL_TRACK_CAPACITY 4
 
@@ -14,8 +14,8 @@ static double get_clip_end_time(TimelineClip* clip) {
 }
 
 // === Lifecycle ===
-Timeline* timeline_create(u32 width, u32 height, double fps) {
-    Timeline* tl = (Timeline*)malloc(sizeof(Timeline));
+Timeline* timeline_create(VM* vm, u32 width, u32 height, double fps) {
+    Timeline* tl = ALLOCATE(vm, Timeline, 1);
     if (!tl) return NULL;
     memset(tl, 0, sizeof(Timeline));
     tl->width = width;
@@ -30,37 +30,37 @@ Timeline* timeline_create(u32 width, u32 height, double fps) {
     tl->background_color.a = 255; // Opaque
     // Initialize tracks array
     tl->track_capacity = INITIAL_TRACK_CAPACITY;
-    tl->tracks = (Track*)calloc(tl->track_capacity, sizeof(Track));
+    tl->tracks = ALLOCATE(vm, Track, tl->track_capacity);
+    memset(tl->tracks, 0, sizeof(Track) * tl->track_capacity);
     tl->track_count = 0;
     return tl;
 }
 
-void timeline_free(Timeline* tl) {
+void timeline_free(VM* vm, Timeline* tl) {
     if (!tl) return;
     // 1. Free all tracks and their clips
     for (int i = 0; i < tl->track_count; i++) {
         Track* track = &tl->tracks[i];
         if (track->clips) {
-            free(track->clips);
+            FREE_ARRAY(vm, TimelineClip, track->clips, track->clip_capacity);
         }
     }
     // 2. Free container
-    if (tl->tracks) free(tl->tracks);
-    free(tl);
+    if (tl->tracks) FREE_ARRAY(vm, Track, tl->tracks, tl->track_capacity);
+    FREE(vm, Timeline, tl);
 }
 
 // === Track Management ===
-int timeline_add_track(Timeline* tl) {
+int timeline_add_track(VM* vm, Timeline* tl) {
     // Resize capacity if needed
     if (tl->track_count >= tl->track_capacity) {
         int new_capacity = tl->track_capacity * 2;
-        Track* new_tracks = (Track*)realloc(tl->tracks, new_capacity * sizeof(Track));
-        if (!new_tracks) return -1;
+        tl->tracks = GROW_ARRAY(vm, Track, tl->tracks, tl->track_capacity, new_capacity);
+        if (!tl->tracks) return -1;
        
         // Zero out new slots
-        memset(new_tracks + tl->track_count, 0, (new_capacity - tl->track_count) * sizeof(Track));
+        memset(tl->tracks + tl->track_count, 0, (new_capacity - tl->track_count) * sizeof(Track));
        
-        tl->tracks = new_tracks;
         tl->track_capacity = new_capacity;
     }
     // Allocate new track
@@ -70,18 +70,19 @@ int timeline_add_track(Timeline* tl) {
     track->flags = 1; // visible by default (bit 0)
     snprintf(track->name, sizeof(track->name), "Track %d", track->id + 1);
     track->clip_capacity = 8; // Initial capacity for clips
-    track->clips = (TimelineClip*)calloc(track->clip_capacity, sizeof(TimelineClip));
+    track->clips = ALLOCATE(vm, TimelineClip, track->clip_capacity);
+    memset(track->clips, 0, sizeof(TimelineClip) * track->clip_capacity);
     track->clip_count = 0;
     track->last_lookup_index = 0;
     return tl->track_count++;
 }
 
-void timeline_remove_track(Timeline* tl, int track_index) {
+void timeline_remove_track(VM* vm, Timeline* tl, int track_index) {
     if (track_index < 0 || track_index >= tl->track_count) return;
    
     // Free the track clips
     Track* track = &tl->tracks[track_index];
-    if (track->clips) free(track->clips);
+    if (track->clips) FREE_ARRAY(vm, TimelineClip, track->clips, track->clip_capacity);
     // Shift remaining tracks
     for (int i = track_index; i < tl->track_count - 1; i++) {
         tl->tracks[i] = tl->tracks[i + 1];
@@ -106,16 +107,15 @@ void timeline_update_duration(Timeline* tl) {
     tl->duration = max_duration;
 }
 
-int timeline_add_clip(Timeline* tl, int track_index, ObjClip* media, double start_time) {
+int timeline_add_clip(VM* vm, Timeline* tl, int track_index, ObjClip* media, double start_time) {
     if (track_index < 0 || track_index >= tl->track_count) return -1;
     Track* track = &tl->tracks[track_index];
     // Resize clips if needed
     if (track->clip_count >= track->clip_capacity) {
         int new_cap = track->clip_capacity * 2;
-        TimelineClip* new_clips = (TimelineClip*)realloc(track->clips, new_cap * sizeof(TimelineClip));
-        if (!new_clips) return -1;
-        memset(new_clips + track->clip_count, 0, (new_cap - track->clip_count) * sizeof(TimelineClip));
-        track->clips = new_clips;
+        track->clips = GROW_ARRAY(vm, TimelineClip, track->clips, track->clip_capacity, new_cap);
+        if (!track->clips) return -1;
+        memset(track->clips + track->clip_count, 0, (new_cap - track->clip_count) * sizeof(TimelineClip));
         track->clip_capacity = new_cap;
     }
     // 插入并保持排序 (insertion sort, since additions are rare)
@@ -193,4 +193,8 @@ void timeline_get_visible_clips(Timeline* tl, double time, TimelineClip*** out_c
     // Implement if required
     *out_clips = NULL;
     *out_count = 0;
+}
+Track* timeline_get_track(Timeline* tl, int track_index) {
+    if (track_index < 0 || track_index >= tl->track_count) return NULL;
+    return &tl->tracks[track_index];
 }

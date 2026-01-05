@@ -1,10 +1,10 @@
-build/src/vm/memory.o: src/vm/memory.c src/vm/memory.h src/common.h \
- src/vm/object.h src/vm/value.h src/vm/vm.h src/vm/table.h src/vm/chunk.h \
+build/src/vm/memory.o: src/vm/memory.c src/vm/memory.h src/vm/object.h \
+ src/vm/value.h src/common.h src/vm/vm.h src/vm/table.h src/vm/chunk.h \
  src/engine/timeline.h
 src/vm/memory.h:
-src/common.h:
 src/vm/object.h:
 src/vm/value.h:
+src/common.h:
 src/vm/vm.h:
 src/vm/table.h:
 src/vm/chunk.h:

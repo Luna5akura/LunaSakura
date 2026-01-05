@@ -2,15 +2,15 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <math.h>
 #include <glad/glad.h> 
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
 
-#include "engine/compositor.h"
-#include "common.h"
+#include "compositor.h"
+#include "vm/memory.h"
+#include "vm/vm.h"
 
 // --- Shader Sources ---
 
@@ -160,18 +160,20 @@ static void init_gl_resources(Compositor* comp) {
 }
 
 // --- Decoder Management ---
-static ClipDecoder* create_decoder(ObjClip* clip) {
-    ClipDecoder* dec = (ClipDecoder*)calloc(1, sizeof(ClipDecoder));
+static ClipDecoder* create_decoder(VM* vm, ObjClip* clip) {
+    ClipDecoder* dec = ALLOCATE(vm, ClipDecoder, 1);
+    memset(dec, 0, sizeof(ClipDecoder));
     dec->clip_ref = clip;
     
-    if (avformat_open_input(&dec->fmt_ctx, clip->path->chars, NULL, NULL) < 0) { free(dec); return NULL; }
-    if (avformat_find_stream_info(dec->fmt_ctx, NULL) < 0) { free(dec); return NULL; }
+    if (avformat_open_input(&dec->fmt_ctx, clip->path->chars, NULL, NULL) < 0) { FREE(vm, ClipDecoder, dec); return NULL; }
+    if (avformat_find_stream_info(dec->fmt_ctx, NULL) < 0) { FREE(vm, ClipDecoder, dec); return NULL; }
     dec->video_stream_idx = av_find_best_stream(dec->fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
-    if (dec->video_stream_idx < 0) { free(dec); return NULL; }
+    if (dec->video_stream_idx < 0) { FREE(vm, ClipDecoder, dec); return NULL; }
     
     AVStream* stream = dec->fmt_ctx->streams[dec->video_stream_idx];
     const AVCodec* codec = avcodec_find_decoder(stream->codecpar->codec_id);
     dec->dec_ctx = avcodec_alloc_context3(codec);
+    vm->bytesAllocated += sizeof(AVCodecContext);  // Track FFmpeg alloc
     avcodec_parameters_to_context(dec->dec_ctx, stream->codecpar);
     
     if (codec->capabilities & AV_CODEC_CAP_FRAME_THREADS) {
@@ -179,8 +181,9 @@ static ClipDecoder* create_decoder(ObjClip* clip) {
         dec->dec_ctx->thread_type = FF_THREAD_FRAME;
     }
     
-    if (avcodec_open2(dec->dec_ctx, codec, NULL) < 0) { free(dec); return NULL; }
+    if (avcodec_open2(dec->dec_ctx, codec, NULL) < 0) { FREE(vm, ClipDecoder, dec); return NULL; }
     dec->raw_frame = av_frame_alloc();
+    vm->bytesAllocated += sizeof(AVFrame);  // Track
     dec->current_pts_sec = -1.0;
     
     // Gen Textures
@@ -195,27 +198,34 @@ static ClipDecoder* create_decoder(ObjClip* clip) {
     return dec;
 }
 
-static void free_decoder(ClipDecoder* dec) {
+static void free_decoder(VM* vm, ClipDecoder* dec) {
     if (!dec) return;
     glDeleteTextures(3, dec->yuv_textures);
-    if (dec->raw_frame) av_frame_free(&dec->raw_frame);
-    if (dec->dec_ctx) avcodec_free_context(&dec->dec_ctx);
+    if (dec->raw_frame) {
+        av_frame_free(&dec->raw_frame);
+        vm->bytesAllocated -= sizeof(AVFrame);
+    }
+    if (dec->dec_ctx) {
+        avcodec_free_context(&dec->dec_ctx);
+        vm->bytesAllocated -= sizeof(AVCodecContext);
+    }
     if (dec->fmt_ctx) avformat_close_input(&dec->fmt_ctx);
-    free(dec);
+    FREE(vm, ClipDecoder, dec);
 }
 
 static ClipDecoder* get_decoder(Compositor* comp, ObjClip* clip) {
+    VM* vm = comp->vm;  // Use stored vm
     for (int i = 0; i < comp->decoder_count; i++) {
         if (comp->decoders[i]->clip_ref == clip) {
             comp->decoders[i]->active_this_frame = true;
             return comp->decoders[i];
         }
     }
-    ClipDecoder* dec = create_decoder(clip);
+    ClipDecoder* dec = create_decoder(vm, clip);
     if (!dec) return NULL;
     if (comp->decoder_count >= comp->decoder_capacity) {
         int new_cap = comp->decoder_capacity == 0 ? 4 : comp->decoder_capacity * 2;
-        comp->decoders = (ClipDecoder**)realloc(comp->decoders, new_cap * sizeof(ClipDecoder*));
+        comp->decoders = GROW_ARRAY(vm, ClipDecoder*, comp->decoders, comp->decoder_capacity, new_cap);
         comp->decoder_capacity = new_cap;
     }
     dec->active_this_frame = true;
@@ -314,24 +324,26 @@ static void draw_clip_rect(Compositor* comp, ClipDecoder* dec, TimelineClip* tc)
 
 // --- Lifecycle ---
 
-Compositor* compositor_create(Timeline* timeline) {
-    Compositor* comp = (Compositor*)calloc(1, sizeof(Compositor));
+Compositor* compositor_create(VM* vm, Timeline* timeline) {
+    Compositor* comp = ALLOCATE(vm, Compositor, 1);
+    memset(comp, 0, sizeof(Compositor));
+    comp->vm = vm;
     comp->timeline = timeline;
     init_gl_resources(comp);
     return comp;
 }
 
-void compositor_free(Compositor* comp) {
+void compositor_free(VM* vm, Compositor* comp) {
     if (!comp) return;
-    for (int i=0; i<comp->decoder_count; i++) free_decoder(comp->decoders[i]);
-    if (comp->decoders) free(comp->decoders);
+    for (int i=0; i<comp->decoder_count; i++) free_decoder(vm, comp->decoders[i]);
+    if (comp->decoders) FREE_ARRAY(vm, ClipDecoder*, comp->decoders, comp->decoder_capacity);
     glDeleteVertexArrays(1, &comp->vao);
     glDeleteBuffers(1, &comp->vbo);
     glDeleteFramebuffers(1, &comp->fbo);
     glDeleteTextures(1, &comp->output_texture);
     glDeleteProgram(comp->shader_program);
-    if (comp->cpu_output_buffer) free(comp->cpu_output_buffer);
-    free(comp);
+    if (comp->cpu_output_buffer) reallocate(vm, comp->cpu_output_buffer, comp->timeline->width * comp->timeline->height * 4, 0);
+    FREE(vm, Compositor, comp);
 }
 
 void compositor_render(Compositor* comp, double time) {
@@ -416,7 +428,7 @@ uint8_t* compositor_get_cpu_buffer(Compositor* comp) {
     if (comp->cpu_buffer_stale) {
         size_t size = comp->timeline->width * comp->timeline->height * 4;
         if (!comp->cpu_output_buffer) {
-            comp->cpu_output_buffer = malloc(size);
+            comp->cpu_output_buffer = reallocate(comp->vm, NULL, 0, size);
         }
         
         glBindFramebuffer(GL_FRAMEBUFFER, comp->fbo);

@@ -3,12 +3,11 @@
 #ifndef LUNA_ENGINE_COMPOSITOR_H
 #define LUNA_ENGINE_COMPOSITOR_H
 
-#include <stdint.h>
-#include <stdbool.h>
 #include "engine/timeline.h"
-
-// 包含 GLAD (确保你的项目中包含 glad.c 并在 include 路径下)
 #include <glad/glad.h>
+
+// Forward declare VM
+typedef struct VM VM;
 
 // 前向声明
 struct AVFormatContext;
@@ -35,6 +34,7 @@ typedef struct {
 
 // --- Compositor ---
 typedef struct {
+    VM* vm;  // Added for allocations
     Timeline* timeline;
 
     // GL Resources
@@ -57,8 +57,8 @@ typedef struct {
 
 // --- API ---
 // 注意：创建 Compositor 前必须先创建 OpenGL Context (在 main.c 中完成)
-Compositor* compositor_create(Timeline* timeline);
-void compositor_free(Compositor* comp);
+Compositor* compositor_create(VM* vm, Timeline* timeline);
+void compositor_free(VM* vm, Compositor* comp);
 
 // 核心渲染：绘制到内部 FBO
 void compositor_render(Compositor* comp, double time);

@@ -3,7 +3,6 @@
 #ifndef LUNA_COMPILER_H
 #define LUNA_COMPILER_H
 
-#include <stdbool.h>
 #include "chunk.h"
 
 // Compiles source code into a Bytecode Chunk.

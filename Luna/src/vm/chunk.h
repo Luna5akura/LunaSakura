@@ -1,7 +1,6 @@
 // src/vm/chunk.h
 
 #pragma once
-#include "common.h"
 #include "value.h"
 
 // [新增] 前置声明 VM

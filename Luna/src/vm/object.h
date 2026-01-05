@@ -1,7 +1,6 @@
 // src/vm/object.h
 
 #pragma once
-#include "common.h"
 #include "value.h"
 
 // --- Forward Declarations ---

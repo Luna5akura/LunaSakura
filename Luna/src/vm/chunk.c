@@ -1,9 +1,7 @@
 // src/vm/chunk.c
 
 #include <stdio.h>
-#include "chunk.h"
 #include "memory.h"
-#include "value.h"
 #include "vm.h"
 
 

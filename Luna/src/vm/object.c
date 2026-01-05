@@ -1,11 +1,7 @@
 // src/vm/object.c
 
 #include <stdio.h>
-#include <string.h>
 #include "memory.h"
-#include "object.h"
-#include "table.h"
-#include "value.h"
 #include "vm.h"
 #include "engine/timeline.h"
 
@@ -124,7 +120,7 @@ ObjTimeline* newTimeline(VM* vm, u32 width, u32 height, double fps) {
     ObjTimeline* obj = (ObjTimeline*)allocateObject(vm, sizeof(ObjTimeline), OBJ_TIMELINE);
    
     // 现在有了 include "engine/timeline.h"，这里可以正确调用了
-    obj->timeline = timeline_create(width, height, fps);
+    obj->timeline = timeline_create(vm, width, height, fps);
    
     return obj;
 }

@@ -1,8 +1,6 @@
 // src/engine/video_probe.c
 
 #include <stdio.h>
-#include <stdint.h>
-#include <stddef.h>
 #include <math.h>
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>

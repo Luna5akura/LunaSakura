@@ -2,38 +2,31 @@
 
 #include <stdarg.h>
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
-#include "common.h"
 #include "compiler.h"
 #include "memory.h"
-#include "object.h"
 #include "vm.h"
 
-// [删除] 全局 VM 实例
-// VM vm; 
-
 // === Helper Functions ===
-
 void runtimeError(VM* vm, const char* format, ...) {
     va_list args;
     va_start(args, format);
     vfprintf(stderr, format, args);
     va_end(args);
     fputs("\n", stderr);
-   
+  
     resetStack(vm);
 }
 
 void initVM(VM* vm) {
     // 显式清零，避免垃圾数据
     memset(vm, 0, sizeof(VM));
-    
+   
     resetStack(vm);
     vm->objects = NULL;
     initTable(&vm->globals);
     initTable(&vm->strings);
-    
+   
     vm->bytesAllocated = 0;
     vm->nextGC = 1024 * 1024;
     vm->grayCount = 0;
@@ -42,6 +35,7 @@ void initVM(VM* vm) {
     vm->frameCount = 0;
     vm->chunk = NULL;
     vm->ip = NULL;
+    vm->active_timeline = NULL;  // Added: Initialize active timeline
 }
 
 void freeVM(VM* vm) {
@@ -49,14 +43,18 @@ void freeVM(VM* vm) {
     freeTable(vm, &vm->globals);
     freeTable(vm, &vm->strings);
     freeObjects(vm);
-    
+   
     vm->bytesAllocated = 0;
     vm->nextGC = 1024 * 1024;
-    
+   
     if (vm->grayStack) free(vm->grayStack); // grayStack 是纯指针数组，直接 free 即可
     vm->grayStack = NULL;
     vm->grayCapacity = 0;
     vm->grayCount = 0;
+    if (vm->active_timeline) {  // Added: Clean up active timeline
+        timeline_free(vm, vm->active_timeline);
+        vm->active_timeline = NULL;
+    }
 }
 
 void defineNative(VM* vm, const char* name, NativeFn function) {
@@ -67,7 +65,7 @@ void defineNative(VM* vm, const char* name, NativeFn function) {
         return;
     }
     push(vm, OBJ_VAL(string));
-    
+   
     // [修改] 传递 vm 给 newNative
     ObjNative* native = newNative(vm, function);
     if (native == NULL) {
@@ -76,10 +74,8 @@ void defineNative(VM* vm, const char* name, NativeFn function) {
         return;
     }
     push(vm, OBJ_VAL(native));
-
     // [修改] 传递 vm 给 tableSet (用于潜在的扩容内存分配)
     tableSet(vm, &vm->globals, string, vm->stack[1]);
-
     pop(vm);
     pop(vm);
 }
@@ -101,7 +97,7 @@ static bool callValue(VM* vm, Value callee, int argCount) {
                 break;
         }
     }
-   
+  
     runtimeError(vm, "Can only call functions and classes.");
     return false;
 }
@@ -110,7 +106,6 @@ static bool callValue(VM* vm, Value callee, int argCount) {
 static InterpretResult run(VM* vm) {
     register u8* ip = vm->ip;
     register Value* stackTop = vm->stackTop;
-
 #ifdef COMPUTED_GOTO
     static void* dispatchTable[] = {
         &&TARGET_OP_CONSTANT,
@@ -138,7 +133,7 @@ static InterpretResult run(VM* vm) {
     #define READ_BYTE() (*ip++)
     #define READ_CONSTANT() (vm->chunk->constants.values[READ_BYTE()])
     #define READ_STRING() AS_STRING(READ_CONSTANT())
-   
+  
     #define BINARY_OP(valueType, op) \
         do { \
             if (UNLIKELY(!IS_NUMBER(stackTop[-1]) || !IS_NUMBER(stackTop[-2]))) { \
@@ -151,7 +146,6 @@ static InterpretResult run(VM* vm) {
             stackTop--; \
             stackTop[-1] = valueType(a op b); \
         } while (false)
-
 #ifdef COMPUTED_GOTO
     DISPATCH();
 #else
@@ -165,17 +159,17 @@ static InterpretResult run(VM* vm) {
         stackTop++;
         DISPATCH();
     }
-    
+   
     // 补充：为了完整性，这里加上 OP_CONSTANT_LONG 的处理逻辑（虽然原代码未实现细节）
     CASE(OP_CONSTANT_LONG) {
         // 假设是 3 字节指令
         uint32_t index = READ_BYTE();
-        index |= (uint16_t)READ_BYTE() << 8; 
+        index |= (uint16_t)READ_BYTE() << 8;
         index |= (uint32_t)READ_BYTE() << 16; // 这里假设是 24-bit，具体看 compiler 实现，此处仅做占位
         // 实际上原 Chunk 实现并未完全支持 Long，暂且跳过或作为 TODO
         DISPATCH();
     }
-   
+  
     CASE(OP_NEGATE) {
         if (UNLIKELY(!IS_NUMBER(stackTop[-1]))) {
             vm->ip = ip; vm->stackTop = stackTop;
@@ -185,10 +179,10 @@ static InterpretResult run(VM* vm) {
         stackTop[-1] = NUMBER_VAL(-AS_NUMBER(stackTop[-1]));
         DISPATCH();
     }
-   
+  
     CASE(OP_ADD) {
         if (IS_STRING(stackTop[-1]) && IS_STRING(stackTop[-2])) {
-            // TODO: implement concatenate(vm, ...) 
+            // TODO: implement concatenate(vm, ...)
             // 必须传入 vm 用于分配新字符串
             vm->ip = ip; vm->stackTop = stackTop;
             runtimeError(vm, "String concatenation not yet implemented.");
@@ -197,11 +191,11 @@ static InterpretResult run(VM* vm) {
         BINARY_OP(NUMBER_VAL, +);
         DISPATCH();
     }
-   
+  
     CASE(OP_SUBTRACT) { BINARY_OP(NUMBER_VAL, -); DISPATCH(); }
     CASE(OP_MULTIPLY) { BINARY_OP(NUMBER_VAL, *); DISPATCH(); }
     CASE(OP_DIVIDE) { BINARY_OP(NUMBER_VAL, /); DISPATCH(); }
-   
+  
     CASE(OP_LESS) {
         if (UNLIKELY(!IS_NUMBER(stackTop[-1]) || !IS_NUMBER(stackTop[-2]))) {
              vm->ip = ip; vm->stackTop = stackTop;
@@ -214,12 +208,10 @@ static InterpretResult run(VM* vm) {
         stackTop[-1] = BOOL_VAL(a < b);
         DISPATCH();
     }
-
     CASE(OP_POP) {
         stackTop--;
         DISPATCH();
     }
-
     CASE(OP_DEFINE_GLOBAL) {
         ObjString* name = READ_STRING();
         // [修改] 传递 vm 给 tableSet，因为可能触发扩容分配
@@ -227,7 +219,6 @@ static InterpretResult run(VM* vm) {
         stackTop--;
         DISPATCH();
     }
-
     CASE(OP_GET_GLOBAL) {
         ObjString* name = READ_STRING();
         Value value;
@@ -241,58 +232,52 @@ static InterpretResult run(VM* vm) {
         stackTop++;
         DISPATCH();
     }
-
     CASE(OP_SET_GLOBAL) {
         ObjString* name = READ_STRING();
         // [修改] 传递 vm 给 tableSet
         if (tableSet(vm, &vm->globals, name, stackTop[-1])) {
             // 如果 Set 返回 true，说明这是一个新键（未定义），而不是赋值
             // 撤销操作并报错
-            tableDelete(&vm->globals, name); 
+            tableDelete(&vm->globals, name);
             vm->ip = ip; vm->stackTop = stackTop;
             runtimeError(vm, "Undefined variable '%s'.", name->chars);
             return INTERPRET_RUNTIME_ERROR;
         }
         DISPATCH();
     }
-
     CASE(OP_PRINT) {
         stackTop--;
         printValue(*stackTop);
         printf("\n");
         DISPATCH();
     }
-
     CASE(OP_CALL) {
         int argCount = READ_BYTE();
-       
+      
         // 同步状态到 VM 结构体
         vm->ip = ip;
         vm->stackTop = stackTop;
-       
+      
         Value callee = stackTop[-1 - argCount];
         // callValue 内部会处理 vm 传递
         if (!callValue(vm, callee, argCount)) {
             return INTERPRET_RUNTIME_ERROR;
         }
-       
+      
         // 恢复寄存器缓存
         stackTop = vm->stackTop;
         DISPATCH();
     }
-
     CASE(OP_RETURN) {
         vm->ip = ip;
         vm->stackTop = stackTop;
         return INTERPRET_OK;
     }
-
 #ifndef COMPUTED_GOTO
         }
     }
 #endif
     return INTERPRET_RUNTIME_ERROR;
-
     #undef READ_BYTE
     #undef READ_CONSTANT
     #undef READ_STRING

@@ -1,11 +1,7 @@
 // src/vm/table.c
 
 #include <stdlib.h>
-#include <string.h>
 #include "memory.h"
-#include "object.h"
-#include "table.h"
-#include "value.h"
 #include "vm.h"
 
 // [宏定义与 initTable, freeTable, findEntry, adjustCapacity 保持之前的修改状态]
