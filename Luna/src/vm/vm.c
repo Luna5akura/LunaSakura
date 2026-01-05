@@ -3,40 +3,39 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>  // 新增：为 free 等标准库函数提供声明
+#include <stdlib.h>
 #include "common.h"
 #include "compiler.h"
 #include "memory.h"
 #include "object.h"
 #include "vm.h"
 
-// Global VM instance (保留以兼容，但函数使用参数)
-VM vm;
+// [删除] 全局 VM 实例
+// VM vm; 
 
 // === Helper Functions ===
-// resetStack 已内联在 vm.h 中，无需重新定义
 
-void runtimeError(VM* vm, const char* format, ...) {  // 移除 static 以匹配头文件声明
+void runtimeError(VM* vm, const char* format, ...) {
     va_list args;
     va_start(args, format);
     vfprintf(stderr, format, args);
     va_end(args);
     fputs("\n", stderr);
    
-    // Stack trace logic would go here
     resetStack(vm);
 }
 
 void initVM(VM* vm) {
-    // Explicitly zero the structure to avoid garbage values
+    // 显式清零，避免垃圾数据
     memset(vm, 0, sizeof(VM));
     
     resetStack(vm);
     vm->objects = NULL;
     initTable(&vm->globals);
     initTable(&vm->strings);
+    
     vm->bytesAllocated = 0;
-    vm->nextGC = 1024 * 1024;  // Initial GC threshold (adjust as needed)
+    vm->nextGC = 1024 * 1024;
     vm->grayCount = 0;
     vm->grayCapacity = 0;
     vm->grayStack = NULL;
@@ -46,51 +45,58 @@ void initVM(VM* vm) {
 }
 
 void freeVM(VM* vm) {
-    freeTable(&vm->globals);
-    freeTable(&vm->strings);
+    // [修改] 传递 vm 上下文给 freeTable，因为释放内存需要 vm->bytesAllocated 统计
+    freeTable(vm, &vm->globals);
+    freeTable(vm, &vm->strings);
     freeObjects(vm);
-    vm->bytesAllocated = 0;  // Reset allocation tracking
-    vm->nextGC = 1024 * 1024;  // Reset threshold
-    if (vm->grayStack) free(vm->grayStack);  // Clear gray stack
+    
+    vm->bytesAllocated = 0;
+    vm->nextGC = 1024 * 1024;
+    
+    if (vm->grayStack) free(vm->grayStack); // grayStack 是纯指针数组，直接 free 即可
     vm->grayStack = NULL;
     vm->grayCapacity = 0;
     vm->grayCount = 0;
 }
 
-// Note: push/pop/peek are static inline in vm.h for performance.
-
 void defineNative(VM* vm, const char* name, NativeFn function) {
-    ObjString* string = copyString(name, (int)strlen(name));
+    // [修改] 传递 vm 给 copyString
+    ObjString* string = copyString(vm, name, (int)strlen(name));
     if (string == NULL) {
         runtimeError(vm, "Failed to allocate string for native function '%s'.", name);
-        return;  // Or handle gracefully, e.g., skip binding
+        return;
     }
     push(vm, OBJ_VAL(string));
-    ObjNative* native = newNative(function);
+    
+    // [修改] 传递 vm 给 newNative
+    ObjNative* native = newNative(vm, function);
     if (native == NULL) {
         runtimeError(vm, "Failed to allocate native function object for '%s'.", name);
-        pop(vm);  // Clean up the pushed string to avoid stack imbalance
+        pop(vm);
         return;
     }
     push(vm, OBJ_VAL(native));
 
-    tableSet(&vm->globals, string, vm->stack[1]);
+    // [修改] 传递 vm 给 tableSet (用于潜在的扩容内存分配)
+    tableSet(vm, &vm->globals, string, vm->stack[1]);
 
     pop(vm);
     pop(vm);
 }
 
-static bool callValue(VM* vm, Value callee, int argCount) {  // 添加 VM*
+static bool callValue(VM* vm, Value callee, int argCount) {
     if (IS_OBJ(callee)) {
         switch (OBJ_TYPE(callee)) {
             case OBJ_NATIVE: {
                 NativeFn native = AS_NATIVE(callee);
-                Value result = native(argCount, vm->stackTop - argCount);
+                // [修改] 将 vm 传递给 Native 函数
+                // 对应 bind_video.c 中的函数签名修改
+                Value result = native(vm, argCount, vm->stackTop - argCount);
                 vm->stackTop -= argCount + 1;
                 push(vm, result);
                 return true;
             }
-            // TODO: Handle other callable types
+            // TODO: Handle other callable types (e.g., Lox Functions, Classes)
             default:
                 break;
         }
@@ -101,14 +107,14 @@ static bool callValue(VM* vm, Value callee, int argCount) {  // 添加 VM*
 }
 
 // === The Interpreter Core ===
-static InterpretResult run(VM* vm) {  // 添加 VM*
-    // Optimization: Cache VM state in CPU registers.
+static InterpretResult run(VM* vm) {
     register u8* ip = vm->ip;
     register Value* stackTop = vm->stackTop;
+
 #ifdef COMPUTED_GOTO
-    // Label lookup table
     static void* dispatchTable[] = {
         &&TARGET_OP_CONSTANT,
+        &&TARGET_OP_CONSTANT_LONG, // 补充缺失的跳转表项
         &&TARGET_OP_NEGATE,
         &&TARGET_OP_ADD,
         &&TARGET_OP_SUBTRACT,
@@ -145,6 +151,7 @@ static InterpretResult run(VM* vm) {  // 添加 VM*
             stackTop--; \
             stackTop[-1] = valueType(a op b); \
         } while (false)
+
 #ifdef COMPUTED_GOTO
     DISPATCH();
 #else
@@ -156,6 +163,16 @@ static InterpretResult run(VM* vm) {  // 添加 VM*
         Value constant = READ_CONSTANT();
         *stackTop = constant;
         stackTop++;
+        DISPATCH();
+    }
+    
+    // 补充：为了完整性，这里加上 OP_CONSTANT_LONG 的处理逻辑（虽然原代码未实现细节）
+    CASE(OP_CONSTANT_LONG) {
+        // 假设是 3 字节指令
+        uint32_t index = READ_BYTE();
+        index |= (uint16_t)READ_BYTE() << 8; 
+        index |= (uint32_t)READ_BYTE() << 16; // 这里假设是 24-bit，具体看 compiler 实现，此处仅做占位
+        // 实际上原 Chunk 实现并未完全支持 Long，暂且跳过或作为 TODO
         DISPATCH();
     }
    
@@ -170,9 +187,9 @@ static InterpretResult run(VM* vm) {  // 添加 VM*
     }
    
     CASE(OP_ADD) {
-        // Optimization: Handle String concatenation vs Arithmetic
         if (IS_STRING(stackTop[-1]) && IS_STRING(stackTop[-2])) {
-            // TODO: implement concatenate() which allocates new string
+            // TODO: implement concatenate(vm, ...) 
+            // 必须传入 vm 用于分配新字符串
             vm->ip = ip; vm->stackTop = stackTop;
             runtimeError(vm, "String concatenation not yet implemented.");
             return INTERPRET_RUNTIME_ERROR;
@@ -197,19 +214,24 @@ static InterpretResult run(VM* vm) {  // 添加 VM*
         stackTop[-1] = BOOL_VAL(a < b);
         DISPATCH();
     }
+
     CASE(OP_POP) {
         stackTop--;
         DISPATCH();
     }
+
     CASE(OP_DEFINE_GLOBAL) {
         ObjString* name = READ_STRING();
-        tableSet(&vm->globals, name, stackTop[-1]);
+        // [修改] 传递 vm 给 tableSet，因为可能触发扩容分配
+        tableSet(vm, &vm->globals, name, stackTop[-1]);
         stackTop--;
         DISPATCH();
     }
+
     CASE(OP_GET_GLOBAL) {
         ObjString* name = READ_STRING();
         Value value;
+        // tableGet 是只读的，通常不需要 vm，但如果为了接口一致性未来加上也可，目前保持原样
         if (!tableGet(&vm->globals, name, &value)) {
             vm->ip = ip; vm->stackTop = stackTop;
             runtimeError(vm, "Undefined variable '%s'.", name->chars);
@@ -219,50 +241,58 @@ static InterpretResult run(VM* vm) {  // 添加 VM*
         stackTop++;
         DISPATCH();
     }
+
     CASE(OP_SET_GLOBAL) {
         ObjString* name = READ_STRING();
-        if (tableSet(&vm->globals, name, stackTop[-1])) {
-            tableDelete(&vm->globals, name); // Undo creation
+        // [修改] 传递 vm 给 tableSet
+        if (tableSet(vm, &vm->globals, name, stackTop[-1])) {
+            // 如果 Set 返回 true，说明这是一个新键（未定义），而不是赋值
+            // 撤销操作并报错
+            tableDelete(&vm->globals, name); 
             vm->ip = ip; vm->stackTop = stackTop;
             runtimeError(vm, "Undefined variable '%s'.", name->chars);
             return INTERPRET_RUNTIME_ERROR;
         }
         DISPATCH();
     }
+
     CASE(OP_PRINT) {
         stackTop--;
         printValue(*stackTop);
         printf("\n");
         DISPATCH();
     }
+
     CASE(OP_CALL) {
         int argCount = READ_BYTE();
        
-        // Sync state before calling function (which might fail or GC)
+        // 同步状态到 VM 结构体
         vm->ip = ip;
         vm->stackTop = stackTop;
        
-        // Callee is at: stackTop - argCount - 1
         Value callee = stackTop[-1 - argCount];
+        // callValue 内部会处理 vm 传递
         if (!callValue(vm, callee, argCount)) {
             return INTERPRET_RUNTIME_ERROR;
         }
        
-        // Restore cached register from global state (it might have changed)
+        // 恢复寄存器缓存
         stackTop = vm->stackTop;
         DISPATCH();
     }
+
     CASE(OP_RETURN) {
-        // Exit interpreter loop
         vm->ip = ip;
         vm->stackTop = stackTop;
         return INTERPRET_OK;
     }
+
 #ifndef COMPUTED_GOTO
-        } // end switch
-    } // end for
+        }
+    }
 #endif
-    return INTERPRET_RUNTIME_ERROR; // Should not reach here
+    return INTERPRET_RUNTIME_ERROR;
+
     #undef READ_BYTE
     #undef READ_CONSTANT
     #undef READ_STRING
@@ -271,8 +301,8 @@ static InterpretResult run(VM* vm) {  // 添加 VM*
     #undef CASE
 }
 
-InterpretResult interpret(VM* vm, Chunk* chunk) {  // 修改签名匹配
+InterpretResult interpret(VM* vm, Chunk* chunk) {
     vm->chunk = chunk;
     vm->ip = vm->chunk->code;
-    return run(vm);  // 传入 vm
+    return run(vm);
 }

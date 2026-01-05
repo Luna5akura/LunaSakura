@@ -13,20 +13,19 @@
 #include "engine/timeline.h"
 #include "engine/compositor.h"
 
-// 外部函数
-void registerVideoBindings();
+// 外部函数声明更新
+// [修改] 增加 VM* 参数
+void registerVideoBindings(VM* vm);
 Timeline* get_active_timeline();
 void reset_active_timeline();
 
-extern VM vm;
-
-// ... (get_file_mtime 和 readFile 函数保持不变，此处省略以节省篇幅) ...
+// ... (get_file_mtime 和 readFile 保持不变) ...
 time_t get_file_mtime(const char* path) {
     struct stat attr;
     if (stat(path, &attr) == 0) return attr.st_mtime;
     return 0;
 }
-static char* readFile(const char* path) { /* ... 同之前版本 ... */ 
+static char* readFile(const char* path) {
     FILE* file = fopen(path, "rb");
     if (!file) return NULL;
     fseek(file, 0L, SEEK_END);
@@ -62,7 +61,7 @@ int main(int argc, char* argv[]) {
     SDL_Window* window = SDL_CreateWindow("Luna Live Preview",
                                           SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                           win_w, win_h,
-                                          SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL); // 关键标志
+                                          SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL);
     
     // 创建 GL Context
     SDL_GLContext gl_context = SDL_GL_CreateContext(window);
@@ -91,6 +90,12 @@ int main(int argc, char* argv[]) {
     Compositor* comp = NULL;
     Timeline* current_tl = NULL;
 
+    // [新增] 本地 VM 实例
+    // 必须初始化为 0，防止在第一次加载前（如果文件不存在）调用 freeVM 导致崩溃
+    VM vm; 
+    memset(&vm, 0, sizeof(VM));
+    bool vm_initialized = false;
+
     // === 主循环 ===
     while (app_running) {
         // --- A. 检查文件变化 & 重载 ---
@@ -99,24 +104,34 @@ int main(int argc, char* argv[]) {
             printf("\n[Reload] Recompiling...\n");
             
             // 重要：在重置 VM 前，必须先释放旧的 Compositor
-            // 因为 Compositor 持有 Timeline 指针，而 Timeline 是 VM 管理的对象
             if (comp) { compositor_free(comp); comp = NULL; }
-            if (script_loaded) { freeVM(&vm); }
+            
+            // [修改] 传递 &vm
+            if (vm_initialized) { freeVM(&vm); }
 
+            // [修改] 传递 &vm
             initVM(&vm);
+            vm_initialized = true;
+            
             reset_active_timeline();
-            registerVideoBindings();
+            
+            // [修改] 传递 &vm
+            registerVideoBindings(&vm);
 
             char* source = readFile(script_path);
             if (source) {
                 Chunk chunk;
                 initChunk(&chunk);
-                if (compile(source, &chunk)) {
+                // [修改] 传递 &vm
+                if (compile(&vm, source, &chunk)) {
+                    // [修改] 传递 &vm
                     if (interpret(&vm, &chunk) == INTERPRET_OK) {
                         script_loaded = true;
                     } else script_loaded = false;
                 } else script_loaded = false;
-                freeChunk(&chunk);
+                
+                // [修改] 传递 &vm，因为 freeChunk 现在需要访问内存分配器
+                freeChunk(&vm, &chunk);
                 free(source);
             }
 
@@ -132,7 +147,7 @@ int main(int argc, char* argv[]) {
                         SDL_SetWindowSize(window, win_w, win_h);
                     }
                     
-                    // 创建 GL 合成器 (现在 GL Context 已经就绪)
+                    // 创建 GL 合成器
                     comp = compositor_create(current_tl);
                 }
             }
@@ -189,7 +204,10 @@ int main(int argc, char* argv[]) {
     if (comp) compositor_free(comp);
     SDL_GL_DeleteContext(gl_context);
     SDL_DestroyWindow(window);
-    freeVM(&vm);
+    
+    // [修改] 传递 &vm
+    if (vm_initialized) freeVM(&vm);
+    
     SDL_Quit();
     return 0;
 }

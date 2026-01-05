@@ -8,6 +8,6 @@
 
 // Compiles source code into a Bytecode Chunk.
 // Returns true if compilation succeeded.
-bool compile(const char* source, Chunk* chunk);
+bool compile(VM* vm, const char* source, Chunk* chunk);
 
 #endif

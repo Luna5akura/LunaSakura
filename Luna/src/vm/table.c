@@ -6,13 +6,17 @@
 #include "object.h"
 #include "table.h"
 #include "value.h"
-#include "vm.h"  // 新增：访问全局 vm（如果存在）或定义 VM
+#include "vm.h"
 
-extern VM vm;  // 假设全局 vm 定义在 vm.c 中，需要 extern
+// [宏定义与 initTable, freeTable, findEntry, adjustCapacity 保持之前的修改状态]
+// ... (为了节省篇幅，这里假设之前的修改已生效，仅展示新增函数和上下文相关部分) ...
+// 请确保 freeTable, adjustCapacity, tableSet, tableAddAll 已经包含 VM* vm 参数 (见之前的步骤)
 
 #define TABLE_MAX_LOAD 0.75
 
-// Force inline for hot-path helper functions
+// ... (此处省略重复的辅助函数 findEntry 等，请保留原文件内容) ...
+
+// 为了完整性，这里重新提供完整的 table.c 代码，确保没有遗漏
 #ifndef INLINE
     #if defined(_MSC_VER)
         #define INLINE __forceinline
@@ -21,74 +25,37 @@ extern VM vm;  // 假设全局 vm 定义在 vm.c 中，需要 extern
     #endif
 #endif
 
-void initTable(Table* table) {
-    table->count = 0;
-    table->capacity = 0;
-    table->entries = NULL;
-}
-
-void freeTable(Table* table) {
-    FREE_ARRAY(&vm, Entry, table->entries, table->capacity);  // 传入 &vm
-    initTable(table);
-}
-
-// --- Core Lookup Algorithm ---
-// Linear probing with tombstone support.
-// capacity must be a power of 2.
 static INLINE Entry* findEntry(Entry* entries, u32 capacity, ObjString* key) {
-    // Optimization: Use bitwise AND instead of modulo (%) for power-of-2 capacity.
     u32 index = key->hash & (capacity - 1);
-   
     Entry* tombstone = NULL;
     for (;;) {
         Entry* entry = &entries[index];
         if (entry->key == NULL) {
             if (IS_NIL(entry->value)) {
-                // Empty slot found.
-                // If we passed a tombstone, recycle it; otherwise use the empty slot.
                 return tombstone != NULL ? tombstone : entry;
             } else {
-                // Tombstone found.
-                // Record the first one we encounter to reuse it later if needed.
                 if (tombstone == NULL) tombstone = entry;
             }
         } else if (entry->key == key) {
-            // Key match found.
-            // Pointer equality works because all strings are interned.
             return entry;
         }
-        // Linear probing: wrap around using bitmask
         index = (index + 1) & (capacity - 1);
     }
 }
 
-// --- Resizing & Rehash ---
-static void adjustCapacity(Table* table, u32 capacity) {
-    // 1. Allocate new array using VM memory manager
-    Entry* entries = ALLOCATE(&vm, Entry, capacity);  // 传入 &vm
-   
-    // 2. Initialize slots.
-    // Cannot use memset because NIL_VAL (NaN Boxing) is not 0 bytes.
+static void adjustCapacity(VM* vm, Table* table, u32 capacity) {
+    Entry* entries = ALLOCATE(vm, Entry, capacity);
     for (u32 i = 0; i < capacity; i++) {
         entries[i].key = NULL;
         entries[i].value = NIL_VAL;
     }
-    // 3. Re-hash live entries.
-    // Reset count because tombstones are discarded during resize.
     table->count = 0;
-   
     for (u32 i = 0; i < table->capacity; i++) {
         Entry* entry = &table->entries[i];
-       
-        // Skip empty slots and tombstones (tombstones have NULL keys)
         if (entry->key == NULL) continue;
-        // Find destination in the new array.
-        // We can skip the full findEntry() logic because:
-        // a) We know keys are unique (no duplicates to find).
-        // b) The new array has no tombstones yet.
+        
         u32 index = entry->key->hash & (capacity - 1);
         Entry* dest;
-       
         for (;;) {
             dest = &entries[index];
             if (dest->key == NULL) break;
@@ -98,11 +65,20 @@ static void adjustCapacity(Table* table, u32 capacity) {
         dest->value = entry->value;
         table->count++;
     }
-    // 4. Free old array
-    FREE_ARRAY(&vm, Entry, table->entries, table->capacity);  // 传入 &vm
-   
+    FREE_ARRAY(vm, Entry, table->entries, table->capacity);
     table->entries = entries;
     table->capacity = capacity;
+}
+
+void initTable(Table* table) {
+    table->count = 0;
+    table->capacity = 0;
+    table->entries = NULL;
+}
+
+void freeTable(VM* vm, Table* table) {
+    FREE_ARRAY(vm, Entry, table->entries, table->capacity);
+    initTable(table);
 }
 
 bool tableGet(Table* table, ObjString* key, Value* value) {
@@ -113,17 +89,13 @@ bool tableGet(Table* table, ObjString* key, Value* value) {
     return true;
 }
 
-bool tableSet(Table* table, ObjString* key, Value value) {
-    // Load factor check: Grow if usage exceeds 75%.
+bool tableSet(VM* vm, Table* table, ObjString* key, Value value) {
     if (table->count + 1 > table->capacity * TABLE_MAX_LOAD) {
         u32 capacity = GROW_CAPACITY(table->capacity);
-        adjustCapacity(table, capacity);
+        adjustCapacity(vm, table, capacity);
     }
     Entry* entry = findEntry(table->entries, table->capacity, key);
     bool isNewKey = (entry->key == NULL);
-   
-    // Increment count only if we are using a truly empty slot (not a tombstone).
-    // Tombstones are treated as "occupied" for load factor but don't increase count.
     if (isNewKey && IS_NIL(entry->value)) {
         table->count++;
     }
@@ -136,44 +108,55 @@ bool tableDelete(Table* table, ObjString* key) {
     if (table->count == 0) return false;
     Entry* entry = findEntry(table->entries, table->capacity, key);
     if (entry->key == NULL) return false;
-    // Place a tombstone.
-    // Key = NULL, Value = TRUE (Bool).
     entry->key = NULL;
     entry->value = BOOL_VAL(true);
-   
-    // Note: We do not decrement table->count here.
-    // The slot is still physically occupied until the next rehash.
     return true;
 }
 
-void tableAddAll(Table* from, Table* to) {
+void tableAddAll(VM* vm, Table* from, Table* to) {
     for (u32 i = 0; i < from->capacity; i++) {
         Entry* entry = &from->entries[i];
         if (entry->key != NULL) {
-            tableSet(to, entry->key, entry->value);
+            tableSet(vm, to, entry->key, entry->value);
         }
     }
 }
 
-// --- String Interning Helper ---
 ObjString* tableFindString(Table* table, const char* chars, int length, u32 hash) {
     if (table->count == 0) return NULL;
     u32 index = hash & (table->capacity - 1);
-   
     for (;;) {
         Entry* entry = &table->entries[index];
-       
         if (entry->key == NULL) {
-            // Stop if we hit a non-tombstone empty slot
             if (IS_NIL(entry->value)) return NULL;
         } else if (entry->key->length == (u32)length &&
                    entry->key->hash == hash) {
-            // Fast path passed (Hash & Length match).
-            // Do full memory comparison.
             if (memcmp(entry->key->chars, chars, length) == 0) {
                 return entry->key;
             }
         }
         index = (index + 1) & (table->capacity - 1);
+    }
+}
+
+// [新增] GC 标记表中的所有对象
+void markTable(VM* vm, Table* table) {
+    for (u32 i = 0; i < table->capacity; i++) {
+        Entry* entry = &table->entries[i];
+        // 标记 Key (ObjString)
+        markObject(vm, (Obj*)entry->key);
+        // 标记 Value (可能是 Obj)
+        markValue(vm, entry->value);
+    }
+}
+
+// [新增] 弱引用清理：移除未标记的字符串
+// 用于字符串驻留池，当字符串不再被引用时，将其从池中移除
+void tableRemoveWhite(Table* table) {
+    for (u32 i = 0; i < table->capacity; i++) {
+        Entry* entry = &table->entries[i];
+        if (entry->key != NULL && !entry->key->obj.isMarked) {
+            tableDelete(table, entry->key);
+        }
     }
 }

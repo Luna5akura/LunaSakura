@@ -7,6 +7,7 @@
 #include "compiler.h"
 #include "scanner.h"
 #include "object.h"
+#include "vm.h" // 引入 VM 定义
 
 // --- Parser Structure ---
 typedef struct {
@@ -16,7 +17,6 @@ typedef struct {
     bool panicMode;
 } Parser;
 
-// Operator Precedence (Low to High)
 typedef enum {
     PREC_NONE,
     PREC_ASSIGNMENT, // =
@@ -39,9 +39,12 @@ typedef struct {
     Precedence precedence;
 } ParseRule;
 
+// === Global/Static Compilation State ===
 static Parser parser;
 static Chunk* compilingChunk;
-static Scanner scanner;  // 新增：本地 Scanner 实例
+static Scanner scanner;
+// [新增] 暂存当前编译的 VM 上下文，供内部函数使用
+static VM* compilingVM; 
 
 static inline Chunk* currentChunk() {
     return compilingChunk;
@@ -76,7 +79,7 @@ static void errorAtCurrent(const char* message) {
 static void advance() {
     parser.previous = parser.current;
     for (;;) {
-        parser.current = scanToken(&scanner);  // 修改：传入 &scanner
+        parser.current = scanToken(&scanner);
         if (parser.current.type != TOKEN_ERROR) break;
         errorAtCurrent(parser.current.start);
     }
@@ -102,7 +105,8 @@ static bool match(TokenType type) {
 
 // --- Bytecode Emission ---
 static inline void emitByte(u8 byte) {
-    writeChunk(currentChunk(), byte, parser.previous.line);
+    // [修改] 传递 compilingVM 给 writeChunk
+    writeChunk(compilingVM, currentChunk(), byte, parser.previous.line);
 }
 
 static inline void emitBytes(u8 byte1, u8 byte2) {
@@ -115,7 +119,8 @@ static inline void emitReturn() {
 }
 
 static u8 makeConstant(Value value) {
-    int constant = addConstant(currentChunk(), value);
+    // [修改] 传递 compilingVM 给 addConstant (用于 GC 保护和数组扩容)
+    int constant = addConstant(compilingVM, currentChunk(), value);
     if (constant > UINT8_MAX) {
         error("Too many constants in one chunk.");
         return 0;
@@ -128,7 +133,6 @@ static inline void emitConstant(Value value) {
 }
 
 // --- Forward Declarations ---
-// Only strictly necessary ones retained to keep code linear.
 static void expression();
 static void statement();
 static void declaration();
@@ -142,8 +146,8 @@ static void number(bool canAssign) {
 }
 
 static void string(bool canAssign) {
-    // Optimization: Copy string immediately to manage memory lifecycle
-    emitConstant(OBJ_VAL(copyString(parser.previous.start + 1,
+    // [修改] 传递 compilingVM 给 copyString
+    emitConstant(OBJ_VAL(copyString(compilingVM, parser.previous.start + 1,
                                     parser.previous.length - 2)));
 }
 
@@ -152,7 +156,7 @@ static void literal(bool canAssign) {
         case TOKEN_FALSE: emitConstant(FALSE_VAL); break;
         case TOKEN_NIL: emitConstant(NIL_VAL); break;
         case TOKEN_TRUE: emitConstant(TRUE_VAL); break;
-        default: return; // Unreachable
+        default: return;
     }
 }
 
@@ -166,7 +170,6 @@ static void unary(bool canAssign) {
     parsePrecedence(PREC_UNARY);
     switch (operatorType) {
         case TOKEN_MINUS: emitByte(OP_NEGATE); break;
-        // Note: Add TOKEN_BANG (OP_NOT) here if OP_NOT is implemented in VM
         default: return;
     }
 }
@@ -180,10 +183,7 @@ static void binary(bool canAssign) {
         case TOKEN_MINUS: emitByte(OP_SUBTRACT); break;
         case TOKEN_STAR: emitByte(OP_MULTIPLY); break;
         case TOKEN_SLASH: emitByte(OP_DIVIDE); break;
-       
-        // Comparison
         case TOKEN_LESS: emitByte(OP_LESS); break;
-        // Note: GREATER/EQUAL ops depend on VM support (not in basic chunk.h)
         default: return;
     }
 }
@@ -205,7 +205,8 @@ static void call(bool canAssign) {
 
 static void variable(bool canAssign) {
     Token name = parser.previous;
-    u8 arg = makeConstant(OBJ_VAL(copyString(name.start, name.length)));
+    // [修改] 传递 compilingVM 给 copyString
+    u8 arg = makeConstant(OBJ_VAL(copyString(compilingVM, name.start, name.length)));
     if (canAssign && match(TOKEN_EQUAL)) {
         expression();
         emitBytes(OP_SET_GLOBAL, arg);
@@ -241,17 +242,17 @@ ParseRule rules[] = {
     [TOKEN_AND] = {NULL, NULL, PREC_NONE},
     [TOKEN_CLASS] = {NULL, NULL, PREC_NONE},
     [TOKEN_ELSE] = {NULL, NULL, PREC_NONE},
-    [TOKEN_FALSE] = {literal, NULL, PREC_NONE}, // Fixed
+    [TOKEN_FALSE] = {literal, NULL, PREC_NONE},
     [TOKEN_FOR] = {NULL, NULL, PREC_NONE},
     [TOKEN_FUN] = {NULL, NULL, PREC_NONE},
     [TOKEN_IF] = {NULL, NULL, PREC_NONE},
-    [TOKEN_NIL] = {literal, NULL, PREC_NONE}, // Fixed
+    [TOKEN_NIL] = {literal, NULL, PREC_NONE},
     [TOKEN_OR] = {NULL, NULL, PREC_NONE},
     [TOKEN_PRINT] = {NULL, NULL, PREC_NONE},
     [TOKEN_RETURN] = {NULL, NULL, PREC_NONE},
     [TOKEN_SUPER] = {NULL, NULL, PREC_NONE},
     [TOKEN_THIS] = {NULL, NULL, PREC_NONE},
-    [TOKEN_TRUE] = {literal, NULL, PREC_NONE}, // Fixed
+    [TOKEN_TRUE] = {literal, NULL, PREC_NONE},
     [TOKEN_VAR] = {NULL, NULL, PREC_NONE},
     [TOKEN_WHILE] = {NULL, NULL, PREC_NONE},
     [TOKEN_ERROR] = {NULL, NULL, PREC_NONE},
@@ -262,7 +263,6 @@ static ParseRule* getRule(TokenType type) {
     return &rules[type];
 }
 
-// --- Core Logic ---
 static void parsePrecedence(Precedence precedence) {
     advance();
     ParseFn prefixRule = getRule(parser.previous.type)->prefix;
@@ -289,7 +289,8 @@ static void expression() {
 static void varDeclaration() {
     consume(TOKEN_IDENTIFIER, "Expect variable name.");
    
-    u8 global = makeConstant(OBJ_VAL(copyString(parser.previous.start, parser.previous.length)));
+    // [修改] 传递 compilingVM 给 copyString
+    u8 global = makeConstant(OBJ_VAL(copyString(compilingVM, parser.previous.start, parser.previous.length)));
     if (match(TOKEN_EQUAL)) {
         expression();
     } else {
@@ -325,7 +326,7 @@ static void declaration() {
     } else {
         statement();
     }
-    // Panic Mode Recovery (Synchronization)
+    
     if (parser.panicMode) {
         parser.panicMode = false;
         while (parser.current.type != TOKEN_EOF) {
@@ -341,22 +342,31 @@ static void declaration() {
                 case TOKEN_RETURN:
                     return;
                 default:
-                    ; // Continue looking for boundary
+                    ;
             }
             advance();
         }
     }
 }
 
-bool compile(const char* source, Chunk* chunk) {
-    initScanner(&scanner, source);  // 修改：传入 &scanner
+// [修改] 增加 VM* vm 参数
+bool compile(VM* vm, const char* source, Chunk* chunk) {
+    initScanner(&scanner, source);
     compilingChunk = chunk;
+    // [新增] 设置当前编译的 VM 上下文
+    compilingVM = vm;
+    
     parser.hadError = false;
     parser.panicMode = false;
+    
     advance();
     while (!match(TOKEN_EOF)) {
         declaration();
     }
     emitReturn();
+    
+    // 清理上下文指针
+    compilingVM = NULL;
+    
     return !parser.hadError;
 }

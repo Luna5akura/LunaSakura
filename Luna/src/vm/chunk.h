@@ -4,10 +4,13 @@
 #include "common.h"
 #include "value.h"
 
+// [新增] 前置声明 VM
+typedef struct VM VM;
+
 // --- Instruction Set ---
 typedef enum {
     OP_CONSTANT,
-    OP_CONSTANT_LONG, // 预留：处理 >256 个常量
+    OP_CONSTANT_LONG,
     OP_NEGATE,
     OP_ADD,
     OP_SUBTRACT,
@@ -23,7 +26,7 @@ typedef enum {
     OP_RETURN,
 } OpCode;
 
-// --- Line Info (RLE) ---
+// --- Line Info ---
 typedef struct {
     int line;
     u32 count;
@@ -39,43 +42,47 @@ typedef struct {
 typedef struct {
     u32 count;
     u32 capacity;
-    u8* code; // Hot Data
-    ValueArray constants; // Hot Data
+    u8* code;
+    ValueArray constants;
    
-    // --- RLE Optimization Buffer ---
-    // 将行号写入逻辑内联化，避免频繁调用 addLine
     int bufferedLine;
     u32 bufferedCount;
-    LineInfo lineInfo; // Cold Data (Separated for cache locality)
+    LineInfo lineInfo;
 } Chunk;
 
 void initChunk(Chunk* chunk);
-void freeChunk(Chunk* chunk);
-// 慢路径：扩容
-void growChunkCode(Chunk* chunk);
-// 慢路径：刷新行号缓冲
-void flushLineBuffer(Chunk* chunk, int newLine);
-int addConstant(Chunk* chunk, Value value);
+
+// [修改] 增加 VM* vm 参数
+void freeChunk(VM* vm, Chunk* chunk);
+
+// [修改] 增加 VM* vm 参数
+void growChunkCode(VM* vm, Chunk* chunk);
+
+// [修改] 增加 VM* vm 参数
+void flushLineBuffer(VM* vm, Chunk* chunk, int newLine);
+
+// [修改] 增加 VM* vm 参数
+int addConstant(VM* vm, Chunk* chunk, Value value);
 
 // --- Hot Path: Bytecode Writer ---
-static INLINE void writeChunk(Chunk* chunk, u8 byte, int line) {
-    // 1. 扩容检查
+// [修改] 增加 VM* vm 参数
+static INLINE void writeChunk(VM* vm, Chunk* chunk, u8 byte, int line) {
     if (UNLIKELY(chunk->count == chunk->capacity)) {
-        growChunkCode(chunk);
+        growChunkCode(vm, chunk);
     }
    
-    // 2. 写入指令
     chunk->code[chunk->count++] = byte;
-    // 3. 极速行号记录 (寄存器级操作)
+    
     if (LIKELY(chunk->lineInfo.count > 0 && line == chunk->bufferedLine)) {
         chunk->bufferedCount++;
     } else {
-        flushLineBuffer(chunk, line);
+        flushLineBuffer(vm, chunk, line);
     }
 }
-// 辅助：写入操作数（沿用当前行号）
-static INLINE void writeChunkByte(Chunk* chunk, u8 byte) {
-    writeChunk(chunk, byte, chunk->bufferedLine);
+
+// [修改] 增加 VM* vm 参数
+static INLINE void writeChunkByte(VM* vm, Chunk* chunk, u8 byte) {
+    writeChunk(vm, chunk, byte, chunk->bufferedLine);
 }
 
 // --- Debugging ---

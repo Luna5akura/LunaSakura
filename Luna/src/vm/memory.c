@@ -4,20 +4,16 @@
 #include <stdio.h>
 #include "memory.h"
 #include "vm.h"
-#include "engine/timeline.h" // for timeline_free
+#include "engine/timeline.h" 
 
-// 1. 优化：增加 VM* 上下文参数
 void* reallocate(VM* vm, void* pointer, size_t oldSize, size_t newSize) {
-    // 2. 优化：启用 GC 统计与触发
-    // 在分配内存前更新计数，这样 GC 可以在内存爆满前运行
     if (vm != NULL) {
         if (newSize > oldSize) {
             vm->bytesAllocated += (newSize - oldSize);
         } else {
             vm->bytesAllocated -= (oldSize - newSize);
         }
-        // 策略：当分配新内存且总用量超过阈值时触发 GC
-        // (DEBUG_STRESS_GC 宏用于调试，每次分配都强制 GC)
+
         if (newSize > oldSize) {
 #ifdef DEBUG_STRESS_GC
             collectGarbage(vm);
@@ -28,61 +24,51 @@ void* reallocate(VM* vm, void* pointer, size_t oldSize, size_t newSize) {
 #endif
         }
     }
-    // --- 核心分配逻辑 ---
+
     if (newSize == 0) {
         free(pointer);
         return NULL;
     }
+
     void* result = realloc(pointer, newSize);
-   
-    // 致命错误处理
+    
     if (UNLIKELY(result == NULL)) {
         fprintf(stderr, "Fatal Error: Out of memory.\n");
         exit(1);
     }
-   
     return result;
 }
 
 void freeObject(VM* vm, Obj* object) {
 #ifdef DEBUG_LOG_GC
-    // 打印指针地址和类型，方便追踪内存泄漏
     printf("%p free type %d\n", (void*)object, object->type);
 #endif
+
     switch (object->type) {
         case OBJ_STRING: {
             ObjString* string = (ObjString*)object;
-            // FAM (柔性数组) 释放逻辑：
-            // 必须释放 Header + chars + '\0'
-            // 注意：reallocate 这里传入 vm 用于统计内存减少
-            (void)reallocate(vm, object, sizeof(ObjString) + string->length + 1, 0);  // (void) 抑制警告
+            // [修改] 增加 (void) 转换以抑制 warn_unused_result 警告
+            (void)reallocate(vm, object, sizeof(ObjString) + string->length + 1, 0);
             break;
         }
-       
         case OBJ_NATIVE: {
-            (void)reallocate(vm, object, sizeof(ObjNative), 0);  // (void) 抑制警告
+            (void)reallocate(vm, object, sizeof(ObjNative), 0);
             break;
         }
-       
         case OBJ_CLIP: {
-            // Clip 内部持有的 path 是 ObjString*，由 GC 遍历处理，
-            // 这里只需要释放结构体本身
-            (void)reallocate(vm, object, sizeof(ObjClip), 0);  // (void) 抑制警告
+            (void)reallocate(vm, object, sizeof(ObjClip), 0);
             break;
         }
         case OBJ_TIMELINE: {
             ObjTimeline* obj = (ObjTimeline*)object;
-            // 3. 安全性：防止 Double Free 或空指针解引用
             if (obj->timeline) {
                 timeline_free(obj->timeline);
                 obj->timeline = NULL;
             }
-            (void)reallocate(vm, object, sizeof(ObjTimeline), 0);  // (void) 抑制警告
+            (void)reallocate(vm, object, sizeof(ObjTimeline), 0);
             break;
         }
-       
         default:
-            // 防御性编程：检测未处理的类型（通常意味着 switch 漏写了）
             fprintf(stderr, "Unknown object type %d in freeObject.\n", object->type);
             break;
     }
@@ -95,93 +81,120 @@ void freeObjects(VM* vm) {
         freeObject(vm, object);
         object = next;
     }
-   
+
     vm->objects = NULL;
-    // 4. 优化：清理 GC 灰色栈 (Gray Stack)
-    // 这是我们在 vm.h 中新增的结构，VM 销毁时必须释放
     free(vm->grayStack);
     vm->grayStack = NULL;
     vm->grayCount = 0;
     vm->grayCapacity = 0;
 }
 
-void markObject(Obj* object) {
+void markObject(VM* vm, Obj* object) {
     if (object == NULL) return;
-    if (object->isMarked) return;  // Avoid cycles or redundant marking
+    if (object->isMarked) return;
     
     object->isMarked = true;
-    
+
+    if (vm->grayCapacity < vm->grayCount + 1) {
+        vm->grayCapacity = GROW_CAPACITY(vm->grayCapacity);
+        // grayStack 只是指针数组，不通过 VM 统计分配（避免递归 GC），直接用 realloc
+        vm->grayStack = (Obj**)realloc(vm->grayStack, sizeof(Obj*) * vm->grayCapacity);
+        if (vm->grayStack == NULL) exit(1);
+    }
+    vm->grayStack[vm->grayCount++] = object;
+}
+
+void markValue(VM* vm, Value value) {
+    if (IS_OBJ(value)) {
+        markObject(vm, AS_OBJ(value));
+    }
+}
+
+static void markArray(VM* vm, ValueArray* array) {
+    // [修改] 将 int 改为 u32 以解决符号比较警告
+    for (u32 i = 0; i < array->count; i++) {
+        markValue(vm, array->values[i]);
+    }
+}
+
+static void blackenObject(VM* vm, Obj* object) {
 #ifdef DEBUG_LOG_GC
-    printf("[GC] Marking object %p (type %d)\n", (void*)object, object->type);
+    printf("%p blacken ", (void*)object);
+    printValue(OBJ_VAL(object));
+    printf("\n");
 #endif
-    
-    // Recursively mark referenced objects based on type
+
     switch (object->type) {
-        case OBJ_STRING:
-            // Strings have no references
-            break;
-        case OBJ_NATIVE:
-            // Natives have no references
-            break;
         case OBJ_CLIP: {
             ObjClip* clip = (ObjClip*)object;
-            if (clip->path != NULL) markObject((Obj*)clip->path);  // Mark referenced string
+            if (clip->path) markObject(vm, (Obj*)clip->path);
             break;
         }
-        case OBJ_TIMELINE: {
-            ObjTimeline* tl = (ObjTimeline*)object;
-            // If timeline has references (e.g., clips), mark them here
-            break;
-        }
+        // Native 和 String 没有引用其他对象
         default:
             break;
     }
 }
 
-void markValue(Value value) {
-    if (IS_OBJ(value)) {
-        markObject(AS_OBJ(value));
+static void markRoots(VM* vm) {
+    for (Value* slot = vm->stack; slot < vm->stackTop; slot++) {
+        markValue(vm, *slot);
     }
-    // Non-object values (e.g., numbers, bools) need no marking
+
+    markTable(vm, &vm->globals);
+    
+    // [新增] 标记当前正在编译或执行的 Chunk 中的常量
+    // 这解决了 markArray 未使用的警告，同时防止常量池被 GC
+    if (vm->chunk) {
+        markArray(vm, &vm->chunk->constants);
+    }
 }
 
-void markTable(Table* table) {
-    for (u32 i = 0; i < table->capacity; i++) {
-        Entry* entry = &table->entries[i];
-        if (entry->key != NULL) {
-            markObject((Obj*)entry->key);
-            markValue(entry->value);
+static void traceReferences(VM* vm) {
+    while (vm->grayCount > 0) {
+        Obj* object = vm->grayStack[--vm->grayCount];
+        blackenObject(vm, object);
+    }
+}
+
+static void sweep(VM* vm) {
+    Obj* previous = NULL;
+    Obj* object = vm->objects;
+    
+    while (object != NULL) {
+        if (object->isMarked) {
+            object->isMarked = false;
+            previous = object;
+            object = object->next;
+        } else {
+            Obj* unreached = object;
+            object = object->next;
+            if (previous != NULL) {
+                previous->next = object;
+            } else {
+                vm->objects = object;
+            }
+            freeObject(vm, unreached);
         }
     }
 }
 
 void collectGarbage(VM* vm) {
-    fprintf(stderr, "[GC] Starting GC. Allocated: %zu bytes, objects: %p\n", vm->bytesAllocated, (void*)vm->objects);
+#ifdef DEBUG_LOG_GC
+    printf("-- gc begin\n");
+    size_t before = vm->bytesAllocated;
+#endif
 
-    // Mark roots (example: globals table, stack)
-    markTable(&vm->globals);  // Assume markTable marks all values in table
-    for (Value* slot = vm->stack; slot < vm->stackTop; slot++) {
-        markValue(*slot);
-    }
+    markRoots(vm);
+    traceReferences(vm);
+    tableRemoveWhite(&vm->strings);
+    sweep(vm);
 
-    // Mark all reachable objects
-    Obj* obj = vm->objects;
-    while (obj != NULL) {
-        if (!obj->isMarked) {
-            fprintf(stderr, "[GC] Marking object %p (type %d)\n", (void*)obj, obj->type);
-            markObject(obj);  // Recursively mark referenced objects
-        }
-        obj = obj->next;
-    }
-
-    // Sweep: Free unmarked objects (TODO: implement full sweep logic)
-    // For now, reset marks
-    obj = vm->objects;
-    while (obj != NULL) {
-        obj->isMarked = false;
-        obj = obj->next;
-    }
-
-    fprintf(stderr, "[GC] GC completed.\n");
     vm->nextGC = vm->bytesAllocated * 2;
+
+#ifdef DEBUG_LOG_GC
+    printf("-- gc end\n");
+    printf("   collected %zu bytes (from %zu to %zu) next at %zu\n",
+           before - vm->bytesAllocated, before, vm->bytesAllocated, vm->nextGC);
+#endif
 }

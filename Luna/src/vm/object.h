@@ -4,6 +4,10 @@
 #include "common.h"
 #include "value.h"
 
+// --- Forward Declarations ---
+// 前置声明 VM 结构体，解决 vm.h 和 object.h 之间的循环依赖
+typedef struct VM VM;
+
 // --- Object Types ---
 typedef enum {
     OBJ_STRING,
@@ -21,7 +25,7 @@ struct sObj {
 };
 
 // --- Native Function ---
-typedef Value (*NativeFn)(int argCount, Value* args);
+typedef Value (*NativeFn)(VM* vm, int argCount, Value* args);
 typedef struct sObjNative {
     Obj obj;
     NativeFn function;
@@ -86,10 +90,13 @@ static INLINE bool isObjType(Value value, ObjType type) {
     return IS_OBJ(value) && AS_OBJ(value)->type == (u8)type;
 }
 
-// --- API ---
-ObjString* copyString(const char* chars, int length);
-ObjString* takeString(char* chars, int length);
-ObjNative* newNative(NativeFn function);
-ObjClip* newClip(ObjString* path);
-ObjTimeline* newTimeline(u32 width, u32 height, double fps);
+// --- API (Context-Aware) ---
+// 关键修改：所有对象创建函数现在必须接收 VM* 上下文
+
+ObjString* copyString(VM* vm, const char* chars, int length);
+ObjString* takeString(VM* vm, char* chars, int length);
+ObjNative* newNative(VM* vm, NativeFn function);
+ObjClip* newClip(VM* vm, ObjString* path);
+ObjTimeline* newTimeline(VM* vm, u32 width, u32 height, double fps);
+
 void printObject(Value value);

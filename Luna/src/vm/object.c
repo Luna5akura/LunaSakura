@@ -9,22 +9,15 @@
 #include "vm.h"
 #include "engine/timeline.h"
 
-// 声明全局 vm（假设在 vm.c 中定义）
-extern VM vm;
 
 // === 核心分配函数 ===
-// 分配对象头，并将其链接到 VM 的对象链表中 (GC 根链表)
-static Obj* allocateObject(size_t size, ObjType type) {
-    // 1. 申请内存
-    Obj* object = (Obj*)reallocate(&vm, NULL, 0, size);  // 传入 &vm
-   
-    // 2. 初始化基类字段
+static Obj* allocateObject(VM* vm, size_t size, ObjType type) {
+    Obj* object = (Obj*)reallocate(vm, NULL, 0, size);
     object->type = type;
-    object->isMarked = false; // GC 标记位初始化为 false
-   
-    // 3. 立即链接到 VM (关键：防止对象在未被引用前被 GC 回收)
-    object->next = vm.objects;
-    vm.objects = object;
+    object->isMarked = false;
+    object->next = vm->objects;
+    vm->objects = object;
+
 #ifdef DEBUG_LOG_GC
     printf("%p allocate %zu for %d\n", (void*)object, size, type);
 #endif
@@ -32,19 +25,12 @@ static Obj* allocateObject(size_t size, ObjType type) {
 }
 
 // === 字符串处理 ===
-// 专门为 ObjString 分配内存 (包含柔性数组)
-static ObjString* allocateString(int length) {
-    // 优化：一次性申请 "结构体头 + 字符串内容 + 结束符" 的连续内存
-    // sizeof(ObjString) 不包含柔性数组 chars[] 的大小
-    ObjString* string = (ObjString*)allocateObject(
-        sizeof(ObjString) + length + 1,
-        OBJ_STRING
-    );
+static ObjString* allocateString(VM* vm, int length) {
+    ObjString* string = (ObjString*)allocateObject(vm, sizeof(ObjString) + length + 1, OBJ_STRING);
     string->length = length;
     return string;
 }
 
-// FNV-1a 哈希算法
 static uint32_t hashString(const char* key, int length) {
     uint32_t hash = 2166136261u;
     for (int i = 0; i < length; i++) {
@@ -54,50 +40,68 @@ static uint32_t hashString(const char* key, int length) {
     return hash;
 }
 
-// 从 C 字符串创建 ObjString (驻留 + 拷贝)
-ObjString* copyString(const char* chars, int length) {
+ObjString* copyString(VM* vm, const char* chars, int length) {
     uint32_t hash = hashString(chars, length);
    
-    // 1. 查重：如果字符串池中已有该字符串，直接返回旧对象的指针
-    // 这保证了系统中相同的字符串永远只有一份
-    ObjString* interned = tableFindString(&vm.strings, chars, length, hash);
+    // 1. 查重
+    ObjString* interned = tableFindString(&vm->strings, chars, length, hash);
     if (interned != NULL) return interned;
    
-    // 2. 分配：申请一块连续内存
-    ObjString* string = allocateString(length);
+    // 2. 分配
+    ObjString* string = allocateString(vm, length);
     if (string == NULL) {
         fprintf(stderr, "Allocation failed for string of length %d.\n", length);
-        return NULL;  // Propagate failure
+        return NULL;
     }
    
-    // 3. 拷贝：将数据复制到柔性数组成员 chars 中
+    // 3. 拷贝
     memcpy(string->chars, chars, length);
-    string->chars[length] = '\0'; // 补上 C 风格结束符
+    string->chars[length] = '\0';
     string->hash = hash;
    
-    // 4. 入池：将新字符串加入驻留表
-    if (!tableSet(&vm.strings, string, NIL_VAL)) {
-        // Handle table set failure (rare, but possible)
-        fprintf(stderr, "Failed to intern string.\n");
-        // Cleanup allocated string (optional, but good practice)
-        freeObject(&vm, (Obj*)string);
-        return NULL;
+    // 4. 入池
+    if (!tableSet(vm, &vm->strings, string, NIL_VAL)) {
+        // Handle failure
     }
    
     return string;
 }
 
+ObjString* takeString(VM* vm, char* chars, int length) {
+    uint32_t hash = hashString(chars, length);
+    ObjString* interned = tableFindString(&vm->strings, chars, length, hash);
+    if (interned != NULL) {
+        // 显式转换 void 消除警告（如果不想修改宏定义）
+        (void)reallocate(vm, chars, sizeof(char) * (length + 1), 0);
+        return interned;
+    }
+    
+    ObjString* string = (ObjString*)allocateObject(vm, sizeof(ObjString) + length + 1, OBJ_STRING);
+    string->length = length;
+    string->hash = hash;
+    
+    memcpy(string->chars, chars, length);
+    string->chars[length] = '\0';
+    
+    // 释放传入的 chars
+    (void)reallocate(vm, chars, sizeof(char) * (length + 1), 0);
+
+    tableSet(vm, &vm->strings, string, NIL_VAL);
+    
+    return string;
+}
+
 // === 其他对象创建 ===
-ObjNative* newNative(NativeFn function) {
-    ObjNative* native = (ObjNative*)allocateObject(sizeof(ObjNative), OBJ_NATIVE);
+
+ObjNative* newNative(VM* vm, NativeFn function) {
+    ObjNative* native = (ObjNative*)allocateObject(vm, sizeof(ObjNative), OBJ_NATIVE);
     native->function = function;
     return native;
 }
 
-ObjClip* newClip(ObjString* path) {
-    ObjClip* clip = (ObjClip*)allocateObject(sizeof(ObjClip), OBJ_CLIP);
+ObjClip* newClip(VM* vm, ObjString* path) {
+    ObjClip* clip = (ObjClip*)allocateObject(vm, sizeof(ObjClip), OBJ_CLIP);
    
-    // 初始化所有字段，避免脏数据
     clip->path = path;
     clip->start_time = 0.0;
     clip->duration = 0.0;
@@ -116,11 +120,10 @@ ObjClip* newClip(ObjString* path) {
     return clip;
 }
 
-// [Add Function]
-ObjTimeline* newTimeline(u32 width, u32 height, double fps) {
-    ObjTimeline* obj = (ObjTimeline*)allocateObject(sizeof(ObjTimeline), OBJ_TIMELINE);
+ObjTimeline* newTimeline(VM* vm, u32 width, u32 height, double fps) {
+    ObjTimeline* obj = (ObjTimeline*)allocateObject(vm, sizeof(ObjTimeline), OBJ_TIMELINE);
    
-    // 调用引擎 API 创建底层 Timeline
+    // 现在有了 include "engine/timeline.h"，这里可以正确调用了
     obj->timeline = timeline_create(width, height, fps);
    
     return obj;
@@ -138,7 +141,6 @@ void printObject(Value value) {
             break;
            
         case OBJ_CLIP:
-            // 打印更多调试信息
             if (AS_CLIP(value)->path != NULL) {
                 printf("<clip \"%s\">", AS_CLIP(value)->path->chars);
             } else {
