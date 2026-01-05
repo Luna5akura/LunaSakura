@@ -118,14 +118,14 @@ void tableAddAll(VM* vm, Table* from, Table* to) {
     }
 }
 
-ObjString* tableFindString(Table* table, const char* chars, int length, u32 hash) {
+ObjString* tableFindString(Table* table, const char* chars, u32 length, u32 hash) {
     if (table->count == 0) return NULL;
     u32 index = hash & (table->capacity - 1);
     for (;;) {
         Entry* entry = &table->entries[index];
         if (entry->key == NULL) {
             if (IS_NIL(entry->value)) return NULL;
-        } else if (entry->key->length == (u32)length &&
+        } else if (entry->key->length == length &&
                    entry->key->hash == hash) {
             if (memcmp(entry->key->chars, chars, length) == 0) {
                 return entry->key;

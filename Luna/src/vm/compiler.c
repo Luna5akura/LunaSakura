@@ -36,12 +36,11 @@ typedef struct {
     Precedence precedence;
 } ParseRule;
 
-// === Global/Static Compilation State ===
+// === Global State ===
 static Parser parser;
 static Chunk* compilingChunk;
 static Scanner scanner;
-// [新增] 暂存当前编译的 VM 上下文，供内部函数使用
-static VM* compilingVM; 
+static VM* compilingVM;
 
 static inline Chunk* currentChunk() {
     return compilingChunk;
@@ -51,8 +50,8 @@ static inline Chunk* currentChunk() {
 static void errorAt(Token* token, const char* message) {
     if (parser.panicMode) return;
     parser.panicMode = true;
-   
-    fprintf(stderr, "[line %d] Error", token->line);
+  
+    fprintf(stderr, "[line %u] Error", token->line);
     if (token->type == TOKEN_EOF) {
         fprintf(stderr, " at end");
     } else if (token->type == TOKEN_ERROR) {
@@ -100,10 +99,15 @@ static bool match(TokenType type) {
     return true;
 }
 
+// [新增] 专门用于匹配换行，允许在 EOF 处结束（文件最后一行可以没有换行符）
+static void consumeLineEnd() {
+    if (check(TOKEN_EOF)) return;
+    consume(TOKEN_NEWLINE, "Expect newline after statement.");
+}
+
 // --- Bytecode Emission ---
 static inline void emitByte(u8 byte) {
-    // [修改] 传递 compilingVM 给 writeChunk
-    writeChunk(compilingVM, currentChunk(), byte, parser.previous.line);
+    writeChunk(compilingVM, currentChunk(), byte, (i32)parser.previous.line);
 }
 
 static inline void emitBytes(u8 byte1, u8 byte2) {
@@ -116,8 +120,7 @@ static inline void emitReturn() {
 }
 
 static u8 makeConstant(Value value) {
-    // [修改] 传递 compilingVM 给 addConstant (用于 GC 保护和数组扩容)
-    int constant = addConstant(compilingVM, currentChunk(), value);
+    i32 constant = addConstant(compilingVM, currentChunk(), value);
     if (constant > UINT8_MAX) {
         error("Too many constants in one chunk.");
         return 0;
@@ -143,7 +146,6 @@ static void number(bool canAssign) {
 }
 
 static void string(bool canAssign) {
-    // [修改] 传递 compilingVM 给 copyString
     emitConstant(OBJ_VAL(copyString(compilingVM, parser.previous.start + 1,
                                     parser.previous.length - 2)));
 }
@@ -202,7 +204,6 @@ static void call(bool canAssign) {
 
 static void variable(bool canAssign) {
     Token name = parser.previous;
-    // [修改] 传递 compilingVM 给 copyString
     u8 arg = makeConstant(OBJ_VAL(copyString(compilingVM, name.start, name.length)));
     if (canAssign && match(TOKEN_EQUAL)) {
         expression();
@@ -222,7 +223,7 @@ ParseRule rules[] = {
     [TOKEN_DOT] = {NULL, NULL, PREC_NONE},
     [TOKEN_MINUS] = {unary, binary, PREC_TERM},
     [TOKEN_PLUS] = {NULL, binary, PREC_TERM},
-    [TOKEN_SEMICOLON] = {NULL, NULL, PREC_NONE},
+    [TOKEN_COLON] = {NULL, NULL, PREC_NONE}, // 新增
     [TOKEN_SLASH] = {NULL, binary, PREC_FACTOR},
     [TOKEN_STAR] = {NULL, binary, PREC_FACTOR},
     [TOKEN_BANG] = {NULL, NULL, PREC_NONE},
@@ -252,6 +253,12 @@ ParseRule rules[] = {
     [TOKEN_TRUE] = {literal, NULL, PREC_NONE},
     [TOKEN_VAR] = {NULL, NULL, PREC_NONE},
     [TOKEN_WHILE] = {NULL, NULL, PREC_NONE},
+    
+    // 新增 Token 规则占位
+    [TOKEN_NEWLINE] = {NULL, NULL, PREC_NONE},
+    [TOKEN_INDENT] = {NULL, NULL, PREC_NONE},
+    [TOKEN_DEDENT] = {NULL, NULL, PREC_NONE},
+    
     [TOKEN_ERROR] = {NULL, NULL, PREC_NONE},
     [TOKEN_EOF] = {NULL, NULL, PREC_NONE},
 };
@@ -283,51 +290,76 @@ static void expression() {
     parsePrecedence(PREC_ASSIGNMENT);
 }
 
+// [新增] 块解析辅助函数 (供未来 if/while 使用)
+// 语法: INDENT statement* DEDENT
+static void block() {
+    consume(TOKEN_INDENT, "Expect indentation at beginning of block.");
+    
+    while (!check(TOKEN_DEDENT) && !check(TOKEN_EOF)) {
+        declaration();
+    }
+
+    consume(TOKEN_DEDENT, "Expect dedent at end of block.");
+}
+
 static void varDeclaration() {
     consume(TOKEN_IDENTIFIER, "Expect variable name.");
-   
-    // [修改] 传递 compilingVM 给 copyString
+  
     u8 global = makeConstant(OBJ_VAL(copyString(compilingVM, parser.previous.start, parser.previous.length)));
+    
     if (match(TOKEN_EQUAL)) {
         expression();
     } else {
         emitConstant(NIL_VAL);
     }
-    consume(TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
+    // 使用换行符结束
+    consumeLineEnd();
     emitBytes(OP_DEFINE_GLOBAL, global);
 }
 
 static void expressionStatement() {
     expression();
-    consume(TOKEN_SEMICOLON, "Expect ';' after expression.");
+    // 使用换行符结束
+    consumeLineEnd();
     emitByte(OP_POP);
 }
 
 static void printStatement() {
     expression();
-    consume(TOKEN_SEMICOLON, "Expect ';' after value.");
+    // 使用换行符结束
+    consumeLineEnd();
     emitByte(OP_PRINT);
 }
 
 static void statement() {
     if (match(TOKEN_PRINT)) {
         printStatement();
-    } else {
+    } 
+    // 未来在这里添加 if (match(TOKEN_IF)) ifStatement(); 等
+    // ifStatement 示例:
+    // consume(TOKEN_LEFT_PAREN); expression(); consume(TOKEN_RIGHT_PAREN);
+    // consume(TOKEN_COLON); consume(TOKEN_NEWLINE);
+    // block();
+    else {
         expressionStatement();
     }
 }
 
 static void declaration() {
+    // 处理多余的空行 (Scanner 可能会连续吐出 NEWLINE，如果没过滤干净)
+    while (match(TOKEN_NEWLINE));
+
     if (match(TOKEN_VAR)) {
         varDeclaration();
     } else {
         statement();
     }
-    
+   
     if (parser.panicMode) {
         parser.panicMode = false;
+        // 同步逻辑修改：寻找 NEWLINE 而不是分号
         while (parser.current.type != TOKEN_EOF) {
-            if (parser.previous.type == TOKEN_SEMICOLON) return;
+            if (parser.previous.type == TOKEN_NEWLINE) return;
             switch (parser.current.type) {
                 case TOKEN_CLASS:
                 case TOKEN_FUN:
@@ -346,24 +378,24 @@ static void declaration() {
     }
 }
 
-// [修改] 增加 VM* vm 参数
 bool compile(VM* vm, const char* source, Chunk* chunk) {
     initScanner(&scanner, source);
     compilingChunk = chunk;
-    // [新增] 设置当前编译的 VM 上下文
     compilingVM = vm;
-    
+   
     parser.hadError = false;
     parser.panicMode = false;
-    
+   
     advance();
+    
+    // 跳过文件开头的空行
+    while (match(TOKEN_NEWLINE));
+
     while (!match(TOKEN_EOF)) {
         declaration();
     }
     emitReturn();
-    
-    // 清理上下文指针
+   
     compilingVM = NULL;
-    
     return !parser.hadError;
 }

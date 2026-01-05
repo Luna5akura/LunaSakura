@@ -4,48 +4,57 @@
 #include "common.h"
 
 typedef enum {
-    // Single-character
-    TOKEN_LEFT_PAREN, TOKEN_RIGHT_PAREN, TOKEN_LEFT_BRACE, TOKEN_RIGHT_BRACE,
+    // 单字符 Token
+    TOKEN_LEFT_PAREN, TOKEN_RIGHT_PAREN,
+    TOKEN_LEFT_BRACE, TOKEN_RIGHT_BRACE, // 保留用于 Map/Set 字面量
     TOKEN_COMMA, TOKEN_DOT, TOKEN_MINUS, TOKEN_PLUS,
-    TOKEN_SEMICOLON, TOKEN_SLASH, TOKEN_STAR,
-    // One or two character
+    TOKEN_COLON, // [新增] :
+    TOKEN_SLASH, TOKEN_STAR,
+
+    // 比较符号
     TOKEN_BANG, TOKEN_BANG_EQUAL,
     TOKEN_EQUAL, TOKEN_EQUAL_EQUAL,
     TOKEN_GREATER, TOKEN_GREATER_EQUAL,
     TOKEN_LESS, TOKEN_LESS_EQUAL,
-    // Literals (Range marked for O(1) checks)
-    TOKEN_LITERAL_START,
-    TOKEN_IDENTIFIER = TOKEN_LITERAL_START,
-    TOKEN_STRING,
-    TOKEN_NUMBER,
-    TOKEN_LITERAL_END = TOKEN_NUMBER,
-    // Keywords (Range marked)
-    TOKEN_KEYWORD_START,
-    TOKEN_AND = TOKEN_KEYWORD_START,
-    TOKEN_CLASS, TOKEN_ELSE, TOKEN_FALSE,
+
+    // 字面量
+    TOKEN_IDENTIFIER, TOKEN_STRING, TOKEN_NUMBER,
+
+    // 关键字
+    TOKEN_AND, TOKEN_CLASS, TOKEN_ELSE, TOKEN_FALSE,
     TOKEN_FOR, TOKEN_FUN, TOKEN_IF, TOKEN_NIL, TOKEN_OR,
     TOKEN_PRINT, TOKEN_RETURN, TOKEN_SUPER, TOKEN_THIS,
     TOKEN_TRUE, TOKEN_VAR, TOKEN_WHILE,
-    TOKEN_KEYWORD_END = TOKEN_WHILE,
+
+    // [新增] Python 风格控制符
+    TOKEN_NEWLINE,
+    TOKEN_INDENT,
+    TOKEN_DEDENT,
+
     TOKEN_ERROR, TOKEN_EOF
 } TokenType;
 
-// --- Token ---
-// 16 bytes exactly. Fits in 2x 64-bit registers.
 typedef struct {
     const char* start;
     u32 line;
     u16 length;
     u8 type;
-    u8 padding; // Explicit padding
+    u8 padding;
 } Token;
 
-// --- Scanner Context ---
-// 消除全局状态，支持多线程/多实例
+#define MAX_INDENT_STACK 256
+
 typedef struct {
     const char* start;
     const char* current;
-    int line;
+    i32 line;
+    
+    // [新增] 缩进控制状态
+    int indentStack[MAX_INDENT_STACK];
+    int indentTop;
+    int pendingDedents;
+    bool isAtStartOfLine;
+    int parenDepth; // 用于处理括号内的换行（忽略）
 } Scanner;
 
 void initScanner(Scanner* scanner, const char* source);

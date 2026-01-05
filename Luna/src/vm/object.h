@@ -2,11 +2,9 @@
 
 #pragma once
 #include "value.h"
-
 // --- Forward Declarations ---
 // 前置声明 VM 结构体，解决 vm.h 和 object.h 之间的循环依赖
 typedef struct VM VM;
-
 // --- Object Types ---
 typedef enum {
     OBJ_STRING,
@@ -14,7 +12,6 @@ typedef enum {
     OBJ_CLIP,
     OBJ_TIMELINE,
 } ObjType;
-
 // --- Base Object Header ---
 struct sObj {
     struct sObj* next; // Offset 0: 放在首位，优化 GC 链表遍历 (Ptr chasing)
@@ -22,14 +19,12 @@ struct sObj {
     bool isMarked; // Offset 9
     // Padding: 6 bytes (Compiler auto-filled to 16 bytes)
 };
-
 // --- Native Function ---
-typedef Value (*NativeFn)(VM* vm, int argCount, Value* args);
+typedef Value (*NativeFn)(VM* vm, i32 argCount, Value* args);
 typedef struct sObjNative {
     Obj obj;
     NativeFn function;
 } ObjNative;
-
 // --- String Object ---
 // Layout: [Obj(16)] [Len(4)] [Hash(4)] [Chars...]
 struct sObjString {
@@ -38,13 +33,12 @@ struct sObjString {
     u32 hash;
     char chars[];
 };
-
 // --- Clip Object ---
 // Optimized Layout: Sorted by size to remove all internal padding.
 struct sObjClip {
     Obj obj; // 16 bytes
     struct sObjString* path; // 8 bytes
-   
+  
     // 8-byte aligned (Doubles) - Grouped together
     double duration;
     double start_time;
@@ -55,23 +49,21 @@ struct sObjClip {
     double default_scale_y;
     double default_x;
     double default_y;
-    double default_opacity; 
-   
+    double default_opacity;
+  
     // 4-byte aligned (Ints) - Grouped together
     u32 width;
     u32 height;
     i32 layer;
-   
+  
     // Padding: 4 bytes at the end (for 8-byte alignment)
 };
-
 // Forward Declaration
 struct Timeline;
 typedef struct sObjTimeline {
     Obj obj;
     struct Timeline* timeline;
 } ObjTimeline;
-
 // --- Macros ---
 #define OBJ_TYPE(value) (AS_OBJ(value)->type)
 #define IS_STRING(value) isObjType(value, OBJ_STRING)
@@ -83,19 +75,15 @@ typedef struct sObjTimeline {
 #define AS_NATIVE(value) (((ObjNative*)AS_OBJ(value))->function)
 #define AS_CLIP(value) ((ObjClip*)AS_OBJ(value))
 #define AS_TIMELINE(value) ((ObjTimeline*)AS_OBJ(value))
-
 // --- Inline Helpers ---
 static INLINE bool isObjType(Value value, ObjType type) {
     return IS_OBJ(value) && AS_OBJ(value)->type == (u8)type;
 }
-
 // --- API (Context-Aware) ---
 // 关键修改：所有对象创建函数现在必须接收 VM* 上下文
-
-ObjString* copyString(VM* vm, const char* chars, int length);
-ObjString* takeString(VM* vm, char* chars, int length);
+ObjString* copyString(VM* vm, const char* chars, i32 length);
+ObjString* takeString(VM* vm, char* chars, i32 length);
 ObjNative* newNative(VM* vm, NativeFn function);
 ObjClip* newClip(VM* vm, ObjString* path);
 ObjTimeline* newTimeline(VM* vm, u32 width, u32 height, double fps);
-
 void printObject(Value value);

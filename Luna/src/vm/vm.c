@@ -6,7 +6,6 @@
 #include "compiler.h"
 #include "memory.h"
 #include "vm.h"
-
 // === Helper Functions ===
 void runtimeError(VM* vm, const char* format, ...) {
     va_list args;
@@ -14,19 +13,18 @@ void runtimeError(VM* vm, const char* format, ...) {
     vfprintf(stderr, format, args);
     va_end(args);
     fputs("\n", stderr);
-  
+ 
     resetStack(vm);
 }
-
 void initVM(VM* vm) {
     // 显式清零，避免垃圾数据
     memset(vm, 0, sizeof(VM));
-   
+  
     resetStack(vm);
     vm->objects = NULL;
     initTable(&vm->globals);
     initTable(&vm->strings);
-   
+  
     vm->bytesAllocated = 0;
     vm->nextGC = 1024 * 1024;
     vm->grayCount = 0;
@@ -35,37 +33,35 @@ void initVM(VM* vm) {
     vm->frameCount = 0;
     vm->chunk = NULL;
     vm->ip = NULL;
-    vm->active_timeline = NULL;  // Added: Initialize active timeline
+    vm->active_timeline = NULL; // Added: Initialize active timeline
 }
-
 void freeVM(VM* vm) {
     // [修改] 传递 vm 上下文给 freeTable，因为释放内存需要 vm->bytesAllocated 统计
     freeTable(vm, &vm->globals);
     freeTable(vm, &vm->strings);
     freeObjects(vm);
-   
+  
     vm->bytesAllocated = 0;
     vm->nextGC = 1024 * 1024;
-   
+  
     if (vm->grayStack) free(vm->grayStack); // grayStack 是纯指针数组，直接 free 即可
     vm->grayStack = NULL;
     vm->grayCapacity = 0;
     vm->grayCount = 0;
-    if (vm->active_timeline) {  // Added: Clean up active timeline
+    if (vm->active_timeline) { // Added: Clean up active timeline
         timeline_free(vm, vm->active_timeline);
         vm->active_timeline = NULL;
     }
 }
-
 void defineNative(VM* vm, const char* name, NativeFn function) {
     // [修改] 传递 vm 给 copyString
-    ObjString* string = copyString(vm, name, (int)strlen(name));
+    ObjString* string = copyString(vm, name, (i32)strlen(name));
     if (string == NULL) {
         runtimeError(vm, "Failed to allocate string for native function '%s'.", name);
         return;
     }
     push(vm, OBJ_VAL(string));
-   
+  
     // [修改] 传递 vm 给 newNative
     ObjNative* native = newNative(vm, function);
     if (native == NULL) {
@@ -79,8 +75,7 @@ void defineNative(VM* vm, const char* name, NativeFn function) {
     pop(vm);
     pop(vm);
 }
-
-static bool callValue(VM* vm, Value callee, int argCount) {
+static bool callValue(VM* vm, Value callee, i32 argCount) {
     if (IS_OBJ(callee)) {
         switch (OBJ_TYPE(callee)) {
             case OBJ_NATIVE: {
@@ -97,11 +92,10 @@ static bool callValue(VM* vm, Value callee, int argCount) {
                 break;
         }
     }
-  
+ 
     runtimeError(vm, "Can only call functions and classes.");
     return false;
 }
-
 // === The Interpreter Core ===
 static InterpretResult run(VM* vm) {
     register u8* ip = vm->ip;
@@ -133,7 +127,7 @@ static InterpretResult run(VM* vm) {
     #define READ_BYTE() (*ip++)
     #define READ_CONSTANT() (vm->chunk->constants.values[READ_BYTE()])
     #define READ_STRING() AS_STRING(READ_CONSTANT())
-  
+ 
     #define BINARY_OP(valueType, op) \
         do { \
             if (UNLIKELY(!IS_NUMBER(stackTop[-1]) || !IS_NUMBER(stackTop[-2]))) { \
@@ -159,17 +153,17 @@ static InterpretResult run(VM* vm) {
         stackTop++;
         DISPATCH();
     }
-   
+  
     // 补充：为了完整性，这里加上 OP_CONSTANT_LONG 的处理逻辑（虽然原代码未实现细节）
     CASE(OP_CONSTANT_LONG) {
         // 假设是 3 字节指令
-        uint32_t index = READ_BYTE();
-        index |= (uint16_t)READ_BYTE() << 8;
-        index |= (uint32_t)READ_BYTE() << 16; // 这里假设是 24-bit，具体看 compiler 实现，此处仅做占位
+        u32 index = READ_BYTE();
+        index |= (u16)READ_BYTE() << 8;
+        index |= (u32)READ_BYTE() << 16; // 这里假设是 24-bit，具体看 compiler 实现，此处仅做占位
         // 实际上原 Chunk 实现并未完全支持 Long，暂且跳过或作为 TODO
         DISPATCH();
     }
-  
+ 
     CASE(OP_NEGATE) {
         if (UNLIKELY(!IS_NUMBER(stackTop[-1]))) {
             vm->ip = ip; vm->stackTop = stackTop;
@@ -179,7 +173,7 @@ static InterpretResult run(VM* vm) {
         stackTop[-1] = NUMBER_VAL(-AS_NUMBER(stackTop[-1]));
         DISPATCH();
     }
-  
+ 
     CASE(OP_ADD) {
         if (IS_STRING(stackTop[-1]) && IS_STRING(stackTop[-2])) {
             // TODO: implement concatenate(vm, ...)
@@ -191,11 +185,11 @@ static InterpretResult run(VM* vm) {
         BINARY_OP(NUMBER_VAL, +);
         DISPATCH();
     }
-  
+ 
     CASE(OP_SUBTRACT) { BINARY_OP(NUMBER_VAL, -); DISPATCH(); }
     CASE(OP_MULTIPLY) { BINARY_OP(NUMBER_VAL, *); DISPATCH(); }
     CASE(OP_DIVIDE) { BINARY_OP(NUMBER_VAL, /); DISPATCH(); }
-  
+ 
     CASE(OP_LESS) {
         if (UNLIKELY(!IS_NUMBER(stackTop[-1]) || !IS_NUMBER(stackTop[-2]))) {
              vm->ip = ip; vm->stackTop = stackTop;
@@ -252,18 +246,18 @@ static InterpretResult run(VM* vm) {
         DISPATCH();
     }
     CASE(OP_CALL) {
-        int argCount = READ_BYTE();
-      
+        i32 argCount = READ_BYTE();
+     
         // 同步状态到 VM 结构体
         vm->ip = ip;
         vm->stackTop = stackTop;
-      
+     
         Value callee = stackTop[-1 - argCount];
         // callValue 内部会处理 vm 传递
         if (!callValue(vm, callee, argCount)) {
             return INTERPRET_RUNTIME_ERROR;
         }
-      
+     
         // 恢复寄存器缓存
         stackTop = vm->stackTop;
         DISPATCH();
@@ -285,7 +279,6 @@ static InterpretResult run(VM* vm) {
     #undef DISPATCH
     #undef CASE
 }
-
 InterpretResult interpret(VM* vm, Chunk* chunk) {
     vm->chunk = chunk;
     vm->ip = vm->chunk->code;

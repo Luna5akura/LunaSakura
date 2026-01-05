@@ -27,7 +27,7 @@ typedef enum {
 
 // --- Line Info ---
 typedef struct {
-    int line;
+    i32 line;
     u32 count;
 } LineStart;
 
@@ -44,7 +44,7 @@ typedef struct {
     u8* code;
     ValueArray constants;
    
-    int bufferedLine;
+    i32 bufferedLine;
     u32 bufferedCount;
     LineInfo lineInfo;
 } Chunk;
@@ -58,14 +58,14 @@ void freeChunk(VM* vm, Chunk* chunk);
 void growChunkCode(VM* vm, Chunk* chunk);
 
 // [修改] 增加 VM* vm 参数
-void flushLineBuffer(VM* vm, Chunk* chunk, int newLine);
+void flushLineBuffer(VM* vm, Chunk* chunk, i32 newLine);
 
 // [修改] 增加 VM* vm 参数
-int addConstant(VM* vm, Chunk* chunk, Value value);
+i32 addConstant(VM* vm, Chunk* chunk, Value value);
 
 // --- Hot Path: Bytecode Writer ---
 // [修改] 增加 VM* vm 参数
-static INLINE void writeChunk(VM* vm, Chunk* chunk, u8 byte, int line) {
+static INLINE void writeChunk(VM* vm, Chunk* chunk, u8 byte, i32 line) {
     if (UNLIKELY(chunk->count == chunk->capacity)) {
         growChunkCode(vm, chunk);
     }
@@ -85,5 +85,5 @@ static INLINE void writeChunkByte(VM* vm, Chunk* chunk, u8 byte) {
 }
 
 // --- Debugging ---
-int disassembleInstruction(Chunk* chunk, int offset);
+i32 disassembleInstruction(Chunk* chunk, i32 offset);
 void disassembleChunk(Chunk* chunk, const char* name);

@@ -30,7 +30,7 @@ bool tableDelete(Table* table, ObjString* key);
 void tableAddAll(VM* vm, Table* from, Table* to);
 
 // --- String Interning ---
-ObjString* tableFindString(Table* table, const char* chars, int length, u32 hash);
+ObjString* tableFindString(Table* table, const char* chars, u32 length, u32 hash);
 
 // [新增] GC 辅助函数声明
 void markTable(VM* vm, Table* table);
