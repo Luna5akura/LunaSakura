@@ -4,35 +4,32 @@
 #include "vm/vm.h"
 #include "engine/video.h"
 #include "engine/timeline.h"
-
 // 供 main.c 调用
 Timeline* get_active_timeline(VM* vm) {
     return vm->active_timeline;
 }
-
 // 供 main.c 调用
 void reset_active_timeline(VM* vm) {
     vm->active_timeline = NULL;
 }
-
 // --- Native Functions ---
 // Constructor: Video("path.mp4")
-Value nativeCreateClip(VM* vm, int argCount, Value* args) {
+Value nativeCreateClip(VM* vm, i32 argCount, Value* args) {
     if (UNLIKELY(argCount != 1 || !IS_STRING(args[0]))) {
         fprintf(stderr, "Usage: Video(path: String)\n");
         return NIL_VAL;
     }
     ObjString* path = AS_STRING(args[0]);
-  
+ 
     // IO Blocking Call
     VideoMeta meta = load_video_metadata(path->chars);
-  
+ 
     if (UNLIKELY(!meta.success)) {
         fprintf(stderr, "Runtime Error: Could not load video metadata from '%s'\n", path->chars);
         return NIL_VAL;
     }
     ObjClip* clip = newClip(vm, path);
-   
+  
     clip->duration = meta.duration;
     clip->width = meta.width;
     clip->height = meta.height;
@@ -43,9 +40,8 @@ Value nativeCreateClip(VM* vm, int argCount, Value* args) {
 #endif
     return OBJ_VAL(clip);
 }
-
 // Project(width, height, fps)
-Value nativeProject(VM* vm, int argCount, Value* args) {
+Value nativeProject(VM* vm, i32 argCount, Value* args) {
     if (argCount != 3) {
         fprintf(stderr, "Usage: Project(width, height, fps)\n");
         return NIL_VAL;
@@ -53,32 +49,30 @@ Value nativeProject(VM* vm, int argCount, Value* args) {
     double w = AS_NUMBER(args[0]);
     double h = AS_NUMBER(args[1]);
     double fps = AS_NUMBER(args[2]);
-  
+ 
     return OBJ_VAL(newTimeline(vm, (u32)w, (u32)h, fps));
 }
-
 // add(timeline, track_id, clip, start_time)
-Value nativeAdd(VM* vm, int argCount, Value* args) {
+Value nativeAdd(VM* vm, i32 argCount, Value* args) {
     if (argCount != 4) return NIL_VAL; // 简化错误处理以聚焦上下文
-   
+  
     if (!IS_TIMELINE(args[0]) || !IS_NUMBER(args[1]) || !IS_CLIP(args[2]) || !IS_NUMBER(args[3])) {
         return NIL_VAL;
     }
     ObjTimeline* tlObj = AS_TIMELINE(args[0]);
-    int trackIdx = (int)AS_NUMBER(args[1]);
+    i32 trackIdx = (i32)AS_NUMBER(args[1]);
     ObjClip* clip = AS_CLIP(args[2]);
     double start = AS_NUMBER(args[3]);
-   
-    while (tlObj->timeline->track_count <= trackIdx) {
+  
+    while (tlObj->timeline->track_count <= (u32)trackIdx) {
         timeline_add_track(vm, tlObj->timeline);
     }
     timeline_add_clip(vm, tlObj->timeline, trackIdx, clip, start);
-  
+ 
     return NIL_VAL;
 }
-
 // preview(timeline)
-Value nativePreview(VM* vm, int argCount, Value* args) {
+Value nativePreview(VM* vm, i32 argCount, Value* args) {
     if (argCount != 1) return NIL_VAL;
     if (IS_TIMELINE(args[0])) {
         vm->active_timeline = AS_TIMELINE(args[0])->timeline;
@@ -86,8 +80,7 @@ Value nativePreview(VM* vm, int argCount, Value* args) {
     }
     return NIL_VAL;
 }
-
-Value nativeTrim(VM* vm, int argCount, Value* args) {
+Value nativeTrim(VM* vm, i32 argCount, Value* args) {
     if (argCount != 3) return NIL_VAL;
     ObjClip* clip = AS_CLIP(args[0]);
     double start = AS_NUMBER(args[1]);
@@ -97,16 +90,14 @@ Value nativeTrim(VM* vm, int argCount, Value* args) {
     clip->duration = duration;
     return NIL_VAL;
 }
-
-Value nativeExport(VM* vm, int argCount, Value* args) {
+Value nativeExport(VM* vm, i32 argCount, Value* args) {
     if (argCount != 2) return NIL_VAL;
     ObjClip* clip = AS_CLIP(args[0]);
     ObjString* filename = AS_STRING(args[1]);
     export_video_clip(vm, clip, filename->chars);
     return NIL_VAL;
 }
-
-Value nativeSetScale(VM* vm, int argCount, Value* args) {
+Value nativeSetScale(VM* vm, i32 argCount, Value* args) {
     if (argCount < 2) return NIL_VAL;
     ObjClip* clip = AS_CLIP(args[0]);
     double sx = AS_NUMBER(args[1]);
@@ -116,16 +107,14 @@ Value nativeSetScale(VM* vm, int argCount, Value* args) {
     clip->default_scale_y = sy;
     return NIL_VAL;
 }
-
-Value nativeSetPos(VM* vm, int argCount, Value* args) {
+Value nativeSetPos(VM* vm, i32 argCount, Value* args) {
     if (argCount != 3) return NIL_VAL;
     ObjClip* clip = AS_CLIP(args[0]);
     clip->default_x = AS_NUMBER(args[1]);
     clip->default_y = AS_NUMBER(args[2]);
     return NIL_VAL;
 }
-
-Value nativeSetOpacity(VM* vm, int argCount, Value* args) {
+Value nativeSetOpacity(VM* vm, i32 argCount, Value* args) {
     if (argCount != 2) return NIL_VAL;
     ObjClip* clip = AS_CLIP(args[0]);
     double val = AS_NUMBER(args[1]);
@@ -134,7 +123,6 @@ Value nativeSetOpacity(VM* vm, int argCount, Value* args) {
     clip->default_opacity = val;
     return NIL_VAL;
 }
-
 // === 注册函数 ===
 void registerVideoBindings(VM* vm) {
     defineNative(vm, "Video", nativeCreateClip);

@@ -10,13 +10,11 @@
 #include "compositor.h"
 #include "video.h" // 假设这里有 VideoMeta 定义
 #include "vm/memory.h"
-#include "vm/vm.h"  // Added for VM struct
-
+#include "vm/vm.h" // Added for VM struct
 // ... (复用 video_export.c 中的 open_encoder 实现) ...
 // 请确保 open_encoder 函数可见，或在此处重新复制一遍
-
-static int open_encoder(VM* vm, AVFormatContext* out_fmt_ctx, AVCodecContext** enc_ctx,
-                        AVStream** out_stream, int width, int height, double fps) {
+static i32 open_encoder(VM* vm, AVFormatContext* out_fmt_ctx, AVCodecContext** enc_ctx,
+                        AVStream** out_stream, i32 width, i32 height, double fps) {
     const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
     if (!codec) return -1;
     *out_stream = avformat_new_stream(out_fmt_ctx, NULL);
@@ -28,7 +26,7 @@ static int open_encoder(VM* vm, AVFormatContext* out_fmt_ctx, AVCodecContext** e
     (*enc_ctx)->time_base = av_inv_q(fps_rat);
     (*enc_ctx)->framerate = fps_rat;
     (*enc_ctx)->pix_fmt = AV_PIX_FMT_YUV420P; // H.264 标准输入
-    (*enc_ctx)->gop_size = (int)(fps);
+    (*enc_ctx)->gop_size = (i32)(fps);
     if (out_fmt_ctx->oformat->flags & AVFMT_GLOBALHEADER)
         (*enc_ctx)->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     av_opt_set((*enc_ctx)->priv_data, "preset", "fast", 0);
@@ -37,15 +35,13 @@ static int open_encoder(VM* vm, AVFormatContext* out_fmt_ctx, AVCodecContext** e
     avcodec_parameters_from_context((*out_stream)->codecpar, *enc_ctx);
     return 0;
 }
-
 void export_timeline(VM* vm, Timeline* tl, const char* output_filename) {
     if (!tl) return;
     printf("[Export] GL Rendering to '%s'...\n", output_filename);
-
     // 1. 创建 Compositor (注意：当前线程必须有 GL Context)
     // 在 main.c 的调用链中，主线程已经有 Context 了。
     Compositor* comp = compositor_create(vm, tl);
-    
+   
     // 2. FFmpeg Encoder Setup
     AVFormatContext* out_fmt_ctx = NULL;
     AVCodecContext* enc_ctx = NULL;
@@ -58,10 +54,9 @@ void export_timeline(VM* vm, Timeline* tl, const char* output_filename) {
     if (!(out_fmt_ctx->oformat->flags & AVFMT_NOFILE)) {
         if (avio_open(&out_fmt_ctx->pb, output_filename, AVIO_FLAG_WRITE) < 0) goto cleanup;
     }
-    (void)avformat_write_header(out_fmt_ctx, NULL);  // Ignore return value with cast to void
-
+    (void)avformat_write_header(out_fmt_ctx, NULL); // Ignore return value with cast to void
     // 3. SWS Context (RGBA -> YUV420P)
-    struct SwsContext* sws_ctx = NULL;  // Initialize to NULL to fix uninitialized warning
+    struct SwsContext* sws_ctx = NULL; // Initialize to NULL to fix uninitialized warning
     sws_ctx = sws_getContext(
         tl->width, tl->height, AV_PIX_FMT_RGBA,
         tl->width, tl->height, AV_PIX_FMT_YUV420P,
@@ -74,30 +69,29 @@ void export_timeline(VM* vm, Timeline* tl, const char* output_filename) {
     yuv_frame->width = enc_ctx->width;
     yuv_frame->height = enc_ctx->height;
     av_frame_get_buffer(yuv_frame, 32);
-
     // 4. Render Loop
     AVPacket* pkt = av_packet_alloc();
     vm->bytesAllocated += sizeof(AVPacket);
-    int total_frames = (int)(tl->duration * tl->fps);
+    i32 total_frames = (i32)(tl->duration * tl->fps);
     double step = 1.0 / tl->fps;
-    
-    for (int i = 0; i < total_frames; i++) {
+   
+    for (i32 i = 0; i < total_frames; i++) {
         double t = i * step;
-        
+       
         // A. GPU Render
         compositor_render(comp, t);
-        
+       
         // B. Readback (RGBA)
-        uint8_t* pixels = compositor_get_cpu_buffer(comp);
-        
+        u8* pixels = compositor_get_cpu_buffer(comp);
+       
         // C. Convert to YUV
-        const uint8_t* src_slice[] = { pixels };
-        int src_stride[] = { tl->width * 4 };
-        
+        const u8* src_slice[] = { pixels };
+        i32 src_stride[] = { tl->width * 4 };
+       
         av_frame_make_writable(yuv_frame);
         sws_scale(sws_ctx, src_slice, src_stride, 0, tl->height,
                   yuv_frame->data, yuv_frame->linesize);
-                  
+                 
         // D. Encode
         yuv_frame->pts = i;
         avcodec_send_frame(enc_ctx, yuv_frame);
@@ -107,10 +101,10 @@ void export_timeline(VM* vm, Timeline* tl, const char* output_filename) {
             av_interleaved_write_frame(out_fmt_ctx, pkt);
             av_packet_unref(pkt);
         }
-        
+       
         if (i % 10 == 0) printf("\r[Export] %d / %d", i, total_frames);
     }
-    
+   
     // Flush
     avcodec_send_frame(enc_ctx, NULL);
     while (avcodec_receive_packet(enc_ctx, pkt) >= 0) {
@@ -121,7 +115,6 @@ void export_timeline(VM* vm, Timeline* tl, const char* output_filename) {
     }
     av_write_trailer(out_fmt_ctx);
     printf("\n[Export] Done.\n");
-
 cleanup:
     if (comp) compositor_free(vm, comp); // Release GL resources
     if (sws_ctx) {

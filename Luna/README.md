@@ -117,7 +117,7 @@ main.c
 #### 1. 预览时间范围选择 (Loop Range)
 **描述**: 允许脚本设置循环播放区间，方便调试特定片段。
 *   **脚本 API**: `setPreviewRange(start, end)`
-*   **🛠️ 涉及文件**:
+*   **🛠️ 涉及文件** :
     1.  `src/engine/timeline.h`: `Timeline` 结构体增加 `double loop_start, loop_end;`。
     2.  `src/binding/bind_video.c`: 实现 `nativeSetPreviewRange` 绑定。
     3.  `src/main.c`: **主循环逻辑**。在 `current_time` 累加后，增加边界检查：`if (time > loop_end) time = loop_start;`。

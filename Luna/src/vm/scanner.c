@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <string.h>
 #include "scanner.h"
-
 // --- Character Attribute Table (Lookup Table) ---
 static const u8 charAttrs[256] = {
     ['\t'] = 4, ['\r'] = 4, [' '] = 4,
@@ -12,12 +11,10 @@ static const u8 charAttrs[256] = {
     ['_'] = 1,
     ['0' ... '9'] = 2
 };
-
 #define IS_ALPHA(c) (charAttrs[(u8)(c)] & 1)
 #define IS_DIGIT(c) (charAttrs[(u8)(c)] & 2)
 #define IS_SPACE(c) (charAttrs[(u8)(c)] & 4)
 #define IS_ALPHANUM(c) (charAttrs[(u8)(c)] & 3)
-
 // --- Memory Helpers ---
 static inline u16 load16(const char* p) {
     u16 result;
@@ -29,7 +26,6 @@ static inline u32 load32(const char* p) {
     memcpy(&result, p, sizeof(u32));
     return result;
 }
-
 // --- Token Constructors ---
 static inline Token makeToken(TokenType type, const char* start, const char* current, u32 line) {
     return (Token){
@@ -40,7 +36,6 @@ static inline Token makeToken(TokenType type, const char* start, const char* cur
         .padding = 0
     };
 }
-
 static inline Token errorToken(const char* message, u32 line) {
     return (Token){
         .start = message,
@@ -50,7 +45,6 @@ static inline Token errorToken(const char* message, u32 line) {
         .padding = 0
     };
 }
-
 // --- Keyword Check ---
 static inline TokenType checkKeyword(const char* start, i32 length, const char* rest, i32 restLen, TokenType type) {
     if (length != restLen) return TOKEN_IDENTIFIER;
@@ -77,7 +71,6 @@ static inline TokenType checkKeyword(const char* start, i32 length, const char* 
     if (memcmp(start, rest, restLen) == 0) return type;
     return TOKEN_IDENTIFIER;
 }
-
 static TokenType identifierType(const char* start, i32 length) {
     switch (start[0]) {
         case 'a': return checkKeyword(start + 1, length - 1, "nd", 2, TOKEN_AND);
@@ -111,13 +104,12 @@ static TokenType identifierType(const char* start, i32 length) {
     }
     return TOKEN_IDENTIFIER;
 }
-
 // --- Init ---
 void initScanner(Scanner* scanner, const char* source) {
     scanner->start = source;
     scanner->current = source;
     scanner->line = 1;
-    
+   
     // 初始化缩进状态
     scanner->indentStack[0] = 0;
     scanner->indentTop = 0;
@@ -125,7 +117,6 @@ void initScanner(Scanner* scanner, const char* source) {
     scanner->isAtStartOfLine = true;
     scanner->parenDepth = 0;
 }
-
 // --- Main Scanner Loop ---
 Token scanToken(Scanner* scanner) {
     // 1. 处理挂起的 DEDENT (当缩进减少多层时)
@@ -133,12 +124,10 @@ Token scanToken(Scanner* scanner) {
         scanner->pendingDedents--;
         return makeToken(TOKEN_DEDENT, scanner->current, scanner->current, scanner->line);
     }
-
     // 2. 状态循环 (跳过空格、注释，处理行首)
     const char* start;
     const char* current = scanner->current;
     u32 line = scanner->line;
-
     for (;;) {
         // 如果在行首，计算缩进
         if (scanner->isAtStartOfLine) {
@@ -149,22 +138,21 @@ Token scanToken(Scanner* scanner) {
                 else indent += 1;
                 current++;
             }
-
             // 如果遇到空行或注释行，忽略该行，重置行首状态
             if (*current == '\n' || *current == '#' || *current == '\r') {
                 // 不做任何操作，让后面的逻辑去处理换行符，或者直接跳过
             } else if (*current != '\0') {
                 // 有效代码行开始，检查缩进
                 scanner->isAtStartOfLine = false;
-                
+               
                 int currentIndent = scanner->indentStack[scanner->indentTop];
                 if (indent > currentIndent) {
-                    if (scanner->indentTop >= MAX_INDENT_STACK - 1) 
+                    if (scanner->indentTop >= MAX_INDENT_STACK - 1)
                         return errorToken("Too much indentation.", line);
                     scanner->indentStack[++scanner->indentTop] = indent;
                     scanner->current = current; // 更新指针，因为消耗了空格
                     return makeToken(TOKEN_INDENT, current, current, line);
-                } 
+                }
                 else if (indent < currentIndent) {
                     // 计算需要退几层
                     while (scanner->indentTop > 0 && scanner->indentStack[scanner->indentTop] > indent) {
@@ -182,14 +170,12 @@ Token scanToken(Scanner* scanner) {
                 // indent == currentIndent: 正常同级代码，什么都不做
             }
         }
-
         // 正常的跳过空格 (非行首)
         char c = *current;
         if (c == ' ' || c == '\t' || c == '\r') {
             current++;
             continue;
         }
-
         // 处理注释
         if (c == '#') {
             while (*current != '\n' && *current != '\0') {
@@ -197,29 +183,25 @@ Token scanToken(Scanner* scanner) {
             }
             continue;
         }
-
         // 处理换行
         if (c == '\n') {
             line++;
             current++;
-            
+           
             // 如果在括号内，或者这行本身就是空的（isAtStartOfLine仍为true说明没遇到代码），则忽略换行
             if (scanner->parenDepth > 0) {
                 // 括号内换行等同于空格
-                continue; 
+                continue;
             }
-            
+           
             // 预读：如果下一行也是空行或注释，我们这里可以继续循环，不发出 NEWLINE
             // 但为了简单，我们总是进入下一轮循环，让 isAtStartOfLine 逻辑决定
             scanner->isAtStartOfLine = true;
-            
+           
             // 只有当上一行也是代码时（非连续换行），才发出 NEWLINE
             // 这里简化策略：每次换行都重置为行首，下一轮循环如果遇到代码则发出 indent check
             // 我们需要发出 TOKEN_NEWLINE 给 parser 来结束语句
-            
-            // 检查这一行是否是"真正的"空行（只有换行符），如果是，不要发出重复的 NEWLINE
-            // 简单的做法：总是发出 NEWLINE，Parser 那边允许连续的 NEWLINE
-            
+           
             // 优化：只有当该行包含非空内容后遇到的换行才算有效，
             // 但因为我们已经在循环里跳过了前面的空行，所以这里遇到的 '\n' 通常是语句结束。
             // 除非... 它是文件的第一个字符
@@ -227,20 +209,16 @@ Token scanToken(Scanner* scanner) {
                 // 文件开头的换行，忽略
                 continue;
             }
-
             scanner->current = current;
             scanner->line = line;
             return makeToken(TOKEN_NEWLINE, current - 1, current, line - 1);
         }
-
         break; // 遇到有效字符
     }
-
     // 更新 scanner 状态
     scanner->current = current;
     scanner->line = line;
     start = current;
-
     if (*current == '\0') {
         // EOF 处理：如果还有缩进，自动补全 DEDENT
         if (scanner->indentTop > 0) {
@@ -251,10 +229,8 @@ Token scanToken(Scanner* scanner) {
         }
         return makeToken(TOKEN_EOF, start, current, line);
     }
-
     char c = *current++;
     scanner->current = current; // 消耗字符
-
     // 3. 标识符 & 关键字
     if (IS_ALPHA(c)) {
         while (IS_ALPHANUM(*scanner->current)) {
@@ -263,7 +239,6 @@ Token scanToken(Scanner* scanner) {
         TokenType type = identifierType(start, (i32)(scanner->current - start));
         return makeToken(type, start, scanner->current, line);
     }
-
     // 4. 数字
     if (IS_DIGIT(c)) {
         while (IS_DIGIT(*scanner->current)) {
@@ -277,10 +252,9 @@ Token scanToken(Scanner* scanner) {
         }
         return makeToken(TOKEN_NUMBER, start, scanner->current, line);
     }
-
     // 5. 符号
     char next = *scanner->current;
-    
+   
     // 宏定义简化
     #define MAKE_TOKEN(type) \
         do { return makeToken(type, start, scanner->current, line); } while(0)
@@ -288,7 +262,6 @@ Token scanToken(Scanner* scanner) {
         do { if (next == expected) scanner->current++; \
              return makeToken(next == expected ? type_if : type_else, \
                               start, scanner->current, line); } while(0)
-
     switch (c) {
         case '(': scanner->parenDepth++; MAKE_TOKEN(TOKEN_LEFT_PAREN);
         case ')': if (scanner->parenDepth > 0) scanner->parenDepth--; MAKE_TOKEN(TOKEN_RIGHT_PAREN);
@@ -322,6 +295,5 @@ Token scanToken(Scanner* scanner) {
             }
         }
     }
-
     return errorToken("Unexpected character.", line);
 }

@@ -2,15 +2,13 @@
 
 #ifndef LUNA_ENGINE_VIDEO_H
 #define LUNA_ENGINE_VIDEO_H
+
 #include "vm/object.h"
 
 // Forward declare VM
 typedef struct VM VM;
 
 // --- Video Metadata ---
-// Layout optimized for alignment:
-// [Duration(8)] [FPS(8)] [W(4)|H(4)] [Success(1)|Pad(7)]
-// Total size: 32 bytes
 typedef struct {
     double duration;
     double fps;
@@ -20,12 +18,14 @@ typedef struct {
 } VideoMeta;
 
 // --- Engine Interface ---
-// Synchronously probes video file headers.
 VideoMeta load_video_metadata(const char* filepath);
-// Previews the clip in a window (Blocking/UI thread).
+
+// Previews the clip in a separate window (Blocking).
 void play_video_clip(VM* vm, ObjClip* clip);
-void play_timeline(VM* vm, struct Timeline* tl);
-// Renders the clip to a file (Blocking/Worker thread).
+
+// [已删除] play_timeline: Timeline preview is now handled by the host (main.c)
+
+// Renders the clip to a file.
 void export_video_clip(VM* vm, ObjClip* clip, const char* output_filename);
 
 #endif
