@@ -35,6 +35,7 @@ typedef enum {
     OP_JUMP_IF_FALSE,
     OP_LOOP,
     OP_CALL,
+    OP_BUILD_LIST,
     OP_CLOSURE,       // [新增]
     OP_CLOSE_UPVALUE, // [新增]
     OP_RETURN,

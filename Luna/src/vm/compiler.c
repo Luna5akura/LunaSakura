@@ -209,7 +209,7 @@ static ObjFunction* endCompiler() {
     emitReturn();
     ObjFunction* function = current->function;
 #ifdef DEBUG_PRINT_CODE
-    if (!parser.hadError) disassembleChunk(currentChunk(), function->name ? function->name->chars : "<script>");
+    disassembleChunk(currentChunk(), function->name ? function->name->chars : "<script>");
 #endif
     current = current->enclosing;
     return function;
@@ -428,6 +428,21 @@ static void this_(bool canAssign) {
     variable(false);
 }
 
+
+static void listLiteral(bool canAssign) {
+    u8 itemCount = 0;
+    if (!check(TOKEN_RIGHT_BRACKET)) {
+        do {
+            if (check(TOKEN_RIGHT_BRACKET)) break; // 允许尾随逗号
+            expression();
+            if (itemCount == 255) error("Can't have more than 255 items in list.");
+            itemCount++;
+        } while (match(TOKEN_COMMA));
+    }
+    consume(TOKEN_RIGHT_BRACKET, "Expect ']' after list.");
+    emitBytes(OP_BUILD_LIST, itemCount);
+}
+
 static void super_(bool canAssign) {
     if (currentClass == NULL) error("Can't use 'super' outside of a class.");
     else if (!currentClass->hasSuperclass) error("Can't use 'super' in a class with no superclass.");
@@ -452,6 +467,8 @@ static void super_(bool canAssign) {
 ParseRule rules[] = {
     [TOKEN_LEFT_PAREN] = {grouping, call, PREC_CALL},
     [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
+    [TOKEN_LEFT_BRACKET] = {listLiteral, NULL, PREC_NONE},
+    [TOKEN_RIGHT_BRACKET] = {NULL, NULL, PREC_NONE},
     [TOKEN_COMMA] = {NULL, NULL, PREC_NONE},
     [TOKEN_DOT] = {NULL, dot, PREC_CALL},
     [TOKEN_MINUS] = {unary, binary, PREC_TERM},

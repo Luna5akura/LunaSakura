@@ -280,6 +280,8 @@ Token scanToken(Scanner* scanner) {
     switch (c) {
         case '(': scanner->parenDepth++; MAKE_TOKEN(TOKEN_LEFT_PAREN);
         case ')': if (scanner->parenDepth > 0) scanner->parenDepth--; MAKE_TOKEN(TOKEN_RIGHT_PAREN);
+        case '[': MAKE_TOKEN(TOKEN_LEFT_BRACKET);
+        case ']': MAKE_TOKEN(TOKEN_RIGHT_BRACKET);
         case ':': MAKE_TOKEN(TOKEN_COLON); // Python 关键符号
         case ',': MAKE_TOKEN(TOKEN_COMMA);
         case '.': MAKE_TOKEN(TOKEN_DOT);

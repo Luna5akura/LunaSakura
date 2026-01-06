@@ -361,6 +361,20 @@ static InterpretResult run(VM* vm) {
                 ip = frame->ip;
                 break;
             }
+            case OP_BUILD_LIST: {
+                u8 itemCount = READ_BYTE();
+                ObjList* list = newList(vm);
+                if (itemCount > 0) {
+                    list->capacity = itemCount;
+                    list->count = itemCount;
+                    list->items = ALLOCATE(vm, Value, itemCount);
+                    for (int i = itemCount - 1; i >= 0; i--) {
+                        list->items[i] = pop(vm);
+                    }
+                }
+                push(vm, OBJ_VAL(list));
+                break;
+            }
             // [新增] 闭包指令
             case OP_CLOSURE: {
                 ObjFunction* function = AS_FUNCTION(READ_CONSTANT());
