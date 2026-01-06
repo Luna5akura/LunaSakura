@@ -82,6 +82,13 @@ ObjList* newList(VM* vm) {
     list->capacity = 0;
     return list;
 }
+ObjFunction* newFunction(VM* vm) {
+    ObjFunction* function = (ObjFunction*)allocateObject(vm, sizeof(ObjFunction), OBJ_FUNCTION);
+    function->arity = 0;
+    function->name = NULL;
+    initChunk(&function->chunk);
+    return function;
+}
 // === 其他对象创建 ===
 ObjNative* newNative(VM* vm, NativeFn function) {
     ObjNative* native = (ObjNative*)allocateObject(vm, sizeof(ObjNative), OBJ_NATIVE);
@@ -130,9 +137,20 @@ void printObject(Value value) {
             printf("]");
             break;
         }
+
         case OBJ_STRING:
             printf("%s", AS_CSTRING(value));
             break;
+
+        case OBJ_FUNCTION: {
+            ObjFunction* function = AS_FUNCTION(value);
+            if (function->name == NULL) {
+                printf("<script>");
+            } else {
+                printf("<fn %s>", function->name->chars);
+            }
+            break;
+        }
           
         case OBJ_NATIVE:
             printf("<native fn>");

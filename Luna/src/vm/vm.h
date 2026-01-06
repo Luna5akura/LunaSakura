@@ -9,10 +9,13 @@
 #define STACK_MAX 1024
 #define FRAMES_MAX 64
 // --- Call Frame ---
+
+void runtimeError(VM* vm, const char* format, ...);
+
 typedef struct {
-    ObjClip* clip;
-    u8* ip;
-    Value* slots;
+    ObjFunction* function; // 当前执行的函数
+    u8* ip;                // 指令指针
+    Value* slots;          // 局部变量在 VM 栈上的起始位置
 } CallFrame;
 // --- Result Code ---
 typedef enum {
@@ -27,8 +30,8 @@ struct VM {
  
     i32 frameCount;
     CallFrame frames[FRAMES_MAX];
-    Chunk* chunk;
-    u8* ip;
+    // Chunk* chunk;
+    // u8* ip;
     // --- Global State ---
     Table globals;
     Table strings;
@@ -55,12 +58,10 @@ static INLINE void resetStack(VM* vm) {
     vm->frameCount = 0;
 }
 static INLINE void push(VM* vm, Value value) {
-#ifdef DEBUG_TRACE_EXECUTION
     if (vm->stackTop >= vm->stack + STACK_MAX) {
-        // Handle overflow
-        return;
+        runtimeError(vm, "Stack overflow.");
+        // exit(1);  // 或其他处理
     }
-#endif
     *vm->stackTop = value;
     vm->stackTop++;
 }
@@ -71,4 +72,3 @@ static INLINE Value pop(VM* vm) {
 static INLINE Value peek(VM* vm, i32 distance) {
     return vm->stackTop[-1 - distance];
 }
-void runtimeError(VM* vm, const char* format, ...);

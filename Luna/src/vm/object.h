@@ -1,7 +1,7 @@
 // src/vm/object.h
 
 #pragma once
-#include "value.h"
+#include "chunk.h"
 // --- Forward Declarations ---
 // 前置声明 VM 结构体，解决 vm.h 和 object.h 之间的循环依赖
 typedef struct VM VM;
@@ -9,6 +9,7 @@ typedef struct VM VM;
 typedef enum {
     OBJ_STRING,
     OBJ_LIST, // [新增] 列表类型
+    OBJ_FUNCTION, // [新增]
     OBJ_NATIVE,
     OBJ_CLIP,
     OBJ_TIMELINE,
@@ -40,6 +41,13 @@ typedef struct {
     u32 capacity;
     Value* items; // 动态数组
 } ObjList;
+// [新增] 函数对象
+typedef struct {
+    Obj obj;
+    i32 arity;        // 参数数量
+    Chunk chunk;      // 函数体字节码
+    ObjString* name;  // 函数名 (顶层脚本为 NULL)
+} ObjFunction;
 // --- Clip Object ---
 // Optimized Layout: Sorted by size to remove all internal padding.
 struct sObjClip {
@@ -75,6 +83,7 @@ typedef struct sObjTimeline {
 #define OBJ_TYPE(value) (AS_OBJ(value)->type)
 #define IS_STRING(value) isObjType(value, OBJ_STRING)
 #define IS_LIST(value) isObjType(value, OBJ_LIST)
+#define IS_FUNCTION(value) isObjType(value, OBJ_FUNCTION)
 #define IS_NATIVE(value) isObjType(value, OBJ_NATIVE)
 #define IS_CLIP(value) isObjType(value, OBJ_CLIP)
 #define IS_TIMELINE(value) isObjType(value, OBJ_TIMELINE)
@@ -82,6 +91,7 @@ typedef struct sObjTimeline {
 #define AS_LIST(value) ((ObjList*)AS_OBJ(value))
 #define AS_CSTRING(value) (((ObjString*)AS_OBJ(value))->chars)
 #define AS_NATIVE(value) (((ObjNative*)AS_OBJ(value))->function)
+#define AS_FUNCTION(value) ((ObjFunction*)AS_OBJ(value))
 #define AS_CLIP(value) ((ObjClip*)AS_OBJ(value))
 #define AS_TIMELINE(value) ((ObjTimeline*)AS_OBJ(value))
 // --- Inline Helpers ---
@@ -93,6 +103,7 @@ static INLINE bool isObjType(Value value, ObjType type) {
 ObjString* copyString(VM* vm, const char* chars, i32 length);
 ObjString* takeString(VM* vm, char* chars, i32 length);
 ObjList* newList(VM* vm);
+ObjFunction* newFunction(VM* vm);
 ObjNative* newNative(VM* vm, NativeFn function);
 ObjClip* newClip(VM* vm, ObjString* path);
 ObjTimeline* newTimeline(VM* vm, u32 width, u32 height, double fps);
