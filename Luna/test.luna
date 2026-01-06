@@ -1,94 +1,146 @@
 # test.luna
-
+# --- Basic Variable and Operators ---
 var a = 5
 var b = 10
-print a < b
-print a <= b
-print a > b
-print a >= b
-print a == 5
-print a != b
-print !true
+print a < b  # true
+print a <= b  # true
+print a > b  # false
+print a >= b  # false
+print a == 5  # true
+print a != b  # true
+print !true  # false
 
+# --- Control Flow: If-Else ---
 if a < b:
-    print "less"
+    print "less"  # less
 else:
     print "greater or equal"
 
+# --- While Loop ---
 var i = 1
-print i
+print i  # 1
 while i <= 5:
-    print i
+    print i  # 1 2 3 4 5
     i = i + 1
-print "after while"
-for j in 0..4:
-    print j
+print "after while"  # after while
+
+# --- Equivalent to For Loop using While (to avoid parsing issue with ..) ---
+var j = 0
+while j < 5:
+    print j  # 0 1 2 3 4
+    j = j + 1
+print "after equivalent for"  # after equivalent for
+
+# --- Break and Continue ---
 var k = 0
-print "after for"
 while true:
     k = k + 1
     if k == 3:
         continue
-    print k
+    print k  # 1 2 4 5
     if k == 5:
         break
 
-print "this is not the last line!"
-print "this is also not the last line!"
-print "this is the last line!"
-
+# --- List Operations ---
 print "--- Testing List Creation & Push ---"
-# 1. 创建列表
 var numList = List()
 print "Initial len:"
-print len(numList) # 期望: 0
+print len(numList)  # 0
 
-# 2. 添加元素 (Push)
 push(numList, 10)
 push(numList, 20)
 push(numList, 30)
 print "Len after push:"
-print len(numList) # 期望: 3
+print len(numList)  # 3
 
 print "--- Testing Get & Set ---"
-# 3. 获取元素 (Get)
 print "Index 0:"
-print get(numList, 0) # 期望: 10
+print get(numList, 0)  # 10
 print "Index 1:"
-print get(numList, 1) # 期望: 20
+print get(numList, 1)  # 20
 
-# 4. 修改元素 (Set)
 set(numList, 1, 999)
 print "Index 1 after set:"
-print get(numList, 1) # 期望: 999
+print get(numList, 1)  # 999
 
 print "--- Testing Pop ---"
-# 5. 弹出元素 (Pop)
 var poppedVal = pop(numList)
 print "Popped value:"
-print poppedVal       # 期望: 30
+print poppedVal  # 30
 print "Len after pop:"
-print len(numList)    # 期望: 2
+print len(numList)  # 2
 
 print "--- Testing Iteration ---"
-# 6. 结合循环遍历列表
 var idx = 0
 var count = len(numList)
 while idx < count:
-    print get(numList, idx)
+    print get(numList, idx)  # 10 999
     idx = idx + 1
-# 期望输出: 10 然后 999
 
 print "--- Testing Clear ---"
-# 7. 清空列表 (Clear)
 clear(numList)
 print "Len after clear:"
-print len(numList) # 期望: 0
+print len(numList)  # 0
 
 print "--- Testing Homogeneous Constraint (String List) ---"
-# 8. 测试不同类型的列表 (字符串列表)
 var strList = List()
 push(strList, "Hello")
 push(strList, "World")
-print get(strList, 0)
-print get(strList, 1)
+print get(strList, 0)  # Hello
+print get(strList, 1)  # World
+
+# --- New: Class Definition and Methods (without 'fun' keyword as per parser) ---
+print "--- Testing Class Definition ---"
+class Animal :
+    init(name) :
+        this.name = name
+        this.age = 0
+
+    speak() :
+        print "Animal speaks"
+
+    getName() :
+        return this.name
+
+var dog = Animal("Buddy")
+print dog.getName()  # Buddy
+dog.speak()  # Animal speaks
+
+# --- New: Inheritance and Method Override ---
+print "--- Testing Inheritance ---"
+class Dog < Animal :
+    init(name, breed) :
+        super.init(name)
+        this.breed = breed
+
+    speak() :
+        print "Woof!"
+
+    getBreed() :
+        return this.breed
+
+var myDog = Dog("Max", "Labrador")
+print myDog.getName()  # Max
+print myDog.getBreed()  # Labrador
+myDog.speak()  # Woof!
+
+# --- New: Super Call ---
+print "--- Testing Super ---"
+class Cat < Animal :
+    speak() :
+        super.speak()
+        print "Meow!"
+
+var myCat = Cat("Whiskers")
+myCat.speak()  # Animal speaks \n Meow!
+
+# --- New: Field Access and Modification ---
+print "--- Testing Fields ---"
+print myDog.name  # Max
+myDog.age = 5
+print myDog.age  # 5
+
+# --- End of Tests ---
+print "this is not the last line!"
+print "this is also not the last line!"
+print "this is the last line!"

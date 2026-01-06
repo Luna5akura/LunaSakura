@@ -2,20 +2,19 @@
 
 #pragma once
 #include "common.h"
-
 // [新增] 前置声明 VM，解决 vm.h 包含此文件时 VM 尚未定义的问题
 typedef struct VM VM;
-
 // --- Forward Declarations ---
 typedef struct sObj Obj;
 typedef struct sObjString ObjString;
 typedef struct sObjClip ObjClip;
 typedef struct sObjNative ObjNative;
 typedef struct sObjTimeline ObjTimeline;
-
+typedef struct sObjClass ObjClass; // [新增]
+typedef struct sObjInstance ObjInstance; // [新增]
+typedef struct sObjBoundMethod ObjBoundMethod; // [新增]
 // --- NaN Boxing Configuration ---
 #define NAN_BOXING
-
 #ifdef NAN_BOXING
 typedef u64 Value;
 // ... (保留原有的宏定义 QNAN, SIGN_BIT, TAG_..., IS_...) ...
@@ -24,23 +23,19 @@ typedef u64 Value;
 #define TAG_NIL 1
 #define TAG_FALSE 2
 #define TAG_TRUE 3
-
 #define IS_NUMBER(v) (((v) & QNAN) != QNAN)
 #define IS_NIL(v) ((v) == NIL_VAL)
 #define IS_BOOL(v) (((v) | 1) == TRUE_VAL)
 #define IS_OBJ(v) (((v) & (QNAN | SIGN_BIT)) == (QNAN | SIGN_BIT))
-
 #define AS_NUMBER(v) valueToNum(v)
 #define AS_BOOL(v) ((v) == TRUE_VAL)
 #define AS_OBJ(v) ((Obj*)(uintptr_t)((v) & ~(SIGN_BIT | QNAN)))
-
 #define NUMBER_VAL(num) numToValue(num)
 #define NIL_VAL ((Value)(u64)(QNAN | TAG_NIL))
 #define TRUE_VAL ((Value)(u64)(QNAN | TAG_TRUE))
 #define FALSE_VAL ((Value)(u64)(QNAN | TAG_FALSE))
 #define BOOL_VAL(b) ((Value)(FALSE_VAL | (!!(b))))
 #define OBJ_VAL(obj) ((Value)(SIGN_BIT | QNAN | (u64)(uintptr_t)(obj)))
-
 typedef union {
     double num;
     u64 bits;
@@ -61,23 +56,19 @@ static INLINE bool valuesEqual(Value a, Value b) {
 #else
 // Fallback ...
 #endif
-
 // --- ValueArray ---
 typedef struct {
     u32 capacity;
     u32 count;
     Value* values;
 } ValueArray;
-
 static INLINE void initValueArray(ValueArray* array) {
     array->values = NULL;
     array->capacity = 0;
     array->count = 0;
 }
-
 // [修改] 声明增加 VM* vm
 void growValueArray(VM* vm, ValueArray* array);
-
 // [修改] 声明增加 VM* vm
 static INLINE void writeValueArray(VM* vm, ValueArray* array, Value value) {
     if (UNLIKELY(array->count == array->capacity)) {
@@ -85,7 +76,6 @@ static INLINE void writeValueArray(VM* vm, ValueArray* array, Value value) {
     }
     array->values[array->count++] = value;
 }
-
 // [修改] 声明增加 VM* vm
 void freeValueArray(VM* vm, ValueArray* array);
 void printValue(Value value);

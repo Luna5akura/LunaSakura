@@ -4,16 +4,14 @@
 #include <stdio.h>
 #include "memory.h"
 #include "vm.h"
+#include "compiler.h"
 #include "engine/timeline.h"
-#include "object.h" // 必须包含，用于访问 ObjFunction 等具体结构
 
 void* reallocate(VM* vm, void* pointer, size_t oldSize, size_t newSize) {
     if (vm != NULL) {
-        if (newSize > oldSize) {
-            vm->bytesAllocated += (newSize - oldSize);
-        } else {
-            vm->bytesAllocated -= (oldSize - newSize);
-        }
+        if (newSize > oldSize) vm->bytesAllocated += (newSize - oldSize);
+        else vm->bytesAllocated -= (oldSize - newSize);
+
         if (newSize > oldSize) {
 #ifdef DEBUG_STRESS_GC
             collectGarbage(vm);
@@ -29,19 +27,22 @@ void* reallocate(VM* vm, void* pointer, size_t oldSize, size_t newSize) {
         return NULL;
     }
     void* result = realloc(pointer, newSize);
-   
-    if (UNLIKELY(result == NULL)) {
-        fprintf(stderr, "Fatal Error: Out of memory.\n");
-        exit(1);
-    }
+    if (result == NULL) exit(1);
     return result;
 }
 
 void freeObject(VM* vm, Obj* object) {
-#ifdef DEBUG_LOG_GC
-    printf("%p free type %d\n", (void*)object, object->type);
-#endif
     switch (object->type) {
+        case OBJ_CLOSURE: { // [新增]
+            ObjClosure* closure = (ObjClosure*)object;
+            FREE_ARRAY(vm, ObjUpvalue*, closure->upvalues, closure->upvalueCount);
+            (void)reallocate(vm, object, sizeof(ObjClosure), 0);
+            break;
+        }
+        case OBJ_UPVALUE: { // [新增]
+            (void)reallocate(vm, object, sizeof(ObjUpvalue), 0);
+            break;
+        }
         case OBJ_STRING: {
             ObjString* string = (ObjString*)object;
             (void)reallocate(vm, object, sizeof(ObjString) + string->length + 1, 0);
@@ -49,7 +50,6 @@ void freeObject(VM* vm, Obj* object) {
         }
         case OBJ_FUNCTION: {
             ObjFunction* function = (ObjFunction*)object;
-            // 释放函数体内的字节码块
             freeChunk(vm, &function->chunk);
             (void)reallocate(vm, object, sizeof(ObjFunction), 0);
             break;
@@ -59,7 +59,6 @@ void freeObject(VM* vm, Obj* object) {
             break;
         }
         case OBJ_CLIP: {
-            // ObjClip 内部的 path 是 ObjString，由 GC 统一管理，不需要手动释放
             (void)reallocate(vm, object, sizeof(ObjClip), 0);
             break;
         }
@@ -78,9 +77,22 @@ void freeObject(VM* vm, Obj* object) {
             (void)reallocate(vm, object, sizeof(ObjList), 0);
             break;
         }
-        default:
-            fprintf(stderr, "Unknown object type %d in freeObject.\n", object->type);
+        case OBJ_CLASS: {
+            ObjClass* klass = (ObjClass*)object;
+            freeTable(vm, &klass->methods);
+            (void)reallocate(vm, object, sizeof(ObjClass), 0);
             break;
+        }
+        case OBJ_INSTANCE: {
+            ObjInstance* instance = (ObjInstance*)object;
+            freeTable(vm, &instance->fields);
+            (void)reallocate(vm, object, sizeof(ObjInstance), 0);
+            break;
+        }
+        case OBJ_BOUND_METHOD: {
+            (void)reallocate(vm, object, sizeof(ObjBoundMethod), 0);
+            break;
+        }
     }
 }
 
@@ -101,7 +113,6 @@ void freeObjects(VM* vm) {
 void markObject(VM* vm, Obj* object) {
     if (object == NULL) return;
     if (object->isMarked) return;
-   
     object->isMarked = true;
     if (vm->grayCapacity < vm->grayCount + 1) {
         vm->grayCapacity = GROW_CAPACITY(vm->grayCapacity);
@@ -112,9 +123,7 @@ void markObject(VM* vm, Obj* object) {
 }
 
 void markValue(VM* vm, Value value) {
-    if (IS_OBJ(value)) {
-        markObject(vm, AS_OBJ(value));
-    }
+    if (IS_OBJ(value)) markObject(vm, AS_OBJ(value));
 }
 
 static void markArray(VM* vm, ValueArray* array) {
@@ -124,16 +133,41 @@ static void markArray(VM* vm, ValueArray* array) {
 }
 
 static void blackenObject(VM* vm, Obj* object) {
-#ifdef DEBUG_LOG_GC
-    printf("%p blacken ", (void*)object);
-    printValue(OBJ_VAL(object));
-    printf("\n");
-#endif
     switch (object->type) {
+        case OBJ_CLOSURE: { // [新增]
+            ObjClosure* closure = (ObjClosure*)object;
+            markObject(vm, (Obj*)closure->function);
+            for (int i = 0; i < closure->upvalueCount; i++) {
+                markObject(vm, (Obj*)closure->upvalues[i]);
+            }
+            break;
+        }
+        case OBJ_UPVALUE: { // [新增]
+            markValue(vm, ((ObjUpvalue*)object)->closed);
+            break;
+        }
+        case OBJ_BOUND_METHOD: {
+            ObjBoundMethod* bound = (ObjBoundMethod*)object;
+            markValue(vm, bound->receiver);
+            markValue(vm, bound->method);
+            break;
+        }
+        case OBJ_CLASS: {
+            ObjClass* klass = (ObjClass*)object;
+            markObject(vm, (Obj*)klass->name);
+            markTable(vm, &klass->methods);
+            markObject(vm, (Obj*)klass->superclass);
+            break;
+        }
+        case OBJ_INSTANCE: {
+            ObjInstance* instance = (ObjInstance*)object;
+            markObject(vm, (Obj*)instance->klass);
+            markTable(vm, &instance->fields);
+            break;
+        }
         case OBJ_FUNCTION: {
             ObjFunction* function = (ObjFunction*)object;
             if (function->name) markObject(vm, (Obj*)function->name);
-            // 标记函数常量池中的对象（如字符串字面量、其他函数等）
             markArray(vm, &function->chunk.constants);
             break;
         }
@@ -144,46 +178,30 @@ static void blackenObject(VM* vm, Obj* object) {
         }
         case OBJ_LIST: {
             ObjList* list = (ObjList*)object;
-            markArray(vm, (ValueArray*)list); // ObjList 布局兼容 ValueArray (count, capacity, items)
-            // 或者更安全地手动遍历：
-            /*
-            for (u32 i = 0; i < list->count; i++) {
-                markValue(vm, list->items[i]);
-            }
-            */
+            markArray(vm, (ValueArray*)list);
             break;
         }
-        // Native, String, Timeline 没有需要递归标记的托管对象字段
-        default:
-            break;
+        default: break;
     }
 }
 
 static void markRoots(VM* vm) {
-    // 1. 标记栈上的值
     for (Value* slot = vm->stack; slot < vm->stackTop; slot++) {
         markValue(vm, *slot);
     }
-
-    // 2. 标记调用栈帧中的 Function 对象
-    // (这替代了之前的 vm->chunk 逻辑，因为代码现在存在 function->chunk 中)
+    // [修改] 标记 Closure
     for (i32 i = 0; i < vm->frameCount; i++) {
-        if (vm->frames[i].function) {
-            markObject(vm, (Obj*)vm->frames[i].function);
-        }
+        markObject(vm, (Obj*)vm->frames[i].closure);
+    }
+    // [新增] 标记 Open Upvalues
+    for (ObjUpvalue* upvalue = vm->openUpvalues; upvalue != NULL; upvalue = upvalue->next) {
+        markObject(vm, (Obj*)upvalue);
     }
 
-    // 3. 标记全局变量表
     markTable(vm, &vm->globals);
-
-    // 4. [已删除] vm->chunk
-    // 旧代码：if (vm->chunk) markArray(vm, &vm->chunk->constants);
-    // 新架构下，当前正在执行的代码在 vm->frames 中，已在步骤 2 中被标记。
-
-    // 5. 标记当前激活的时间轴 (防止预览时被回收)
-    if (vm->active_timeline) {
-        timeline_mark(vm, vm->active_timeline);
-    }
+    if (vm->active_timeline) timeline_mark(vm, vm->active_timeline);
+    markObject(vm, (Obj*)vm->initString);
+    markCompilerRoots(vm);
 }
 
 static void traceReferences(VM* vm) {
@@ -196,7 +214,6 @@ static void traceReferences(VM* vm) {
 static void sweep(VM* vm) {
     Obj* previous = NULL;
     Obj* object = vm->objects;
-   
     while (object != NULL) {
         if (object->isMarked) {
             object->isMarked = false;
@@ -205,32 +222,17 @@ static void sweep(VM* vm) {
         } else {
             Obj* unreached = object;
             object = object->next;
-            if (previous != NULL) {
-                previous->next = object;
-            } else {
-                vm->objects = object;
-            }
+            if (previous != NULL) previous->next = object;
+            else vm->objects = object;
             freeObject(vm, unreached);
         }
     }
 }
 
 void collectGarbage(VM* vm) {
-#ifdef DEBUG_LOG_GC
-    printf("-- gc begin\n");
-    size_t before = vm->bytesAllocated;
-#endif
-    
     markRoots(vm);
     traceReferences(vm);
     tableRemoveWhite(&vm->strings);
     sweep(vm);
-    
     vm->nextGC = vm->bytesAllocated * 2;
-    
-#ifdef DEBUG_LOG_GC
-    printf("-- gc end\n");
-    printf(" collected %zu bytes (from %zu to %zu) next at %zu\n",
-           before - vm->bytesAllocated, before, vm->bytesAllocated, vm->nextGC);
-#endif
 }

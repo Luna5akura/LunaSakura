@@ -1,8 +1,8 @@
 // src/binding/bind_std.c
+
 #include <stdio.h>
 #include "vm/vm.h"
 #include "vm/memory.h"
-
 // --- Helper: Type Checking ---
 // 用于确保列表是同类型的 (Homogeneous)
 static bool typesMatch(Value a, Value b) {
@@ -14,14 +14,11 @@ static bool typesMatch(Value a, Value b) {
     }
     return false;
 }
-
 // --- List Native Functions ---
-
 // Constructor: List()
 Value nativeList(VM* vm, i32 argCount, Value* args) {
     return OBJ_VAL(newList(vm));
 }
-
 // push(list, item)
 Value nativePush(VM* vm, i32 argCount, Value* args) {
     if (argCount != 2 || !IS_LIST(args[0])) {
@@ -30,7 +27,6 @@ Value nativePush(VM* vm, i32 argCount, Value* args) {
     }
     ObjList* list = AS_LIST(args[0]);
     Value item = args[1];
-
     // 同类型检查
     if (list->count > 0) {
         if (!typesMatch(list->items[0], item)) {
@@ -38,7 +34,6 @@ Value nativePush(VM* vm, i32 argCount, Value* args) {
             return NIL_VAL;
         }
     }
-
     // 扩容
     if (list->capacity < list->count + 1) {
         u32 oldCapacity = list->capacity;
@@ -48,55 +43,47 @@ Value nativePush(VM* vm, i32 argCount, Value* args) {
     list->items[list->count++] = item;
     return NIL_VAL;
 }
-
 // pop(list)
 Value nativePop(VM* vm, i32 argCount, Value* args) {
     if (argCount != 1 || !IS_LIST(args[0])) return NIL_VAL;
     ObjList* list = AS_LIST(args[0]);
-    
+   
     if (list->count == 0) return NIL_VAL;
     list->count--;
     return list->items[list->count]; // 返回被弹出的值
 }
-
 // len(list)
 Value nativeLen(VM* vm, i32 argCount, Value* args) {
     if (argCount != 1 || !IS_LIST(args[0])) return NUMBER_VAL(0);
     ObjList* list = AS_LIST(args[0]);
     return NUMBER_VAL((double)list->count);
 }
-
 // get(list, index)
 Value nativeGet(VM* vm, i32 argCount, Value* args) {
     if (argCount != 2 || !IS_LIST(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
     ObjList* list = AS_LIST(args[0]);
     double idx = AS_NUMBER(args[1]);
-
     if (idx < 0 || idx >= list->count) {
         fprintf(stderr, "Runtime Error: List index out of bounds.\n");
         return NIL_VAL;
     }
     return list->items[(int)idx];
 }
-
 // set(list, index, value)
 Value nativeSet(VM* vm, i32 argCount, Value* args) {
     if (argCount != 3 || !IS_LIST(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
     ObjList* list = AS_LIST(args[0]);
     double idx = AS_NUMBER(args[1]);
     Value item = args[2];
-
     if (idx < 0 || idx >= list->count) return NIL_VAL;
-    
+   
     if (list->count > 0 && !typesMatch(list->items[0], item)) {
         fprintf(stderr, "Runtime Error: Type mismatch in homogeneous list.\n");
         return NIL_VAL;
     }
-
     list->items[(int)idx] = item;
     return NIL_VAL;
 }
-
 // clear(list)
 Value nativeClear(VM* vm, i32 argCount, Value* args) {
     if (argCount != 1 || !IS_LIST(args[0])) return NIL_VAL;
@@ -104,7 +91,6 @@ Value nativeClear(VM* vm, i32 argCount, Value* args) {
     list->count = 0;
     return NIL_VAL;
 }
-
 // --- Registration Entry Point ---
 void registerStdBindings(VM* vm) {
     defineNative(vm, "List", nativeList);

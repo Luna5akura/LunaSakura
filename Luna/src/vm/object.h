@@ -2,59 +2,94 @@
 
 #pragma once
 #include "chunk.h"
+#include "table.h"
+
 // --- Forward Declarations ---
-// 前置声明 VM 结构体，解决 vm.h 和 object.h 之间的循环依赖
 typedef struct VM VM;
+typedef struct sObj Obj;
+typedef struct sObjString ObjString;
+typedef struct sObjClip ObjClip;
+typedef struct sObjNative ObjNative;
+typedef struct sObjTimeline ObjTimeline;
+typedef struct sObjClass ObjClass;
+typedef struct sObjInstance ObjInstance;
+typedef struct sObjBoundMethod ObjBoundMethod;
+typedef struct sObjClosure ObjClosure; // [新增]
+typedef struct sObjUpvalue ObjUpvalue; // [新增]
+
 // --- Object Types ---
 typedef enum {
     OBJ_STRING,
-    OBJ_LIST, // [新增] 列表类型
-    OBJ_FUNCTION, // [新增]
+    OBJ_LIST,
+    OBJ_FUNCTION,
     OBJ_NATIVE,
     OBJ_CLIP,
     OBJ_TIMELINE,
+    OBJ_CLASS,
+    OBJ_INSTANCE,
+    OBJ_BOUND_METHOD,
+    OBJ_CLOSURE, // [新增]
+    OBJ_UPVALUE  // [新增]
 } ObjType;
+
 // --- Base Object Header ---
 struct sObj {
-    struct sObj* next; // Offset 0: 放在首位，优化 GC 链表遍历 (Ptr chasing)
-    u8 type; // Offset 8: 显式 u8
-    bool isMarked; // Offset 9
-    // Padding: 6 bytes (Compiler auto-filled to 16 bytes)
+    struct sObj* next;
+    u8 type;
+    bool isMarked;
 };
+
 // --- Native Function ---
 typedef Value (*NativeFn)(VM* vm, i32 argCount, Value* args);
 typedef struct sObjNative {
     Obj obj;
     NativeFn function;
 } ObjNative;
+
 // --- String Object ---
-// Layout: [Obj(16)] [Len(4)] [Hash(4)] [Chars...]
 struct sObjString {
     Obj obj;
     u32 length;
     u32 hash;
     char chars[];
 };
+
 typedef struct {
     Obj obj;
     u32 count;
     u32 capacity;
-    Value* items; // 动态数组
+    Value* items;
 } ObjList;
-// [新增] 函数对象
+
+// --- Function Object (Prototype) ---
 typedef struct {
     Obj obj;
-    i32 arity;        // 参数数量
-    Chunk chunk;      // 函数体字节码
-    ObjString* name;  // 函数名 (顶层脚本为 NULL)
+    i32 arity;
+    int upvalueCount; // [新增] 该函数需要捕获多少个上值
+    Chunk chunk;
+    ObjString* name;
 } ObjFunction;
+
+// [新增] 上值对象
+struct sObjUpvalue {
+    Obj obj;
+    Value* location; // 指向栈上的值，或者指向 closed
+    Value closed;    // 变量离开栈后的存储位置
+    struct sObjUpvalue* next; // 链表指针
+};
+
+// [新增] 闭包对象 (函数的运行时实例)
+struct sObjClosure {
+    Obj obj;
+    ObjFunction* function;
+    ObjUpvalue** upvalues; // 指针数组
+    int upvalueCount;
+};
+
 // --- Clip Object ---
-// Optimized Layout: Sorted by size to remove all internal padding.
 struct sObjClip {
-    Obj obj; // 16 bytes
-    struct sObjString* path; // 8 bytes
-  
-    // 8-byte aligned (Doubles) - Grouped together
+    Obj obj;
+    struct sObjString* path;
     double duration;
     double start_time;
     double in_point;
@@ -65,20 +100,37 @@ struct sObjClip {
     double default_x;
     double default_y;
     double default_opacity;
-  
-    // 4-byte aligned (Ints) - Grouped together
     u32 width;
     u32 height;
     i32 layer;
-  
-    // Padding: 4 bytes at the end (for 8-byte alignment)
 };
-// Forward Declaration
+
 struct Timeline;
 typedef struct sObjTimeline {
     Obj obj;
     struct Timeline* timeline;
 } ObjTimeline;
+
+// --- Class & Instance ---
+typedef struct sObjClass {
+    Obj obj;
+    ObjString* name;
+    struct sObjClass* superclass;
+    Table methods;
+} ObjClass;
+
+typedef struct sObjInstance {
+    Obj obj;
+    ObjClass* klass;
+    Table fields;
+} ObjInstance;
+
+typedef struct sObjBoundMethod {
+    Obj obj;
+    Value receiver;
+    Value method; // 这里的 method 现在通常是 ObjClosure*
+} ObjBoundMethod;
+
 // --- Macros ---
 #define OBJ_TYPE(value) (AS_OBJ(value)->type)
 #define IS_STRING(value) isObjType(value, OBJ_STRING)
@@ -87,6 +139,12 @@ typedef struct sObjTimeline {
 #define IS_NATIVE(value) isObjType(value, OBJ_NATIVE)
 #define IS_CLIP(value) isObjType(value, OBJ_CLIP)
 #define IS_TIMELINE(value) isObjType(value, OBJ_TIMELINE)
+#define IS_CLASS(value) isObjType(value, OBJ_CLASS)
+#define IS_INSTANCE(value) isObjType(value, OBJ_INSTANCE)
+#define IS_BOUND_METHOD(value) isObjType(value, OBJ_BOUND_METHOD)
+#define IS_CLOSURE(value) isObjType(value, OBJ_CLOSURE) // [新增]
+#define IS_UPVALUE(value) isObjType(value, OBJ_UPVALUE) // [新增]
+
 #define AS_STRING(value) ((ObjString*)AS_OBJ(value))
 #define AS_LIST(value) ((ObjList*)AS_OBJ(value))
 #define AS_CSTRING(value) (((ObjString*)AS_OBJ(value))->chars)
@@ -94,12 +152,17 @@ typedef struct sObjTimeline {
 #define AS_FUNCTION(value) ((ObjFunction*)AS_OBJ(value))
 #define AS_CLIP(value) ((ObjClip*)AS_OBJ(value))
 #define AS_TIMELINE(value) ((ObjTimeline*)AS_OBJ(value))
+#define AS_CLASS(value) ((ObjClass*)AS_OBJ(value))
+#define AS_INSTANCE(value) ((ObjInstance*)AS_OBJ(value))
+#define AS_BOUND_METHOD(value) ((ObjBoundMethod*)AS_OBJ(value))
+#define AS_CLOSURE(value) ((ObjClosure*)AS_OBJ(value)) // [新增]
+
 // --- Inline Helpers ---
-static INLINE bool isObjType(Value value, ObjType type) {
-    return IS_OBJ(value) && AS_OBJ(value)->type == (u8)type;
+static inline bool isObjType(Value value, ObjType type) {
+    return IS_OBJ(value) && AS_OBJ(value)->type == type;
 }
-// --- API (Context-Aware) ---
-// 关键修改：所有对象创建函数现在必须接收 VM* 上下文
+
+// --- API ---
 ObjString* copyString(VM* vm, const char* chars, i32 length);
 ObjString* takeString(VM* vm, char* chars, i32 length);
 ObjList* newList(VM* vm);
@@ -107,4 +170,10 @@ ObjFunction* newFunction(VM* vm);
 ObjNative* newNative(VM* vm, NativeFn function);
 ObjClip* newClip(VM* vm, ObjString* path);
 ObjTimeline* newTimeline(VM* vm, u32 width, u32 height, double fps);
+ObjClass* newClass(VM* vm, ObjString* name);
+ObjInstance* newInstance(VM* vm, ObjClass* klass);
+ObjBoundMethod* newBoundMethod(VM* vm, Value receiver, Value method);
+ObjClosure* newClosure(VM* vm, ObjFunction* function); // [新增]
+ObjUpvalue* newUpvalue(VM* vm, Value* slot); // [新增]
+
 void printObject(Value value);

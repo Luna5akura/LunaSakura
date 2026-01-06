@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include "common.h"
 #include "compiler.h"
 #include "scanner.h"
@@ -11,7 +10,6 @@
 #include "memory.h"
 #include "object.h"
 
-// ... (Struct definitions: Parser, ParseRule, Local, Loop, Compiler 保持不变)
 typedef struct {
     Token current;
     Token previous;
@@ -44,12 +42,41 @@ typedef struct {
 typedef struct {
     Token name;
     int depth;
+    bool isCaptured;
 } Local;
+
+typedef struct {
+    u8 index;
+    bool isLocal;
+} Upvalue;
+
+typedef enum {
+    TYPE_FUNCTION,
+    TYPE_SCRIPT,
+    TYPE_METHOD,
+    TYPE_INITIALIZER
+} FunctionType;
+
+typedef struct ClassCompiler {
+    struct ClassCompiler* enclosing;
+    Token name;
+    bool hasSuperclass;
+} ClassCompiler;
+
+typedef struct Compiler {
+    struct Compiler* enclosing;
+    ObjFunction* function;
+    FunctionType type;
+    Local locals[U8_COUNT];
+    int localCount;
+    Upvalue upvalues[U8_COUNT];
+    int scopeDepth;
+} Compiler;
 
 typedef struct {
     int enclosingLoopIndex;
     int depth;
-    int start; 
+    int start;
     int bodyJump;
     int scopeDepth;
     int breakJumps[U8_COUNT];
@@ -58,27 +85,13 @@ typedef struct {
     int continueCount;
 } Loop;
 
-typedef enum {
-    TYPE_FUNCTION,
-    TYPE_SCRIPT
-} FunctionType;
-
-typedef struct Compiler {
-    struct Compiler* enclosing;
-    ObjFunction* function;
-    FunctionType type;
-    Local locals[U8_COUNT];
-    int localCount;
-    int scopeDepth;
-} Compiler;
-
 static Parser parser;
 static Scanner scanner;
 static VM* compilingVM;
 static Compiler* current = NULL;
+static ClassCompiler* currentClass = NULL;
 static Loop* currentLoop = NULL;
 
-// ... (Helper functions: errorAt, advance, consume, emitByte... 保持不变)
 static Chunk* currentChunk() {
     return &current->function->chunk;
 }
@@ -117,15 +130,18 @@ static void consumeLineEnd() { if (!check(TOKEN_EOF)) consume(TOKEN_NEWLINE, "Ex
 static void emitByte(u8 byte) { writeChunk(compilingVM, currentChunk(), byte, parser.previous.line); }
 static void emitBytes(u8 b1, u8 b2) { emitByte(b1); emitByte(b2); }
 
-// [修改] 使用 OP_NIL
 static void emitReturn() {
-    emitByte(OP_NIL);
+    if (current->type == TYPE_INITIALIZER) {
+        emitBytes(OP_GET_LOCAL, 0);
+    } else {
+        emitByte(OP_NIL);
+    }
     emitByte(OP_RETURN);
 }
 
-static u32 makeConstant(Value value) {  // 改为返回u32以支持更大索引
+static u32 makeConstant(Value value) {
     i32 constant = addConstant(compilingVM, currentChunk(), value);
-    if (constant > 16777215) {  // 3字节最大值 (2^24 - 1)
+    if (constant > 16777215) {
         error("Too many constants in one chunk.");
         return 0;
     }
@@ -148,12 +164,14 @@ static int emitJump(u8 instruction) {
     emitByte(instruction); emitByte(0xff); emitByte(0xff);
     return currentChunk()->count - 2;
 }
+
 static void patchJump(int offset) {
     int jump = currentChunk()->count - offset - 2;
     if (jump > UINT16_MAX) error("Too much code to jump over.");
     currentChunk()->code[offset] = (jump >> 8) & 0xff;
     currentChunk()->code[offset + 1] = jump & 0xff;
 }
+
 static void emitLoop(int loopStart) {
     emitByte(OP_LOOP);
     int offset = currentChunk()->count - loopStart + 2;
@@ -162,7 +180,6 @@ static void emitLoop(int loopStart) {
     emitByte(offset & 0xff);
 }
 
-// Compiler Init
 static void initCompiler(Compiler* compiler, VM* vm, FunctionType type) {
     compiler->enclosing = current;
     compiler->function = NULL;
@@ -171,16 +188,21 @@ static void initCompiler(Compiler* compiler, VM* vm, FunctionType type) {
     compiler->scopeDepth = 0;
     compiler->function = newFunction(vm);
     current = compiler;
-    
+
     if (type != TYPE_SCRIPT) {
         current->function->name = copyString(compilingVM, parser.previous.start, parser.previous.length);
     }
-    
-    // Reserve Slot 0
+
     Local* local = &current->locals[current->localCount++];
     local->depth = 0;
-    local->name.start = "";
-    local->name.length = 0;
+    local->isCaptured = false;
+    if (type == TYPE_METHOD || type == TYPE_INITIALIZER) {
+        local->name.start = "this";
+        local->name.length = 4;
+    } else {
+        local->name.start = "";
+        local->name.length = 0;
+    }
 }
 
 static ObjFunction* endCompiler() {
@@ -194,27 +216,91 @@ static ObjFunction* endCompiler() {
 }
 
 static void beginScope() { current->scopeDepth++; }
+
 static void endScope() {
     current->scopeDepth--;
     while (current->localCount > 0 && current->locals[current->localCount - 1].depth > current->scopeDepth) {
-        emitByte(OP_POP);
+        if (current->locals[current->localCount - 1].isCaptured) {
+            emitByte(OP_CLOSE_UPVALUE);
+        } else {
+            emitByte(OP_POP);
+        }
         current->localCount--;
     }
 }
 
-// Rules
 static void expression();
 static void statement();
 static void declaration();
 static void block();
 static ParseRule* getRule(TokenType type);
 static void parsePrecedence(Precedence precedence);
+static Token syntheticToken(const char* text) {
+    Token token;
+    token.start = text;
+    token.length = (int)strlen(text);
+    return token;
+}
+
+static bool identifiersEqual(Token* a, Token* b) {
+    if (a->length != b->length) return false;
+    return memcmp(a->start, b->start, a->length) == 0;
+}
+
+static u8 identifierConstant(Token* name) {
+    return (u8)makeConstant(OBJ_VAL(copyString(compilingVM, name->start, name->length)));
+}
 
 static void addLocal(Token name) {
     if (current->localCount == U8_COUNT) { error("Too many locals."); return; }
     Local* local = &current->locals[current->localCount++];
     local->name = name;
     local->depth = -1;
+    local->isCaptured = false;
+}
+
+static int resolveLocal(Compiler* compiler, Token* name) {
+    for (int i = compiler->localCount - 1; i >= 0; i--) {
+        Local* local = &compiler->locals[i];
+        if (identifiersEqual(name, &local->name)) {
+            if (local->depth == -1) error("Can't read local variable in its own initializer.");
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int addUpvalue(Compiler* compiler, u8 index, bool isLocal) {
+    int upvalueCount = compiler->function->upvalueCount;
+    for (int i = 0; i < upvalueCount; i++) {
+        Upvalue* upvalue = &compiler->upvalues[i];
+        if (upvalue->index == index && upvalue->isLocal == isLocal) {
+            return i;
+        }
+    }
+    if (upvalueCount == U8_COUNT) {
+        error("Too many closure variables in function.");
+        return 0;
+    }
+    compiler->upvalues[upvalueCount].isLocal = isLocal;
+    compiler->upvalues[upvalueCount].index = index;
+    return compiler->function->upvalueCount++;
+}
+
+static int resolveUpvalue(Compiler* compiler, Token* name) {
+    if (compiler->enclosing == NULL) return -1;
+
+    int local = resolveLocal(compiler->enclosing, name);
+    if (local != -1) {
+        compiler->enclosing->locals[local].isCaptured = true;
+        return addUpvalue(compiler, (u8)local, true);
+    }
+
+    int upvalue = resolveUpvalue(compiler->enclosing, name);
+    if (upvalue != -1) {
+        return addUpvalue(compiler, (u8)upvalue, false);
+    }
+    return -1;
 }
 
 static void declareVariable() {
@@ -223,7 +309,7 @@ static void declareVariable() {
     for (int i = current->localCount - 1; i >= 0; i--) {
         Local* local = &current->locals[i];
         if (local->depth != -1 && local->depth < current->scopeDepth) break;
-        if (name->length == local->name.length && memcmp(name->start, local->name.start, name->length) == 0) {
+        if (identifiersEqual(name, &local->name)) {
             error("Already a variable with this name in this scope.");
         }
     }
@@ -238,50 +324,45 @@ static void defineVariable(u8 global) {
     emitBytes(OP_DEFINE_GLOBAL, global);
 }
 
-static int resolveLocal(Compiler* compiler, Token* name) {
-    for (int i = compiler->localCount - 1; i >= 0; i--) {
-        Local* local = &compiler->locals[i];
-        if (name->length == local->name.length && memcmp(name->start, local->name.start, name->length) == 0) {
-            if (local->depth == -1) error("Read local in initializer.");
-            return i;
-        }
-    }
-    return -1;
-}
-
 static void namedVariable(Token name, bool canAssign) {
     u8 getOp, setOp;
     int arg = resolveLocal(current, &name);
-    if (arg != -1) { getOp = OP_GET_LOCAL; setOp = OP_SET_LOCAL; }
-    else {
-        arg = makeConstant(OBJ_VAL(copyString(compilingVM, name.start, name.length)));
-        getOp = OP_GET_GLOBAL; setOp = OP_SET_GLOBAL;
+    if (arg != -1) {
+        getOp = OP_GET_LOCAL;
+        setOp = OP_SET_LOCAL;
+    } else if ((arg = resolveUpvalue(current, &name)) != -1) {
+        getOp = OP_GET_UPVALUE;
+        setOp = OP_SET_UPVALUE;
+    } else {
+        arg = identifierConstant(&name);
+        getOp = OP_GET_GLOBAL;
+        setOp = OP_SET_GLOBAL;
     }
-    if (canAssign && match(TOKEN_EQUAL)) { expression(); emitBytes(setOp, (u8)arg); }
-    else emitBytes(getOp, (u8)arg);
+    if (canAssign && match(TOKEN_EQUAL)) {
+        expression();
+        emitBytes(setOp, (u8)arg);
+    } else {
+        emitBytes(getOp, (u8)arg);
+    }
 }
 
-// Implementations
 static void number(bool canAssign) { emitConstant(NUMBER_VAL(strtod(parser.previous.start, NULL))); }
 static void string(bool canAssign) { emitConstant(OBJ_VAL(copyString(compilingVM, parser.previous.start + 1, parser.previous.length - 2))); }
-
-// [修改] 使用新 Opcode
 static void literal(bool canAssign) {
     switch (parser.previous.type) {
         case TOKEN_FALSE: emitByte(OP_FALSE); break;
-        case TOKEN_NIL:   emitByte(OP_NIL); break;
-        case TOKEN_TRUE:  emitByte(OP_TRUE); break;
+        case TOKEN_NIL: emitByte(OP_NIL); break;
+        case TOKEN_TRUE: emitByte(OP_TRUE); break;
         default: return;
     }
 }
-
 static void grouping(bool canAssign) { expression(); consume(TOKEN_RIGHT_PAREN, "Expect ')'."); }
 static void unary(bool canAssign) {
     TokenType operatorType = parser.previous.type;
     parsePrecedence(PREC_UNARY);
     switch (operatorType) {
         case TOKEN_MINUS: emitByte(OP_NEGATE); break;
-        case TOKEN_BANG:  emitByte(OP_NOT); break;
+        case TOKEN_BANG: emitByte(OP_NOT); break;
         default: return;
     }
 }
@@ -303,60 +384,114 @@ static void binary(bool canAssign) {
         default: return;
     }
 }
-static void call(bool canAssign) {
+
+static u8 argumentList() {
     u8 argCount = 0;
     if (!check(TOKEN_RIGHT_PAREN)) {
-        do { expression(); if (argCount == 255) error("Max args."); argCount++; } while (match(TOKEN_COMMA));
+        do {
+            expression();
+            if (argCount == 255) error("Can't have more than 255 arguments.");
+            argCount++;
+        } while (match(TOKEN_COMMA));
     }
-    consume(TOKEN_RIGHT_PAREN, "Expect ')'.");
+    consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
+    return argCount;
+}
+
+static void call(bool canAssign) {
+    u8 argCount = argumentList();
     emitBytes(OP_CALL, argCount);
 }
+
+static void dot(bool canAssign) {
+    consume(TOKEN_IDENTIFIER, "Expect property name after '.'.");
+    u8 name = identifierConstant(&parser.previous);
+    if (canAssign && match(TOKEN_EQUAL)) {
+        expression();
+        emitBytes(OP_SET_PROPERTY, name);
+    } else if (match(TOKEN_LEFT_PAREN)) {
+        u8 argCount = argumentList();
+        emitBytes(OP_INVOKE, name);
+        emitByte(argCount);
+    } else {
+        emitBytes(OP_GET_PROPERTY, name);
+    }
+}
+
 static void variable(bool canAssign) { namedVariable(parser.previous, canAssign); }
 
+static void this_(bool canAssign) {
+    if (currentClass == NULL) {
+        error("Can't use 'this' outside of a class.");
+        return;
+    }
+    variable(false);
+}
+
+static void super_(bool canAssign) {
+    if (currentClass == NULL) error("Can't use 'super' outside of a class.");
+    else if (!currentClass->hasSuperclass) error("Can't use 'super' in a class with no superclass.");
+
+    consume(TOKEN_DOT, "Expect '.' after 'super'.");
+    consume(TOKEN_IDENTIFIER, "Expect superclass method name.");
+    u8 name = identifierConstant(&parser.previous);
+
+    namedVariable(syntheticToken("this"), false);
+    
+    if (match(TOKEN_LEFT_PAREN)) {
+        u8 argCount = argumentList();
+        namedVariable(syntheticToken("super"), false);
+        emitBytes(OP_SUPER_INVOKE, name);
+        emitByte(argCount);
+    } else {
+        namedVariable(syntheticToken("super"), false);
+        emitBytes(OP_GET_SUPER, name);
+    }
+}
+
 ParseRule rules[] = {
-    [TOKEN_LEFT_PAREN]    = {grouping, call, PREC_CALL},
-    [TOKEN_RIGHT_PAREN]   = {NULL, NULL, PREC_NONE},
-    [TOKEN_LEFT_BRACE]    = {NULL, NULL, PREC_NONE},
-    [TOKEN_RIGHT_BRACE]   = {NULL, NULL, PREC_NONE},
-    [TOKEN_COMMA]         = {NULL, NULL, PREC_NONE},
-    [TOKEN_DOT]           = {NULL, NULL, PREC_NONE},
-    [TOKEN_MINUS]         = {unary, binary, PREC_TERM},
-    [TOKEN_PLUS]          = {NULL, binary, PREC_TERM},
-    [TOKEN_COLON]         = {NULL, NULL, PREC_NONE},
-    [TOKEN_SLASH]         = {NULL, binary, PREC_FACTOR},
-    [TOKEN_STAR]          = {NULL, binary, PREC_FACTOR},
-    [TOKEN_BANG]          = {unary, NULL, PREC_UNARY},
-    [TOKEN_BANG_EQUAL]    = {NULL, binary, PREC_EQUALITY},
-    [TOKEN_EQUAL]         = {NULL, NULL, PREC_NONE},
-    [TOKEN_EQUAL_EQUAL]   = {NULL, binary, PREC_EQUALITY},
-    [TOKEN_GREATER]       = {NULL, binary, PREC_COMPARISON},
+    [TOKEN_LEFT_PAREN] = {grouping, call, PREC_CALL},
+    [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
+    [TOKEN_COMMA] = {NULL, NULL, PREC_NONE},
+    [TOKEN_DOT] = {NULL, dot, PREC_CALL},
+    [TOKEN_MINUS] = {unary, binary, PREC_TERM},
+    [TOKEN_PLUS] = {NULL, binary, PREC_TERM},
+    [TOKEN_COLON] = {NULL, NULL, PREC_NONE},
+    [TOKEN_SLASH] = {NULL, binary, PREC_FACTOR},
+    [TOKEN_STAR] = {NULL, binary, PREC_FACTOR},
+    [TOKEN_BANG] = {unary, NULL, PREC_UNARY},
+    [TOKEN_BANG_EQUAL] = {NULL, binary, PREC_EQUALITY},
+    [TOKEN_EQUAL] = {NULL, NULL, PREC_NONE},
+    [TOKEN_EQUAL_EQUAL] = {NULL, binary, PREC_EQUALITY},
+    [TOKEN_GREATER] = {NULL, binary, PREC_COMPARISON},
     [TOKEN_GREATER_EQUAL] = {NULL, binary, PREC_COMPARISON},
-    [TOKEN_LESS]          = {NULL, binary, PREC_COMPARISON},
-    [TOKEN_LESS_EQUAL]    = {NULL, binary, PREC_COMPARISON},
-    [TOKEN_IDENTIFIER]    = {variable, NULL, PREC_NONE},
-    [TOKEN_STRING]        = {string, NULL, PREC_NONE},
-    [TOKEN_NUMBER]        = {number, NULL, PREC_NONE},
-    [TOKEN_AND]           = {NULL, NULL, PREC_AND},
-    [TOKEN_CLASS]         = {NULL, NULL, PREC_NONE},
-    [TOKEN_ELSE]          = {NULL, NULL, PREC_NONE},
-    [TOKEN_FALSE]         = {literal, NULL, PREC_NONE},
-    [TOKEN_FOR]           = {NULL, NULL, PREC_NONE},
-    [TOKEN_FUN]           = {NULL, NULL, PREC_NONE},
-    [TOKEN_IF]            = {NULL, NULL, PREC_NONE},
-    [TOKEN_NIL]           = {literal, NULL, PREC_NONE},
-    [TOKEN_OR]            = {NULL, NULL, PREC_OR},
-    [TOKEN_PRINT]         = {NULL, NULL, PREC_NONE},
-    [TOKEN_RETURN]        = {NULL, NULL, PREC_NONE},
-    [TOKEN_SUPER]         = {NULL, NULL, PREC_NONE},
-    [TOKEN_THIS]          = {NULL, NULL, PREC_NONE},
-    [TOKEN_TRUE]          = {literal, NULL, PREC_NONE},
-    [TOKEN_VAR]           = {NULL, NULL, PREC_NONE},
-    [TOKEN_WHILE]         = {NULL, NULL, PREC_NONE},
-    [TOKEN_ERROR]         = {NULL, NULL, PREC_NONE},
-    [TOKEN_EOF]           = {NULL, NULL, PREC_NONE},
+    [TOKEN_LESS] = {NULL, binary, PREC_COMPARISON},
+    [TOKEN_LESS_EQUAL] = {NULL, binary, PREC_COMPARISON},
+    [TOKEN_IDENTIFIER] = {variable, NULL, PREC_NONE},
+    [TOKEN_STRING] = {string, NULL, PREC_NONE},
+    [TOKEN_NUMBER] = {number, NULL, PREC_NONE},
+    [TOKEN_AND] = {NULL, NULL, PREC_AND},
+    [TOKEN_CLASS] = {NULL, NULL, PREC_NONE},
+    [TOKEN_ELSE] = {NULL, NULL, PREC_NONE},
+    [TOKEN_FALSE] = {literal, NULL, PREC_NONE},
+    [TOKEN_FOR] = {NULL, NULL, PREC_NONE},
+    [TOKEN_FUN] = {NULL, NULL, PREC_NONE},
+    [TOKEN_IF] = {NULL, NULL, PREC_NONE},
+    [TOKEN_NIL] = {literal, NULL, PREC_NONE},
+    [TOKEN_OR] = {NULL, NULL, PREC_OR},
+    [TOKEN_PRINT] = {NULL, NULL, PREC_NONE},
+    [TOKEN_RETURN] = {NULL, NULL, PREC_NONE},
+    [TOKEN_SUPER] = {super_, NULL, PREC_NONE},
+    [TOKEN_THIS] = {this_, NULL, PREC_NONE},
+    [TOKEN_TRUE] = {literal, NULL, PREC_NONE},
+    [TOKEN_VAR] = {NULL, NULL, PREC_NONE},
+    [TOKEN_WHILE] = {NULL, NULL, PREC_NONE},
+    [TOKEN_ERROR] = {NULL, NULL, PREC_NONE},
+    [TOKEN_EOF] = {NULL, NULL, PREC_NONE},
 };
 
 static ParseRule* getRule(TokenType type) { return &rules[type]; }
+
 static void parsePrecedence(Precedence precedence) {
     advance();
     ParseFn prefixRule = getRule(parser.previous.type)->prefix;
@@ -370,9 +505,8 @@ static void parsePrecedence(Precedence precedence) {
     }
     if (canAssign && match(TOKEN_EQUAL)) error("Invalid assignment target.");
 }
-static void expression() { parsePrecedence(PREC_ASSIGNMENT); }
 
-// --- Statements ---
+static void expression() { parsePrecedence(PREC_ASSIGNMENT); }
 static void block() {
     consume(TOKEN_INDENT, "Expect indentation.");
     beginScope();
@@ -381,12 +515,10 @@ static void block() {
     endScope();
 }
 
-static void funDeclaration() {
-    u8 global = makeConstant(OBJ_VAL(copyString(compilingVM, parser.previous.start, parser.previous.length)));
-    declareVariable();
-    if (current->scopeDepth > 0) current->locals[current->localCount - 1].depth = current->scopeDepth;
+// [修改] 返回 void，并在内部处理 Closure 发射
+static void function(FunctionType type) {
     Compiler compiler;
-    initCompiler(&compiler, compilingVM, TYPE_FUNCTION);
+    initCompiler(&compiler, compilingVM, type);
     beginScope();
     consume(TOKEN_LEFT_PAREN, "Expect '('.");
     if (!check(TOKEN_RIGHT_PAREN)) {
@@ -402,32 +534,92 @@ static void funDeclaration() {
     consume(TOKEN_COLON, "Expect ':'.");
     consume(TOKEN_NEWLINE, "Expect newline.");
     block();
-    ObjFunction* function = endCompiler();
-    emitBytes(OP_CONSTANT, makeConstant(OBJ_VAL(function)));
-    if (current->scopeDepth == 0) emitBytes(OP_DEFINE_GLOBAL, global);
+    
+    // 获取编译好的函数对象
+    ObjFunction* func = endCompiler();
+    
+    // [关键修复] 使用当前的 compiler 结构体（它还在栈上）来生成指令
+    emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(func)));
+    for (int i = 0; i < func->upvalueCount; i++) {
+        emitByte(compiler.upvalues[i].isLocal ? 1 : 0);
+        emitByte(compiler.upvalues[i].index);
+    }
+}
+
+static void method() {
+    consume(TOKEN_IDENTIFIER, "Expect method name.");
+    u8 constant = identifierConstant(&parser.previous);
+    FunctionType type = TYPE_METHOD;
+    if (parser.previous.length == 4 && memcmp(parser.previous.start, "init", 4) == 0) {
+        type = TYPE_INITIALIZER;
+    }
+    
+    // [修改] 只需要调用 function，它会自己发射 OP_CLOSURE
+    function(type);
+
+    emitBytes(OP_METHOD, constant);
+}
+
+static void classDeclaration() {
+    consume(TOKEN_IDENTIFIER, "Expect class name.");
+    Token className = parser.previous;
+    u8 nameConstant = identifierConstant(&parser.previous);
+    declareVariable();
+    emitBytes(OP_CLASS, nameConstant);
+    defineVariable(nameConstant);
+    ClassCompiler classCompiler;
+    classCompiler.enclosing = currentClass;
+    classCompiler.name = parser.previous;
+    classCompiler.hasSuperclass = false;
+    currentClass = &classCompiler;
+
+    if (match(TOKEN_LESS)) {
+        consume(TOKEN_IDENTIFIER, "Expect superclass name.");
+        variable(false);
+        if (identifiersEqual(&className, &parser.previous)) error("A class can't inherit from itself.");
+        beginScope();
+        addLocal(syntheticToken("super"));
+        defineVariable(0);
+        namedVariable(className, false);
+        emitByte(OP_INHERIT);
+        classCompiler.hasSuperclass = true;
+    }
+
+    namedVariable(className, false);
+    consume(TOKEN_COLON, "Expect ':' after class declaration.");
+    consume(TOKEN_NEWLINE, "Expect newline after ':'.");
+    consume(TOKEN_INDENT, "Expect indentation for class body.");
+    while (!check(TOKEN_DEDENT) && !check(TOKEN_EOF)) method();
+    consume(TOKEN_DEDENT, "Expect dedent after class body.");
+    emitByte(OP_POP);
+    if (classCompiler.hasSuperclass) endScope();
+    currentClass = currentClass->enclosing;
+}
+
+static void funDeclaration() {
+    u8 global = identifierConstant(&parser.previous);
+    declareVariable();
+    if (current->scopeDepth > 0) current->locals[current->localCount - 1].depth = current->scopeDepth;
+    
+    // [修改] 直接调用
+    function(TYPE_FUNCTION);
+    
+    defineVariable(global);
 }
 
 static void varDeclaration() {
     consume(TOKEN_IDENTIFIER, "Expect var name.");
     Token name = parser.previous;
-    u32 global = 0;
-    if (current->scopeDepth == 0) {
-        ObjString* str = copyString(compilingVM, name.start, name.length);
-        push(compilingVM, OBJ_VAL(str));  // GC保护
-        global = makeConstant(OBJ_VAL(str));
-    }
-    declareVariable();
-    if (match(TOKEN_EQUAL)) expression(); else emitConstant(NIL_VAL);
+    u8 global = identifierConstant(&name);
+    if (match(TOKEN_EQUAL)) expression(); else emitByte(OP_NIL);
     consumeLineEnd();
-    defineVariable((u8)global);
-    if (current->scopeDepth == 0) pop(compilingVM);  // 弹出保护
+    defineVariable(global);
 }
 
-// ... (beginLoop, patchLoopJumps, endLoop 保持不变)
 static void beginLoop(Loop* loop) {
     loop->enclosingLoopIndex = currentLoop ? currentLoop->enclosingLoopIndex + 1 : 0;
     loop->start = currentChunk()->count;
-    loop->scopeDepth = current->scopeDepth; // Use current compiler scope depth
+    loop->scopeDepth = current->scopeDepth;
     loop->breakCount = 0;
     loop->continueCount = 0;
     loop->depth = 0;
@@ -440,16 +632,18 @@ static void patchLoopJumps(Loop* loop, int type) {
     int target = (type == TOKEN_BREAK) ? currentChunk()->count : loop->start;
     for (int i = 0; i < count; i++) {
         int offset = jumps[i];
-        int jump = (type == TOKEN_BREAK) ? target - offset - 2 : offset - target + 2;
-        if (jump > UINT16_MAX) error("Loop jump too large.");
+        int jump;
+        if (type == TOKEN_BREAK) jump = target - offset - 2;
+        else jump = offset + 2 - target;
+        if (jump > UINT16_MAX || jump < 0) error("Loop jump too large.");
         currentChunk()->code[offset] = (jump >> 8) & 0xff;
         currentChunk()->code[offset + 1] = jump & 0xff;
     }
 }
+
 static void endLoop() {
-    if (currentLoop->breakCount > U8_COUNT || currentLoop->continueCount > U8_COUNT) {
+    if (currentLoop->breakCount > U8_COUNT || currentLoop->continueCount > U8_COUNT)
         error("Too many break/continue statements in loop.");
-    }
     patchLoopJumps(currentLoop, TOKEN_BREAK);
     patchLoopJumps(currentLoop, TOKEN_CONTINUE);
     currentLoop = NULL;
@@ -500,30 +694,24 @@ static void forStatement() {
     expression();
     consume(TOKEN_COLON, "Expect ':'.");
     consume(TOKEN_NEWLINE, "Expect newline.");
-
     beginScope();
-    addLocal(varName); defineVariable(0); // Var = Start (Stack N)
-    addLocal((Token){.start="<end>",.length=5}); defineVariable(0); // End = End (Stack N+1)
-
+    addLocal(varName); defineVariable(0);
+    addLocal((Token){.start="<end>",.length=5}); defineVariable(0);
     loop.start = currentChunk()->count;
-    emitBytes(OP_GET_LOCAL, (u8)(current->localCount - 2)); 
+    emitBytes(OP_GET_LOCAL, (u8)(current->localCount - 2));
     emitBytes(OP_GET_LOCAL, (u8)(current->localCount - 1));
     emitByte(OP_LESS_EQUAL);
-    
     loop.bodyJump = emitJump(OP_JUMP_IF_FALSE);
     emitByte(OP_POP);
-    
     consume(TOKEN_INDENT, "Expect indentation.");
     while (!check(TOKEN_DEDENT) && !check(TOKEN_EOF)) declaration();
     consume(TOKEN_DEDENT, "Expect dedent.");
-    
     emitBytes(OP_GET_LOCAL, (u8)(current->localCount - 2));
     emitConstant(NUMBER_VAL(1));
     emitByte(OP_ADD);
     emitBytes(OP_SET_LOCAL, (u8)(current->localCount - 2));
     emitByte(OP_POP);
     emitLoop(loop.start);
-    
     patchJump(loop.bodyJump);
     emitByte(OP_POP);
     endScope();
@@ -556,7 +744,8 @@ static void statement() {
 static void declaration() {
     while (match(TOKEN_NEWLINE));
     if (check(TOKEN_DEDENT)) return;
-    if (match(TOKEN_FUN)) { consume(TOKEN_IDENTIFIER, "Expect name."); funDeclaration(); }
+    if (match(TOKEN_CLASS)) classDeclaration();
+    else if (match(TOKEN_FUN)) { advance(); funDeclaration(); }
     else if (match(TOKEN_VAR)) varDeclaration();
     else statement();
     if (parser.panicMode) {
@@ -588,4 +777,12 @@ bool compile(VM* vm, const char* source, Chunk* chunk) {
     }
     compilingVM = NULL;
     return !parser.hadError;
+}
+
+void markCompilerRoots(VM* vm) {
+    Compiler* compiler = current;
+    while (compiler != NULL) {
+        if (compiler->function != NULL) markObject(vm, (Obj*)compiler->function);
+        compiler = compiler->enclosing;
+    }
 }

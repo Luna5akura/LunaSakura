@@ -13,17 +13,17 @@ __attribute__((noinline))
 void growValueArray(VM* vm, ValueArray* array) {
     u32 oldCapacity = array->capacity;
     u32 newCapacity = GROW_CAPACITY(oldCapacity);
-  
+ 
     // [修改] 使用传入的 vm 调用内存分配器
     array->values = GROW_ARRAY(vm, Value, array->values, oldCapacity, newCapacity);
-  
+ 
     array->capacity = newCapacity;
 }
 // [修改] 增加 VM* vm 参数
 void freeValueArray(VM* vm, ValueArray* array) {
     // [修改] 使用传入的 vm 释放内存
     FREE_ARRAY(vm, Value, array->values, array->capacity);
-  
+ 
     // 重置元数据
     initValueArray(array);
 }
@@ -51,3 +51,4 @@ void printValue(Value value) {
     }
 #endif
 }
+
