@@ -75,6 +75,13 @@ ObjString* takeString(VM* vm, char* chars, i32 length) {
    
     return string;
 }
+ObjList* newList(VM* vm) {
+    ObjList* list = (ObjList*)allocateObject(vm, sizeof(ObjList), OBJ_LIST);
+    list->items = NULL;
+    list->count = 0;
+    list->capacity = 0;
+    return list;
+}
 // === 其他对象创建 ===
 ObjNative* newNative(VM* vm, NativeFn function) {
     ObjNative* native = (ObjNative*)allocateObject(vm, sizeof(ObjNative), OBJ_NATIVE);
@@ -112,6 +119,17 @@ ObjTimeline* newTimeline(VM* vm, u32 width, u32 height, double fps) {
 // === 调试打印 ===
 void printObject(Value value) {
     switch (OBJ_TYPE(value)) {
+
+        case OBJ_LIST: {
+            ObjList* list = AS_LIST(value);
+            printf("[");
+            for (u32 i = 0; i < list->count; i++) {
+                printValue(list->items[i]);
+                if (i < list->count - 1) printf(", ");
+            }
+            printf("]");
+            break;
+        }
         case OBJ_STRING:
             printf("%s", AS_CSTRING(value));
             break;

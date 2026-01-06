@@ -1,40 +1,55 @@
 // src/main.c
 
-// src/main.c
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <glad/glad.h> // 必须在 SDL 之前
 #include <SDL2/SDL.h>
+
 #include "vm/memory.h"
 #include "vm/vm.h"
 #include "vm/compiler.h"
 #include "engine/timeline.h"
 #include "engine/compositor.h"
-// 外部函数声明更新
-// [修改] 增加 VM* 参数
+
+// --- 外部绑定函数声明 ---
+// [新增] 注册标准库绑定 (List, etc.)
+void registerStdBindings(VM* vm);
+// [原有] 注册视频引擎绑定 (Video, Project, etc.)
 void registerVideoBindings(VM* vm);
-Timeline* get_active_timeline(VM* vm);  // Modified: Added VM* parameter
-void reset_active_timeline(VM* vm);     // Modified: Added VM* parameter
-// ... (get_file_mtime 和 readFile 保持不变) ...
+
+// --- 引擎接口声明 ---
+Timeline* get_active_timeline(VM* vm);
+void reset_active_timeline(VM* vm);
+
+// --- 辅助函数 ---
+
 time_t get_file_mtime(const char* path) {
     struct stat attr;
     if (stat(path, &attr) == 0) return attr.st_mtime;
     return 0;
 }
-static char* readFile(VM* vm, const char* path) { // Added vm
+
+static char* readFile(VM* vm, const char* path) {
     FILE* file = fopen(path, "rb");
     if (!file) return NULL;
     fseek(file, 0L, SEEK_END);
     size_t fileSize = ftell(file);
     rewind(file);
     char* buffer = ALLOCATE(vm, char, fileSize + 1);
+    if (!buffer) {
+        fclose(file);
+        return NULL;
+    }
     size_t bytesRead = fread(buffer, sizeof(char), fileSize, file);
     buffer[bytesRead] = '\0';
     fclose(file);
     return buffer;
 }
+
+// --- 主程序 ---
+
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         fprintf(stderr, "Usage: luna [script]\n");
@@ -42,15 +57,18 @@ int main(int argc, char* argv[]) {
     }
     const char* script_path = argv[1];
     printf("=== Luna Hot-Reload Host (OpenGL) ===\n");
+
     // 1. 初始化 SDL (GL 模式)
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER) < 0) {
         fprintf(stderr, "SDL Init Failed: %s\n", SDL_GetError());
         return 1;
     }
+
     // 设置 OpenGL 属性 (3.3 Core)
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+
     int win_w = 1280, win_h = 720;
     SDL_Window* window = SDL_CreateWindow("Luna Live Preview",
                                           SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -72,6 +90,7 @@ int main(int argc, char* argv[]) {
    
     // 开启垂直同步
     SDL_GL_SetSwapInterval(1);
+
     // 2. 状态变量
     bool app_running = true;
     bool script_loaded = false;
@@ -82,11 +101,13 @@ int main(int argc, char* argv[]) {
    
     Compositor* comp = NULL;
     Timeline* current_tl = NULL;
-    // [新增] 本地 VM 实例
+
+    // 本地 VM 实例
     // 必须初始化为 0，防止在第一次加载前（如果文件不存在）调用 freeVM 导致崩溃
     VM vm;
     memset(&vm, 0, sizeof(VM));
     bool vm_initialized = false;
+
     // === 主循环 ===
     while (app_running) {
         // --- A. 检查文件变化 & 重载 ---
@@ -94,41 +115,46 @@ int main(int argc, char* argv[]) {
         if (now_mtime > last_mtime) {
             printf("\n[Reload] Recompiling...\n");
            
-            // 重要：在重置 VM 前，必须先释放旧的 Compositor
+            // 重要：在重置 VM 前，必须先释放旧的 Compositor (因为它持有 VM 分配的内存或资源)
             if (comp) { compositor_free(&vm, comp); comp = NULL; }
            
-            // [修改] 传递 &vm
+            // 释放旧 VM
             if (vm_initialized) { freeVM(&vm); }
-            // [修改] 传递 &vm
+            
+            // 初始化新 VM
             initVM(&vm);
             vm_initialized = true;
            
-            reset_active_timeline(&vm);  // Modified: Pass &vm
+            reset_active_timeline(&vm);
            
-            // [修改] 传递 &vm
+            // [新增] 注册标准库 (List, etc.)
+            registerStdBindings(&vm);
+            
+            // 注册视频绑定
             registerVideoBindings(&vm);
+            
+            // 读取并编译运行脚本
             char* source = readFile(&vm, script_path);
             if (source) {
                 Chunk chunk;
                 initChunk(&chunk);
-                // [修改] 传递 &vm
+                
                 if (compile(&vm, source, &chunk)) {
-                    // [修改] 传递 &vm
                     if (interpret(&vm, &chunk) == INTERPRET_OK) {
                         script_loaded = true;
                     } else script_loaded = false;
                 } else script_loaded = false;
                
-                // [修改] 传递 &vm，因为 freeChunk 现在需要访问内存分配器
                 freeChunk(&vm, &chunk);
                 FREE(&vm, char, source); // Free source
             }
+
             if (script_loaded) {
-                current_tl = get_active_timeline(&vm);  // Modified: Pass &vm
+                current_tl = get_active_timeline(&vm);
                 if (current_tl) {
                     printf("[Reload] Timeline: %dx%d\n", current_tl->width, current_tl->height);
                    
-                    // 调整窗口大小
+                    // 调整窗口大小以适应时间轴 (可选，这里保留)
                     if (current_tl->width != (u32)win_w || current_tl->height != (u32)win_h) {
                         win_w = current_tl->width;
                         win_h = current_tl->height;
@@ -141,6 +167,7 @@ int main(int argc, char* argv[]) {
             }
             last_mtime = now_mtime;
         }
+
         // --- B. SDL 事件 ---
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -160,18 +187,22 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
+
         // --- C. 渲染 ---
         uint64_t now = SDL_GetPerformanceCounter();
         double dt = (double)((now - last_perf) * 1000 / SDL_GetPerformanceFrequency()) / 1000.0;
         last_perf = now;
+
         if (script_loaded && comp && current_tl) {
             if (!paused) {
                 current_time += dt;
                 if (current_time > current_tl->duration) current_time = 0.0;
             }
             if (current_time < 0) current_time = 0.0;
+            
             // 1. 核心渲染 (画到 FBO)
             compositor_render(comp, current_time);
+            
             // 2. 上屏 (Blit FBO -> Screen)
             compositor_blit_to_screen(comp, win_w, win_h);
            
@@ -182,11 +213,12 @@ int main(int argc, char* argv[]) {
         }
         SDL_GL_SwapWindow(window); // 交换缓冲区
     }
+
+    // --- 清理 ---
     if (comp) compositor_free(&vm, comp);
     SDL_GL_DeleteContext(gl_context);
     SDL_DestroyWindow(window);
    
-    // [修改] 传递 &vm
     if (vm_initialized) freeVM(&vm);
    
     SDL_Quit();

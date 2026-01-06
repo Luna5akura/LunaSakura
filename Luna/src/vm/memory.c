@@ -40,6 +40,14 @@ void freeObject(VM* vm, Obj* object) {
     printf("%p free type %d\n", (void*)object, object->type);
 #endif
     switch (object->type) {
+        case OBJ_LIST: {
+            ObjList* list = (ObjList*)object;
+            // 释放内部存储的 Value 数组
+            FREE_ARRAY(vm, Value, list->items, list->capacity);
+            // 释放对象本身
+            (void)reallocate(vm, object, sizeof(ObjList), 0);
+            break;
+        }
         case OBJ_STRING: {
             ObjString* string = (ObjString*)object;
             (void)reallocate(vm, object, sizeof(ObjString) + string->length + 1, 0);
@@ -111,6 +119,14 @@ static void blackenObject(VM* vm, Obj* object) {
     printf("\n");
 #endif
     switch (object->type) {
+        case OBJ_LIST: {
+            ObjList* list = (ObjList*)object;
+            // 标记列表中的每一个元素，防止被 GC 回收
+            for (u32 i = 0; i < list->count; i++) {
+                markValue(vm, list->items[i]);
+            }
+            break;
+        }
         case OBJ_CLIP: {
             ObjClip* clip = (ObjClip*)object;
             if (clip->path) markObject(vm, (Obj*)clip->path);

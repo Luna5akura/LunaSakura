@@ -74,7 +74,15 @@ static inline TokenType checkKeyword(const char* start, i32 length, const char* 
 static TokenType identifierType(const char* start, i32 length) {
     switch (start[0]) {
         case 'a': return checkKeyword(start + 1, length - 1, "nd", 2, TOKEN_AND);
-        case 'c': return checkKeyword(start + 1, length - 1, "lass", 4, TOKEN_CLASS);
+        case 'b': return checkKeyword(start + 1, length - 1, "reak", 4, TOKEN_BREAK);
+        case 'c':
+            if (length > 1) {
+                switch (start[1]) {
+                    case 'l': return checkKeyword(start + 2, length - 2, "ass", 3, TOKEN_CLASS);
+                    case 'o': return checkKeyword(start + 2, length - 2, "ntinue", 6, TOKEN_CONTINUE);
+                }
+            }
+            break;
         case 'e': return checkKeyword(start + 1, length - 1, "lse", 3, TOKEN_ELSE);
         case 'f':
             if (length > 1) {
@@ -85,7 +93,14 @@ static TokenType identifierType(const char* start, i32 length) {
                 }
             }
             break;
-        case 'i': return checkKeyword(start + 1, length - 1, "f", 1, TOKEN_IF);
+        case 'i':
+            if (length > 1) {
+                switch (start[1]) {
+                    case 'f': return checkKeyword(start + 2, length - 2, "", 0, TOKEN_IF);
+                    case 'n': return checkKeyword(start + 2, length - 2, "", 0, TOKEN_IN);  // [新增] 识别 'in'
+                }
+            }
+            break;
         case 'n': return checkKeyword(start + 1, length - 1, "il", 2, TOKEN_NIL);
         case 'o': return checkKeyword(start + 1, length - 1, "r", 1, TOKEN_OR);
         case 'p': return checkKeyword(start + 1, length - 1, "rint", 4, TOKEN_PRINT);
@@ -104,6 +119,7 @@ static TokenType identifierType(const char* start, i32 length) {
     }
     return TOKEN_IDENTIFIER;
 }
+
 // --- Init ---
 void initScanner(Scanner* scanner, const char* source) {
     scanner->start = source;

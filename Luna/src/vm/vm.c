@@ -18,12 +18,10 @@ void runtimeError(VM* vm, const char* format, ...) {
 void initVM(VM* vm) {
     // 显式清零，避免垃圾数据
     memset(vm, 0, sizeof(VM));
- 
     resetStack(vm);
     vm->objects = NULL;
     initTable(&vm->globals);
     initTable(&vm->strings);
- 
     vm->bytesAllocated = 0;
     vm->nextGC = 1024 * 1024;
     vm->grayCount = 0;
@@ -39,10 +37,8 @@ void freeVM(VM* vm) {
     freeTable(vm, &vm->globals);
     freeTable(vm, &vm->strings);
     freeObjects(vm);
- 
     vm->bytesAllocated = 0;
     vm->nextGC = 1024 * 1024;
- 
     if (vm->grayStack) free(vm->grayStack); // grayStack 是纯指针数组，直接 free 即可
     vm->grayStack = NULL;
     vm->grayCapacity = 0;
@@ -60,7 +56,6 @@ void defineNative(VM* vm, const char* name, NativeFn function) {
         return;
     }
     push(vm, OBJ_VAL(string));
- 
     // [修改] 传递 vm 给 newNative
     ObjNative* native = newNative(vm, function);
     if (native == NULL) {
@@ -115,8 +110,9 @@ static InterpretResult run(VM* vm) {
         &&TARGET_OP_NOT_EQUAL,
         &&TARGET_OP_NOT,
         &&TARGET_OP_POP,
-        &&TARGET_OP_JUMP_IF_FALSE, // [新增]
-        &&TARGET_OP_JUMP, // [新增]
+        &&TARGET_OP_JUMP_IF_FALSE,
+        &&TARGET_OP_JUMP,
+        &&TARGET_OP_LOOP, // [新增]
         &&TARGET_OP_DEFINE_GLOBAL,
         &&TARGET_OP_GET_GLOBAL,
         &&TARGET_OP_SET_GLOBAL,
@@ -168,12 +164,15 @@ static InterpretResult run(VM* vm) {
 #endif
     CASE(OP_CONSTANT) {
         Value constant = READ_CONSTANT();
+        // [调试] 打印读取的常量
+        #ifdef DEBUG_PRINT_CODE
+        printf("DEBUG: OP_CONSTANT read: "); printValue(constant); printf("\n");
+        #endif
         *stackTop = constant;
         stackTop++;
         DISPATCH();
     }
     CASE(OP_CONSTANT_LONG) {
-        // 假设是 3 字节指令
         u32 index = READ_BYTE();
         index |= (u16)READ_BYTE() << 8;
         index |= (u32)READ_BYTE() << 16;
@@ -219,15 +218,23 @@ static InterpretResult run(VM* vm) {
         stackTop--;
         DISPATCH();
     }
-    // [新增] 跳转指令
     CASE(OP_JUMP_IF_FALSE) {
         u16 offset = READ_SHORT();
-        if (!AS_BOOL(peek(vm, 0))) ip += offset;
+        bool cond = AS_BOOL(stackTop[-1]); 
+        #ifdef DEBUG_PRINT_CODE
+        printf("JUMP_IF_FALSE: condition %s, offset %u\n", cond ? "true" : "false", offset);
+        #endif
+        if (!cond) ip += offset;
         DISPATCH();
     }
     CASE(OP_JUMP) {
         u16 offset = READ_SHORT();
         ip += offset;
+        DISPATCH();
+    }
+    CASE(OP_LOOP) {
+        u16 offset = READ_SHORT();
+        ip -= offset;
         DISPATCH();
     }
     CASE(OP_DEFINE_GLOBAL) {
@@ -266,18 +273,15 @@ static InterpretResult run(VM* vm) {
     }
     CASE(OP_CALL) {
         i32 argCount = READ_BYTE();
-    
-        // 同步状态到 VM 结构体
+   
         vm->ip = ip;
         vm->stackTop = stackTop;
-    
+   
         Value callee = stackTop[-1 - argCount];
-        // callValue 内部会处理 vm 传递
         if (!callValue(vm, callee, argCount)) {
             return INTERPRET_RUNTIME_ERROR;
         }
-    
-        // 恢复寄存器缓存
+   
         stackTop = vm->stackTop;
         DISPATCH();
     }

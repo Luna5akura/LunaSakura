@@ -31,11 +31,24 @@ typedef struct {
     ParseFn infix;
     Precedence precedence;
 } ParseRule;
+// [新增] Loop结构体跟踪循环作用域
+typedef struct {
+    int enclosingLoopIndex; // 嵌套循环索引
+    int depth;
+    int start; // 循环开始位置
+    int bodyJump; // 跳出循环的占位
+    int scopeDepth; // 作用域深度
+    int breakJumps[U8_COUNT]; // break跳转列表
+    int breakCount;
+    int continueJumps[U8_COUNT]; // continue跳转列表
+    int continueCount;
+} Loop;
 // === Global State ===
 static Parser parser;
 static Chunk* compilingChunk;
 static Scanner scanner;
 static VM* compilingVM;
+static Loop* currentLoop = NULL;
 static inline Chunk* currentChunk() {
     return compilingChunk;
 }
@@ -63,12 +76,13 @@ static void errorAtCurrent(const char* message) {
 }
 // --- Lexical Stream ---
 static void advance() {
+
+    #ifdef DEBUG_PRINT_CODE
+    printf("Line %u: Token type %d ('%.*s')\n", parser.current.line, parser.current.type, parser.current.length, parser.current.start);
+    #endif
     parser.previous = parser.current;
     for (;;) {
         parser.current = scanToken(&scanner);
-        #ifdef DEBUG_PRINT_CODE
-        printf("Line %u: Token type %d ('%.*s')\n", parser.current.line, parser.current.type, parser.current.length, parser.current.start);
-        #endif
         if (parser.current.type != TOKEN_ERROR) break;
         errorAtCurrent(parser.current.start);
     }
@@ -114,7 +128,6 @@ static u8 makeConstant(Value value) {
 static inline void emitConstant(Value value) {
     emitBytes(OP_CONSTANT, makeConstant(value));
 }
-// [新增] 跳转辅助函数
 static int emitJump(u8 instruction) {
     emitByte(instruction);
     emitByte(0xff);
@@ -128,6 +141,60 @@ static void patchJump(int offset) {
     }
     currentChunk()->code[offset] = (jump >> 8) & 0xff;
     currentChunk()->code[offset + 1] = jump & 0xff;
+}
+// [新增] 循环相关辅助
+static void beginLoop(Loop* loop) {
+    loop->enclosingLoopIndex = currentLoop ? currentLoop->enclosingLoopIndex + 1 : 0;
+    loop->start = currentChunk()->count;
+    loop->scopeDepth = 0; // TODO: 后续本地变量作用域
+    loop->breakCount = 0;
+    loop->continueCount = 0;
+    loop->depth = 0; // TODO: 嵌套深度
+    currentLoop = loop;
+}
+static void emitLoop(int loopStart) {
+    emitByte(OP_LOOP);
+    
+    int offset = currentChunk()->count - loopStart + 2;
+    if (offset > UINT16_MAX) error("Loop body too large.");
+    
+    emitByte((offset >> 8) & 0xff);
+    emitByte(offset & 0xff);
+}
+static void patchLoopJumps(Loop* loop, int type) {
+    int* jumps = (type == TOKEN_BREAK) ? loop->breakJumps : loop->continueJumps;
+    int count = (type == TOKEN_BREAK) ? loop->breakCount : loop->continueCount;
+    int target = (type == TOKEN_BREAK) ? currentChunk()->count : loop->start;
+    
+    for (int i = 0; i < count; i++) {
+        int offset = jumps[i];
+        
+        // [修复] 区分前向跳转(break)和后向跳转(continue)的计算方式
+        int jump;
+        if (type == TOKEN_BREAK) {
+             // break 是 OP_JUMP (前向)：目标 - 当前 - 2
+             jump = target - offset - 2;
+        } else {
+             // continue 是 OP_LOOP (后向)：当前 - 目标 + 2
+             // 注意：这里 offset 是指令参数的位置，OP_LOOP 指令本身在 offset-1
+             // 逻辑：CurrentIP (offset + 2) - Target
+             jump = offset - target + 2;
+        }
+
+        if (jump > UINT16_MAX) {
+            error("Loop jump too large.");
+        }
+
+        currentChunk()->code[offset] = (jump >> 8) & 0xff;
+        currentChunk()->code[offset + 1] = jump & 0xff;
+    }
+}
+
+static void endLoop() {
+    // 回填break和continue
+    patchLoopJumps(currentLoop, TOKEN_BREAK);
+    patchLoopJumps(currentLoop, TOKEN_CONTINUE);
+    currentLoop = NULL; // 恢复外层循环
 }
 // --- Forward Declarations ---
 static void expression();
@@ -236,6 +303,7 @@ ParseRule rules[] = {
     [TOKEN_ELSE] = {NULL, NULL, PREC_NONE},
     [TOKEN_FALSE] = {literal, NULL, PREC_NONE},
     [TOKEN_FOR] = {NULL, NULL, PREC_NONE},
+    [TOKEN_IN] = {NULL, NULL, PREC_NONE},  // [新增] 占位
     [TOKEN_FUN] = {NULL, NULL, PREC_NONE},
     [TOKEN_IF] = {NULL, NULL, PREC_NONE},
     [TOKEN_NIL] = {literal, NULL, PREC_NONE},
@@ -247,6 +315,8 @@ ParseRule rules[] = {
     [TOKEN_TRUE] = {literal, NULL, PREC_NONE},
     [TOKEN_VAR] = {NULL, NULL, PREC_NONE},
     [TOKEN_WHILE] = {NULL, NULL, PREC_NONE},
+    [TOKEN_CONTINUE] = {NULL, NULL, PREC_NONE},
+    [TOKEN_BREAK] = {NULL, NULL, PREC_NONE},
    
     // 新增 Token 规则占位
     [TOKEN_NEWLINE] = {NULL, NULL, PREC_NONE},
@@ -286,27 +356,23 @@ static void block() {
     while (!check(TOKEN_DEDENT) && !check(TOKEN_EOF)) {
         declaration();
     }
-    
-    // 修改：如果遇到EOF，直接返回（宽容文件末尾无额外DEDENT）
     if (check(TOKEN_EOF)) {
         return;
     }
-    
     consume(TOKEN_DEDENT, "Expect dedent at end of block.");
 }
-// [新增] if/else语句解析
 static void ifStatement() {
     expression();
     consume(TOKEN_COLON, "Expect ':' after condition.");
     consume(TOKEN_NEWLINE, "Expect newline after ':'.");
 
     int thenJump = emitJump(OP_JUMP_IF_FALSE);
-    emitByte(OP_POP); // 弹出条件（如果为true，继续执行块）
+    emitByte(OP_POP);
     block();
 
     int elseJump = emitJump(OP_JUMP);
     patchJump(thenJump);
-    emitByte(OP_POP); // 弹出条件（如果为false，跳过块）
+    emitByte(OP_POP);
 
     if (match(TOKEN_ELSE)) {
         consume(TOKEN_COLON, "Expect ':' after 'else'.");
@@ -314,6 +380,84 @@ static void ifStatement() {
         block();
     }
     patchJump(elseJump);
+}
+// [新增] while语句
+static void whileStatement() {
+    Loop loop;
+    beginLoop(&loop);
+    
+    expression();
+    consume(TOKEN_COLON, "Expect ':' after condition.");
+    consume(TOKEN_NEWLINE, "Expect newline after ':'.");
+    
+    loop.bodyJump = emitJump(OP_JUMP_IF_FALSE);
+    emitByte(OP_POP);
+    block();
+    emitLoop(loop.start);
+    
+    patchJump(loop.bodyJump);
+    emitByte(OP_POP);
+    
+    endLoop();
+}
+// [新增] for语句（简单范围：for var in start..end）
+static void forStatement() {
+    Loop loop;
+    beginLoop(&loop);
+    
+    consume(TOKEN_IDENTIFIER, "Expect variable name.");
+    Token varName = parser.previous;
+    
+    consume(TOKEN_IN, "Expect 'in' after variable.");
+    
+    expression(); // push start
+    
+    consume(TOKEN_DOT, "Expect '..' for range.");
+    consume(TOKEN_DOT, "Expect '..' for range.");
+    
+    expression(); // push end, stack: start, end
+    
+    consume(TOKEN_COLON, "Expect ':' after for.");
+    consume(TOKEN_NEWLINE, "Expect newline after ':'.");
+    
+    // 定义临时 end
+    ObjString* tempEndName = copyString(compilingVM, "temp_end", 8);
+    u8 tempEndIndex = makeConstant(OBJ_VAL(tempEndName));
+    emitBytes(OP_DEFINE_GLOBAL, tempEndIndex); // define temp_end = end, pop end, stack: start
+    
+    // 定义 var = start
+    ObjString* varNameStr = copyString(compilingVM, varName.start, varName.length);
+    u8 varIndex = makeConstant(OBJ_VAL(varNameStr));
+    emitBytes(OP_DEFINE_GLOBAL, varIndex); // define var = start, pop start, stack: empty
+    
+    // loop 开始
+    loop.start = currentChunk()->count;
+    
+    // 推入条件 var <= temp_end
+    emitBytes(OP_GET_GLOBAL, varIndex); // push var
+    emitBytes(OP_GET_GLOBAL, tempEndIndex); // push temp_end
+    emitByte(OP_LESS_EQUAL); // push bool (var <= temp_end)
+    
+    loop.bodyJump = emitJump(OP_JUMP_IF_FALSE);
+    
+    emitByte(OP_POP); // pop true
+    
+    block(); // 体
+    
+    // 增量 var += 1
+    emitBytes(OP_GET_GLOBAL, varIndex); // push var
+    emitConstant(NUMBER_VAL(1.0)); // push 1
+    emitByte(OP_ADD); // var +1
+    emitBytes(OP_SET_GLOBAL, varIndex); // set var
+    emitByte(OP_POP); // pop new var
+    
+    emitLoop(loop.start); // 回跳
+    
+    patchJump(loop.bodyJump);
+    
+    emitByte(OP_POP); // pop false
+    
+    endLoop();
 }
 static void varDeclaration() {
     consume(TOKEN_IDENTIFIER, "Expect variable name.");
@@ -346,14 +490,38 @@ static void statement() {
         printStatement();
     } else if (match(TOKEN_IF)) {
         ifStatement();
+    } else if (match(TOKEN_WHILE)) {
+        whileStatement();
+    } else if (match(TOKEN_FOR)) {
+        forStatement();
+    } else if (match(TOKEN_BREAK)) {
+        if (currentLoop == NULL) {
+            error("Break outside loop.");
+        }
+        currentLoop->breakJumps[currentLoop->breakCount++] = emitJump(OP_JUMP);
+        consumeLineEnd();
+    } else if (match(TOKEN_CONTINUE)) {
+        if (currentLoop == NULL) {
+            error("Continue outside loop.");
+        }
+        currentLoop->continueJumps[currentLoop->continueCount++] = emitJump(OP_LOOP); // 回跳到开始
+        consumeLineEnd();
     } else {
         expressionStatement();
     }
 }
+// src/vm/compiler.c
+
 static void declaration() {
-    // 处理多余的空行和意外缩进控制令牌（顶层应忽略延迟DEDENT）
-    while (match(TOKEN_NEWLINE) || match(TOKEN_INDENT) || match(TOKEN_DEDENT));
-    
+    // [修复] 仅跳过换行符。
+    // 绝对不能吞掉 TOKEN_DEDENT，因为它是用来通知外层 block() 结束当前作用域的。
+    // 也不能吞掉 TOKEN_INDENT，因为这通常意味着语法错误或新的块开始。
+    while (match(TOKEN_NEWLINE)); 
+
+    // 如果遇到 DEDENT，说明当前声明结束了（实际上是当前块结束了），
+    // 应该直接返回，让调用者（block函数）去处理这个 DEDENT。
+    if (check(TOKEN_DEDENT)) return;
+
     if (match(TOKEN_VAR)) {
         varDeclaration();
     } else {
@@ -362,8 +530,8 @@ static void declaration() {
   
     if (parser.panicMode) {
         parser.panicMode = false;
-        // 同步逻辑：寻找NEWLINE或关键字，并添加EOF检查
         while (parser.current.type != TOKEN_EOF) {
+            // ... (错误恢复代码保持不变) ...
             if (parser.previous.type == TOKEN_NEWLINE) return;
             switch (parser.current.type) {
                 case TOKEN_CLASS:
@@ -383,7 +551,6 @@ static void declaration() {
         }
     }
 }
-
 bool compile(VM* vm, const char* source, Chunk* chunk) {
     initScanner(&scanner, source);
     compilingChunk = chunk;
@@ -394,19 +561,19 @@ bool compile(VM* vm, const char* source, Chunk* chunk) {
   
     advance();
    
-    // 跳过文件开头的空行
     while (match(TOKEN_NEWLINE));
     
-    // 修改：使用check()检查EOF，避免match()消耗它并导致多余循环
     while (!check(TOKEN_EOF)) {
         declaration();
     }
     
-    // 后处理任何尾随NEWLINE，防止影响EOF
     while (match(TOKEN_NEWLINE));
     
     emitReturn();
   
     compilingVM = NULL;
+    #ifdef DEBUG_PRINT_CODE
+    disassembleChunk(chunk, "code");
+    #endif
     return !parser.hadError;
 }

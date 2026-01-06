@@ -1,9 +1,11 @@
 // src/binding/bind_video.c
 
 #include <stdio.h>
+#include "vm/memory.h"
 #include "vm/vm.h"
 #include "engine/video.h"
 #include "engine/timeline.h"
+
 // 供 main.c 调用
 Timeline* get_active_timeline(VM* vm) {
     return vm->active_timeline;

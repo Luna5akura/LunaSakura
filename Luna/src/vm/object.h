@@ -8,6 +8,7 @@ typedef struct VM VM;
 // --- Object Types ---
 typedef enum {
     OBJ_STRING,
+    OBJ_LIST, // [新增] 列表类型
     OBJ_NATIVE,
     OBJ_CLIP,
     OBJ_TIMELINE,
@@ -33,6 +34,12 @@ struct sObjString {
     u32 hash;
     char chars[];
 };
+typedef struct {
+    Obj obj;
+    u32 count;
+    u32 capacity;
+    Value* items; // 动态数组
+} ObjList;
 // --- Clip Object ---
 // Optimized Layout: Sorted by size to remove all internal padding.
 struct sObjClip {
@@ -67,10 +74,12 @@ typedef struct sObjTimeline {
 // --- Macros ---
 #define OBJ_TYPE(value) (AS_OBJ(value)->type)
 #define IS_STRING(value) isObjType(value, OBJ_STRING)
+#define IS_LIST(value) isObjType(value, OBJ_LIST)
 #define IS_NATIVE(value) isObjType(value, OBJ_NATIVE)
 #define IS_CLIP(value) isObjType(value, OBJ_CLIP)
 #define IS_TIMELINE(value) isObjType(value, OBJ_TIMELINE)
 #define AS_STRING(value) ((ObjString*)AS_OBJ(value))
+#define AS_LIST(value) ((ObjList*)AS_OBJ(value))
 #define AS_CSTRING(value) (((ObjString*)AS_OBJ(value))->chars)
 #define AS_NATIVE(value) (((ObjNative*)AS_OBJ(value))->function)
 #define AS_CLIP(value) ((ObjClip*)AS_OBJ(value))
@@ -83,6 +92,7 @@ static INLINE bool isObjType(Value value, ObjType type) {
 // 关键修改：所有对象创建函数现在必须接收 VM* 上下文
 ObjString* copyString(VM* vm, const char* chars, i32 length);
 ObjString* takeString(VM* vm, char* chars, i32 length);
+ObjList* newList(VM* vm);
 ObjNative* newNative(VM* vm, NativeFn function);
 ObjClip* newClip(VM* vm, ObjString* path);
 ObjTimeline* newTimeline(VM* vm, u32 width, u32 height, double fps);

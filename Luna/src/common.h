@@ -24,6 +24,7 @@ typedef int8_t i8;
 typedef int16_t i16;
 typedef int32_t i32;
 typedef int64_t i64;
+#define U8_COUNT 256
 
 // --- 性能优化宏 ---
 // 强制内联，减少函数调用开销
