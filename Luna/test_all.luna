@@ -1,0 +1,186 @@
+print "--- Testing Basics ---"
+print 1 + 2 # 3
+print 5 - 3 # 2
+print 4 * 2 # 8
+print 10 / 2 # 5
+print 10 / 3 # 3.333...
+print -5 # -5
+print !true # false
+print !false # true
+print nil # nil
+print true == true # true
+print 1 == 2 # false
+print 1 != 2 # true
+print 1 < 2 # true
+print 1 <= 1 # true
+print 2 > 1 # true
+print 2 >= 2 # true
+
+print "--- Testing Variables ---"
+var global_var = 42
+print global_var # 42
+global_var = 43
+print global_var # 43
+
+fun local_scope():
+    var local = 10
+    print local # 10
+    var global_var = 0  # shadows global
+    print global_var # 0
+
+local_scope()
+print global_var # 43 (global not affected)
+
+print "--- Testing Control Flow: If-Else ---"
+if true:
+    print "true branch" # true branch
+
+if false:
+    print "false branch"
+else:
+    print "else branch" # else branch
+
+var x = 5
+if x > 10:
+    print "greater"
+else:
+    print "non-positive"
+
+print "--- Testing Control Flow: While ---"
+var i = 0
+while i < 3:
+    print i # 0 1 2
+    i = i + 1
+
+print "--- Testing Loops with Break/Continue ---"
+var m = 0
+while true:
+    m = m + 1
+    print m
+    if m > 5:
+        break
+
+
+print "--- Testing Functions ---"
+fun add(a, b):
+    return a + b
+
+print add(1, 2) # 3
+
+fun no_return():
+    print "no return"
+
+no_return() # no return
+print no_return() # nil
+
+fun fib(n):
+    if n <= 1:
+        return n
+    return fib(n-1) + fib(n-2)
+
+print fib(5) # 5
+print fib(10) # 55 (test recursion)
+
+print "--- Testing Closures ---"
+fun make_counter():
+    var count = 0
+    fun counter():
+        count = count + 1
+        return count
+    return counter
+
+var c1 = make_counter()
+print c1() # 1
+print c1() # 2
+var c2 = make_counter()
+print c2() # 1
+print c1() # 3 (independent)
+
+fun outer():
+    var x = "outer"
+    fun inner():
+        print x # outer (captures)
+    inner()
+
+outer()
+
+print "--- Testing Classes ---"
+class Point:
+    init(x, y):
+        this.x = x
+        this.y = y
+
+    distance():
+        return this.x
+
+var p = Point(3, 4)
+print p.x # 3
+print p.y # 4
+print p.distance() # 5
+
+class ColoredPoint < Point:
+    init(x, y, color):
+        super.init(x, y)
+        this.color = color
+
+    describe():
+        print "Point at (" + this.x + ", " + this.y + ") color " + this.color
+
+var cp = ColoredPoint(1, 2, "red")
+print cp.distance() # 2.236... (inherited)
+cp.describe() # Point at (1, 2) color red
+
+class Override < Point:
+    distance():
+        return super.distance() * 2  # call super method
+
+var op = Override(3, 4)
+print op.distance() # 10
+
+print "--- Testing Lists ---"
+var l = [1, 2, 3]
+print len(l) # 3 (assume len native)
+print list_get(l, 0) # 1 (assume natives like dict)
+print list_get(l, 2) # 3
+list_put(l, 3, 4)  # append? or set index
+print len(l) # 4
+print list_has(l, 2) # true? if has element
+list_remove(l, 1)  # remove at index or value?
+print len(l) # 3
+# Assume similar natives as dict: list_append, list_get, list_set, list_remove, etc.
+var empty_list = []
+print len(empty_list) # 0
+
+print "--- Testing Dict ---"
+# (Your provided example here)
+var d = {1: "a", 2: "b"}
+print dict_get(d, 1) # a
+print dict_get(d, 2) # b
+print dict_get(d, 3) # nil
+dict_put(d, 3, "c")
+print dict_get(d, 3) # c
+print len(d) # 3
+print dict_has(d, 2) # true
+print dict_has(d, 4) # false
+var keys = dict_keys(d)
+print len(keys) # 3
+var values = dict_values(d)
+print len(values) # 3
+print dict_remove(d, 2) # b
+print dict_get(d, 2) # nil
+print len(d) # 2
+clear(d)
+print len(d) # 0
+# Test different key types
+var d2 = {"key": "value", 42: true, true: 3.14}
+print dict_get(d2, "key") # value
+print dict_get(d2, 42) # true
+print dict_get(d2, true) # 3.14
+print len(d2) # 3
+# Test empty dict
+var empty = {}
+print len(empty) # 0
+print dict_has(empty, 1) # false
+
+print "--- End of Tests ---"
+print "this is the last line!"

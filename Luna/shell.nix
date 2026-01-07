@@ -12,8 +12,8 @@ pkgs.mkShell {
   buildInputs = with pkgs; [
     ffmpeg      # 包含了 libavcodec, libavformat 等
     SDL2        # 窗口和上下文管理
-    libGL       # OpenGL 核心库 (Mesa)
-    # libglad   <-- 删除这一行，Nixpkgs 里没有这个
+    libGL       # OpenGL 核心库 (Me<tab>a)
+    nodejs_20 
   ];
 
   shellHook = ''

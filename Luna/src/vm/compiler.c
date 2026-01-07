@@ -2,13 +2,10 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include "common.h"
 #include "compiler.h"
 #include "scanner.h"
 #include "vm.h"
 #include "memory.h"
-#include "object.h"
 typedef struct {
     Token current;
     Token previous;
@@ -36,7 +33,7 @@ typedef struct {
 } ParseRule;
 typedef struct {
     Token name;
-    int depth;
+    i32 depth;
     bool isCaptured;
 } Local;
 typedef struct {
@@ -59,20 +56,20 @@ typedef struct Compiler {
     ObjFunction* function;
     FunctionType type;
     Local locals[U8_COUNT];
-    int localCount;
+    i32 localCount;
     Upvalue upvalues[U8_COUNT];
-    int scopeDepth;
+    i32 scopeDepth;
 } Compiler;
 typedef struct {
-    int enclosingLoopIndex;
-    int depth;
-    int start;
-    int bodyJump;
-    int scopeDepth;
-    int breakJumps[U8_COUNT];
-    int breakCount;
-    int continueJumps[U8_COUNT];
-    int continueCount;
+    i32 enclosingLoopIndex;
+    i32 depth;
+    i32 start;
+    i32 bodyJump;
+    i32 scopeDepth;
+    i32 breakJumps[U8_COUNT];
+    i32 breakCount;
+    i32 continueJumps[U8_COUNT];
+    i32 continueCount;
 } Loop;
 static Parser parser;
 static Scanner scanner;
@@ -138,19 +135,19 @@ static void emitConstant(Value value) {
         emitByte((u8)((constant >> 16) & 0xFF));
     }
 }
-static int emitJump(u8 instruction) {
+static i32 emitJump(u8 instruction) {
     emitByte(instruction); emitByte(0xff); emitByte(0xff);
     return currentChunk()->count - 2;
 }
-static void patchJump(int offset) {
-    int jump = currentChunk()->count - offset - 2;
+static void patchJump(i32 offset) {
+    i32 jump = currentChunk()->count - offset - 2;
     if (jump > UINT16_MAX) error("Too much code to jump over.");
     currentChunk()->code[offset] = (jump >> 8) & 0xff;
     currentChunk()->code[offset + 1] = jump & 0xff;
 }
-static void emitLoop(int loopStart) {
+static void emitLoop(i32 loopStart) {
     emitByte(OP_LOOP);
-    int offset = currentChunk()->count - loopStart + 2;
+    i32 offset = currentChunk()->count - loopStart + 2;
     if (offset > UINT16_MAX) error("Loop body too large.");
     emitByte((offset >> 8) & 0xff);
     emitByte(offset & 0xff);
@@ -207,7 +204,7 @@ static void parsePrecedence(Precedence precedence);
 static Token syntheticToken(const char* text) {
     Token token;
     token.start = text;
-    token.length = (int)strlen(text);
+    token.length = (i32)strlen(text);
     return token;
 }
 static bool identifiersEqual(Token* a, Token* b) {
@@ -224,8 +221,8 @@ static void addLocal(Token name) {
     local->depth = -1;
     local->isCaptured = false;
 }
-static int resolveLocal(Compiler* compiler, Token* name) {
-    for (int i = compiler->localCount - 1; i >= 0; i--) {
+static i32 resolveLocal(Compiler* compiler, Token* name) {
+    for (i32 i = compiler->localCount - 1; i >= 0; i--) {
         Local* local = &compiler->locals[i];
         if (identifiersEqual(name, &local->name)) {
             if (local->depth == -1) error("Can't read local variable in its own initializer.");
@@ -234,9 +231,9 @@ static int resolveLocal(Compiler* compiler, Token* name) {
     }
     return -1;
 }
-static int addUpvalue(Compiler* compiler, u8 index, bool isLocal) {
-    int upvalueCount = compiler->function->upvalueCount;
-    for (int i = 0; i < upvalueCount; i++) {
+static i32 addUpvalue(Compiler* compiler, u8 index, bool isLocal) {
+    i32 upvalueCount = compiler->function->upvalueCount;
+    for (i32 i = 0; i < upvalueCount; i++) {
         Upvalue* upvalue = &compiler->upvalues[i];
         if (upvalue->index == index && upvalue->isLocal == isLocal) {
             return i;
@@ -250,14 +247,14 @@ static int addUpvalue(Compiler* compiler, u8 index, bool isLocal) {
     compiler->upvalues[upvalueCount].index = index;
     return compiler->function->upvalueCount++;
 }
-static int resolveUpvalue(Compiler* compiler, Token* name) {
+static i32 resolveUpvalue(Compiler* compiler, Token* name) {
     if (compiler->enclosing == NULL) return -1;
-    int local = resolveLocal(compiler->enclosing, name);
+    i32 local = resolveLocal(compiler->enclosing, name);
     if (local != -1) {
         compiler->enclosing->locals[local].isCaptured = true;
         return addUpvalue(compiler, (u8)local, true);
     }
-    int upvalue = resolveUpvalue(compiler->enclosing, name);
+    i32 upvalue = resolveUpvalue(compiler->enclosing, name);
     if (upvalue != -1) {
         return addUpvalue(compiler, (u8)upvalue, false);
     }
@@ -266,7 +263,7 @@ static int resolveUpvalue(Compiler* compiler, Token* name) {
 static void declareVariable() {
     if (current->scopeDepth == 0) return;
     Token* name = &parser.previous;
-    for (int i = current->localCount - 1; i >= 0; i--) {
+    for (i32 i = current->localCount - 1; i >= 0; i--) {
         Local* local = &current->locals[i];
         if (local->depth != -1 && local->depth < current->scopeDepth) break;
         if (identifiersEqual(name, &local->name)) {
@@ -284,7 +281,7 @@ static void defineVariable(u8 global) {
 }
 static void namedVariable(Token name, bool canAssign) {
     u8 getOp, setOp;
-    int arg = resolveLocal(current, &name);
+    i32 arg = resolveLocal(current, &name);
     if (arg != -1) {
         getOp = OP_GET_LOCAL;
         setOp = OP_SET_LOCAL;
@@ -414,7 +411,7 @@ static void super_(bool canAssign) {
     consume(TOKEN_IDENTIFIER, "Expect superclass method name.");
     u8 name = identifierConstant(&parser.previous);
     namedVariable(syntheticToken("this"), false);
-   
+  
     if (match(TOKEN_LEFT_PAREN)) {
         u8 argCount = argumentList();
         namedVariable(syntheticToken("super"), false);
@@ -510,13 +507,13 @@ static void function(FunctionType type) {
     consume(TOKEN_COLON, "Expect ':'.");
     consume(TOKEN_NEWLINE, "Expect newline.");
     block();
-   
+  
     // 获取编译好的函数对象
     ObjFunction* func = endCompiler();
-   
+  
     // [关键修复] 使用当前的 compiler 结构体（它还在栈上）来生成指令
     emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(func)));
-    for (int i = 0; i < func->upvalueCount; i++) {
+    for (i32 i = 0; i < func->upvalueCount; i++) {
         emitByte(compiler.upvalues[i].isLocal ? 1 : 0);
         emitByte(compiler.upvalues[i].index);
     }
@@ -528,7 +525,7 @@ static void method() {
     if (parser.previous.length == 4 && memcmp(parser.previous.start, "init", 4) == 0) {
         type = TYPE_INITIALIZER;
     }
-   
+  
     // [修改] 只需要调用 function，它会自己发射 OP_CLOSURE
     function(type);
     emitBytes(OP_METHOD, constant);
@@ -570,10 +567,10 @@ static void funDeclaration() {
     u8 global = identifierConstant(&parser.previous);
     declareVariable();
     if (current->scopeDepth > 0) current->locals[current->localCount - 1].depth = current->scopeDepth;
-   
+  
     // [修改] 直接调用
     function(TYPE_FUNCTION);
-   
+  
     defineVariable(global);
 }
 static void varDeclaration() {
@@ -593,13 +590,13 @@ static void beginLoop(Loop* loop) {
     loop->depth = 0;
     currentLoop = loop;
 }
-static void patchLoopJumps(Loop* loop, int type) {
-    int* jumps = (type == TOKEN_BREAK) ? loop->breakJumps : loop->continueJumps;
-    int count = (type == TOKEN_BREAK) ? loop->breakCount : loop->continueCount;
-    int target = (type == TOKEN_BREAK) ? currentChunk()->count : loop->start;
-    for (int i = 0; i < count; i++) {
-        int offset = jumps[i];
-        int jump;
+static void patchLoopJumps(Loop* loop, i32 type) {
+    i32* jumps = (type == TOKEN_BREAK) ? loop->breakJumps : loop->continueJumps;
+    i32 count = (type == TOKEN_BREAK) ? loop->breakCount : loop->continueCount;
+    i32 target = (type == TOKEN_BREAK) ? currentChunk()->count : loop->start;
+    for (i32 i = 0; i < count; i++) {
+        i32 offset = jumps[i];
+        i32 jump;
         if (type == TOKEN_BREAK) jump = target - offset - 2;
         else jump = offset + 2 - target;
         if (jump > UINT16_MAX || jump < 0) error("Loop jump too large.");
@@ -618,10 +615,10 @@ static void ifStatement() {
     expression();
     consume(TOKEN_COLON, "Expect ':'.");
     consume(TOKEN_NEWLINE, "Expect newline.");
-    int thenJump = emitJump(OP_JUMP_IF_FALSE);
+    i32 thenJump = emitJump(OP_JUMP_IF_FALSE);
     emitByte(OP_POP);
     block();
-    int elseJump = emitJump(OP_JUMP);
+    i32 elseJump = emitJump(OP_JUMP);
     patchJump(thenJump);
     emitByte(OP_POP);
     if (match(TOKEN_ELSE)) {

@@ -1,158 +1,191 @@
-Depending:
+- **优先级考虑**：先完善核心语言特性（方向1），因为它们是脚本编写的基础，能提升开发效率和用户体验。然后逐步实现应用层功能（方向2），如预览、音频和动画。这些功能依赖于语言特性（例如，异常处理用于错误恢复，lambda用于简洁动画表达式）。
+- **阶段划分**：分为5个阶段，每个阶段聚焦3-5个关键任务。每个任务包括：
+  - **描述**：简要说明功能和益处。
+  - **优先级**：高/中/低（基于对整体项目的贡献）。
+  - **涉及文件**：最小化参考列表，聚焦核心修改点。
+  - **预计时间**：假设中等经验开发者，单位为“人日”（可根据实际情况调整）。
+  - **依赖**：前置条件。
+- **总体时间线**：假设全职开发，预计总时长8-12周。每个阶段后进行测试和重构。
+- **风险与建议**：关注垃圾回收（GC）和性能优化（如在动画系统中避免热路径瓶颈）。使用DEBUG宏测试新特性。优先实现MVP（最小可用产品），然后迭代。
 
-```
-common.h
-value.h
-chunk.h
-table.h
-scanner.h
-object.h
-memory.h
-vm.h
-timeline.h
-value.c
-chunk.c
-memory.c
-table.c
-object.c
-scanner.c
-compiler.h
-compiler.c
-vm.c
-video.h
-bind_video.c
-video_export.c
-video_player.c
-video_probe.c
-timeline.c
-compositor.h
-compositor.c
-main.c
-```
-
-### ⚠️ 发现的技术不一致 (Technical Inconsistencies)
-
-**1. vm 上下文管理的精神分裂 (schizophrenic context)**
-*   **现象**: `src/vm/vm.h` 中的 api 设计为支持多实例（如 `interpret(vm* vm, ...)` 接收指针），看起来很现代。
-*   **冲突**: 但 `src/vm/object.c`、`src/vm/memory.c` 和 `src/binding/bind_video.c` 内部却硬编码使用了 `extern vm vm;`（全局变量）。
-*   **后果**: 目前虽然 api 看着像面向对象的，但实际上底层还是单例模式。如果尝试创建两个 vm，程序状态会乱套。
-
-**2. 内存分配器的割裂 (allocator split)**
-*   **现象**: vm 层 (`vm/`) 严格使用 `reallocate` 函数，这不仅负责分配，还负责**gc 内存统计**。
-*   **冲突**: 引擎层 (`engine/`)，如 `compositor.c` 和 `timeline.c`，直接使用了标准库的 `malloc/calloc/free`。
-*   **后果**: 视频处理消耗了大量内存（如帧缓冲区、解码器），但 vm 的 gc 系统对此一无所知。这会导致 vm 以为内存很空闲而不触发 gc，最终导致物理内存耗尽被系统杀掉。
-
-**3. 基础类型定义的混乱 (type chaos)**
-*   **现象**: `common.h` 精心地定义了跨平台的 `u8`, `u32`, `i32`, `f32`。
-*   **冲突**: `engine/` 目录下的代码（特别是 `compositor.c` 和 `video_player.c`）混合使用了原生 c 类型 `int`, `unsigned char`, `uint8_t`。
-*   **后果**: 代码风格不统一，且在不同编译器下的位宽保证可能失效。
-
-**4. opengl 上下文的重复初始化 (context collision)**
-*   **现象**: `main.c` 初始化了 sdl 和 opengl (glad)。
-*   **冲突**: `video_player.c` 中的 `play_video_clip` 函数**再次**调用了 `sdl_init` 并创建了**新的**窗口和 gl context。
-*   **后果**: 虽然目前 `main.c` 还没调用 `play_video_clip`，但如果未来作为“预览子窗口”调用它，会导致 glad 的函数指针状态错乱（glad 是进程全局的），可能引发渲染崩溃。
-
-**5. 资源句柄的浪费 (resource duplication)**
-*   **现象**: `compositor.c` 为每个 clip 实例创建一个 `clipdecoder`。
-*   **冲突**: 如果时间轴上有 50 个切片都来自同一个 `video.mp4`，引擎会打开这个文件 50 次 (`avformat_open_input`)。
-*   **后果**: 极易触发生产环境的 "too many open files" 错误，且浪费大量内存。
+### **总体开发原则**
+- **测试策略**：每个阶段结束时，编写单元测试脚本（使用新语言特性）和集成测试（例如，预览一个简单视频）。
+- **版本控制**：每个阶段提交一个里程碑分支。
+- **工具**：使用Valgrind检查内存泄漏，GDB调试虚拟机。
+- **文档**：更新README，添加新API示例。
 
 ---
 
-### 📄 更新后的项目规划文档 (v0.6.0)
+### **阶段0: 基础准备与修复 (Preparation & Fixes)**
+**目标**：修复现有代码问题，确保稳定基础。整合方向1的简单修复（如类型检查增强）。
+**预计时长**：3-5人日。
+1. **修复类型检查与运行时错误**（方向1: 类型错误处理）。
+   - 描述：增强IS_宏和runtimeError，支持更多类型检查（如列表同质性）。
+   - 优先级：高（防止崩溃）。
+   - 涉及文件：`src/vm/vm.c` (runtimeError增强), `src/vm/object.c` (typesMatch函数)。
+   - 预计时间：1人日。
+   - 依赖：无。
 
-以下是整合了上述发现的更新版文档。
+2. **添加Unicode字符串支持**（方向1: Unicode）。
+   - 描述：字符串处理从ASCII升级到UTF-8，支持国际字符。
+   - 优先级：中。
+   - 涉及文件：`src/vm/object.c` (hashString/copyString调整), `src/vm/scanner.c` (字符串扫描)。
+   - 预计时间：1人日。
+   - 依赖：无。
 
-# 🌙 Luna Video Engine - 开发规划与架构文档
-
-**版本**: 0.6.0 (Beta - OpenGL Integration)
-**日期**: 2024-05
-**状态**: 核心渲染管线已迁移至 GPU，支持 Alpha 混合与全工程导出。
-
----
-
-## 1. 当前完成情况 (Current Status)
-
-### ✅ 已完成功能
-1.  **脚本虚拟机 (VM)**: 完整的编译、执行、GC 环境（支持 NaN Boxing）。
-2.  **数据结构**: 多轨道时间轴 (Timeline)，基于动态数组优化。
-3.  **渲染管线 (OpenGL)**:
-    *   基于 Shader 的 YUV420P -> RGB 转换。
-    *   **Alpha Blending**: 支持图层叠加与半透明。
-    *   硬件加速的 Transform (位移、缩放)。
-4.  **工程导出**: 支持将渲染结果编码为 H.264 `.mp4` 文件。
-5.  **热重载 (Hot-Reload)**: 监听脚本文件修改，自动释放旧资源并重编译。
-
-### 🚧 待解决的技术债务 (Refactoring Needed)
-**这是当前的首要任务（v0.6.1 目标）。** 必须在添加复杂新功能前统一底层设施。
-
-#### A. 内存管理统一 (Critical)
-目前 Engine 层绕过了 VM 的 GC 统计，这是危险的。
-*   **目标**: 所有堆内存分配必须经过 `vm/memory.h` 中的 `reallocate`。
-*   **执行**:
-    *   修改 `src/engine/compositor.c`: 将 `malloc/calloc` 替换为 `ALLOCATE` 宏。
-    *   修改 `src/engine/timeline.c`: 轨道和 Clip 的数组扩容使用 `GROW_ARRAY` 宏。
-    *   *难点*: Engine 层需要访问 `VM` 实例。暂时方案是在 `common.h` 或对应 `.c` 中引入 `extern VM vm;`，长期方案是重构 Engine 初始化函数以接收 Context。
-
-#### B. 类型定义标准化
-*   **目标**: 消除代码库中的 `int`, `unsigned char`, `uint8_t`。
-*   **执行**:
-    *   全局搜索替换为 `common.h` 中的 `i32`, `u8`, `u32`, `f32`。
-    *   涉及文件: `compositor.c`, `video_player.c`, `video_export.c`, `timeline_export.c`.
-
-#### C. 上下文管理修复
-*   **目标**: 明确 `video_player.c` 的定位。
-*   **执行**:
-    *   如果它仅用于调试 CLI，保持原样但增加注释。
-    *   如果它是引擎的一部分，**移除**其内部的 `SDL_Init` 和 `SDL_CreateWindow`，改为接收现有的 Framebuffer 或 Texture 进行渲染。
+3. **GC调优与调试日志**（通用）。
+   - 描述：添加DEBUG_LOG_GC，调整nextGC阈值。
+   - 优先级：高。
+   - 涉及文件：`src/vm/memory.c` (collectGarbage日志)。
+   - 预计时间：1人日。
+   - 依赖：无。
 
 ---
 
-## 2. 未来功能规划 (Roadmap)
+### **阶段1: 核心语言增强 (Core Language Improvements)**
+**目标**：实现方向1的关键特性，提升脚本表达力（如简化动画表达式）。为后续Roadmap铺路。
+**预计时长**：10-15人日。
+1. **添加Lambda/匿名函数**（方向1: Lambda）。
+   - 描述：支持`lambda x: x+1`，通过ObjClosure实现。益处：简洁回调（如动画缓动函数）。
+   - 优先级：高。
+   - 涉及文件：`src/vm/compiler.c` (添加语法规则), `src/vm/scanner.c` (关键字), `src/vm/vm.c` (闭包执行)。
+   - 预计时间：3人日。
+   - 依赖：阶段0。
 
-以下功能按优先级排序。**最小化参考文件列表**旨在帮助开发者聚焦修改点。
+2. **三元运算符**（方向1: 三元运算符）。
+   - 描述：支持`a if cond else b`。益处：简化条件表达式。
+   - 优先级：中。
+   - 涉及文件：`src/vm/compiler.c` (parsePrecedence添加规则), `src/vm/chunk.h` (新OP码如OP_TERNARY)。
+   - 预计时间：2人日。
+   - 依赖：阶段0。
 
-### 🚀 阶段一：预览体验增强 (Preview Enhancements)
+3. **基本异常处理 (Try/Except)**（方向1: Try/Except）。
+   - 描述：实现简单`try: ... except: ...`，捕获runtimeError。益处：视频加载失败时优雅处理。
+   - 优先级：高（提升鲁棒性）。
+   - 涉及文件：`src/vm/compiler.c` (新语句解析), `src/vm/vm.c` (异常栈帧处理), `src/vm/chunk.h` (OP_TRY/OP_THROW)。
+   - 预计时间：4人日。
+   - 依赖：阶段0。
 
-#### 1. 预览时间范围选择 (Loop Range)
-**描述**: 允许脚本设置循环播放区间，方便调试特定片段。
-*   **脚本 API**: `setPreviewRange(start, end)`
-*   **🛠️ 涉及文件** :
-    1.  `src/engine/timeline.h`: `Timeline` 结构体增加 `double loop_start, loop_end;`。
-    2.  `src/binding/bind_video.c`: 实现 `nativeSetPreviewRange` 绑定。
-    3.  `src/main.c`: **主循环逻辑**。在 `current_time` 累加后，增加边界检查：`if (time > loop_end) time = loop_start;`。
-
-#### 2. 预览视口控制 (Viewport Control)
-**描述**: 支持缩放预览窗口大小，适应不同分辨率屏幕。
-*   **脚本 API**: `setPreviewScale(0.5)`
-*   **🛠️ 涉及文件**:
-    1.  `src/main.c`:
-        *   修改窗口创建尺寸逻辑 `win_w = tl->width * scale`。
-        *   修改 `compositor_blit_to_screen` 调用参数，确保 Blit 到屏幕时保持宽高比或填充。
-    2.  `src/engine/compositor.c`: 确保 `glViewport` 在 Blit 阶段正确设置。
-
----
-
-### 🔊 阶段二：音频系统 (Audio System)
-
-#### 1. 基础混音 (Basic Mixing)
-**描述**: 实现视频音频流的解码与叠加。
-*   **🛠️ 涉及文件**:
-    1.  `src/engine/timeline.h`: `TimelineClip` 增加音频流索引标记。
-    2.  `src/engine/compositor.c`:
-        *   `ClipDecoder` 结构体增加 `AVCodecContext* audio_dec_ctx`。
-        *   新增 `compositor_mix_audio(time, out_buffer, sample_count)` 函数。
-    3.  `src/main.c`: 启用 `SDL_Init(SDL_INIT_AUDIO)`，配置 `SDL_AudioSpec` 回调函数指向混音器。
+4. **默认/关键字参数**（方向1: 默认参数、关键字参数）。
+   - 描述：函数定义支持`def foo(x=1)`，调用支持`foo(x=2)`。
+   - 优先级：中。
+   - 涉及文件：`src/vm/compiler.c` (function参数解析), `src/vm/vm.c` (callValue处理)。
+   - 预计时间：3人日。
+   - 依赖：Lambda实现。
 
 ---
 
-### 🎨 阶段三：动画系统 (Animation System)
+### **阶段2: 预览体验增强 (Preview Enhancements)**
+**目标**：实现方向2的阶段一。整合语言特性（如用lambda定义自定义预览逻辑）。
+**预计时长**：7-10人日。
+1. **预览时间范围选择**（方向2: Loop Range）。
+   - 描述：API `setPreviewRange(start, end)`。
+   - 优先级：高。
+   - 涉及文件：`src/engine/timeline.h` (结构体字段), `src/binding/bind_video.c` (nativeSetPreviewRange), `src/main.c` (主循环边界检查)。
+   - 预计时间：2人日。
+   - 依赖：阶段1（异常处理用于无效范围）。
 
-#### 1. 属性关键帧 (Property Keyframes)
-**描述**: 让 `x`, `y`, `opacity`, `scale` 随时间变化。
-*   **脚本 API**: `animate(clip, "opacity", 0.0, 1.0, 0, 2.0)` (从0到1，耗时2秒)
-*   **架构变更**: `TimelineClip` 中的 `Transform` 属性需要从 `float` 变为 `KeyframeTrack` 结构。
-*   **🛠️ 涉及文件**:
-    1.  `src/engine/timeline.h`: 定义 `Keyframe` 和 `PropertyTrack` 结构。修改 `Transform` 结构。
-    2.  `src/engine/timeline.c`: 实现关键帧的插入与二分查找逻辑。
-    3.  `src/engine/compositor.c`: **渲染热路径修改**。在 `compositor_render` 循环中，不再直接读取 `clip->transform.x`，而是调用 `get_property_value(clip->transform.x_track, time)` 计算当前值。
+2. **预览视口控制**（方向2: Viewport Control）。
+   - 描述：API `setPreviewScale(factor)`。
+   - 优先级：高。
+   - 涉及文件：`src/main.c` (窗口大小逻辑), `src/engine/compositor.c` (glViewport调整)。
+   - 预计时间：2人日。
+   - 依赖：阶段1。
+
+3. **集成语言特性测试**（整合方向1）。
+   - 描述：用新特性编写预览脚本示例（如lambda过滤时间范围）。
+   - 优先级：中。
+   - 涉及文件：无主要修改；编写测试脚本。
+   - 预计时间：2人日。
+   - 依赖：本阶段其他任务。
+
+4. **运算符重载初步**（方向1: 运算符重载）。
+   - 描述：类支持`__add__`等方法。益处：自定义时间线运算。
+   - 优先级：中（为动画铺路）。
+   - 涉及文件：`src/vm/vm.c` (binary操作检查方法), `src/vm/compiler.c` (方法绑定)。
+   - 预计时间：2人日。
+   - 依赖：阶段1。
+
+---
+
+### **阶段3: 音频系统 (Audio System)**
+**目标**：实现方向2的阶段二。添加音频相关语言特性（如异常捕获解码错误）。
+**预计时长**：10-14人日。
+1. **基础混音**（方向2: Basic Mixing）。
+   - 描述：解码并叠加音频流。
+   - 优先级：高。
+   - 涉及文件：`src/engine/timeline.h` (音频索引), `src/engine/compositor.c` (mix_audio函数), `src/main.c` (SDL音频初始化)。
+   - 预计时间：4人日。
+   - 依赖：阶段2。
+
+2. **音频相关API**（扩展）。
+   - 描述：`setVolume(clip, level)` 等。
+   - 优先级：中。
+   - 涉及文件：`src/binding/bind_video.c` (新native函数), `src/engine/video.h` (扩展VideoMeta)。
+   - 预计时间：2人日。
+   - 依赖：本阶段混音。
+
+3. **推导式初步**（方向1: 推导式）。
+   - 描述：支持列表推导`[x*2 for x in lst]`。益处：快速生成音频样本列表。
+   - 优先级：中。
+   - 涉及文件：`src/vm/compiler.c` (新语法规则), `src/vm/scanner.c` (for/in支持)。
+   - 预计时间：3人日。
+   - 依赖：阶段1（for循环）。
+
+4. **字符串插值**（方向1: 字符串插值）。
+   - 描述：支持f-strings。益处：动态音频路径生成。
+   - 优先级：低。
+   - 涉及文件：`src/vm/scanner.c` (f"..."语法), `src/vm/compiler.c` (表达式插值)。
+   - 预计时间：2人日。
+   - 依赖：阶段1。
+
+---
+
+### **阶段4: 动画系统与其他增强 (Animation System & Polish)**
+**目标**：实现方向2的阶段三，并完成剩余高优先级语言特性。最终优化。
+**预计时长**：12-18人日。
+1. **属性关键帧**（方向2: Property Keyframes）。
+   - 描述：API `animate(clip, prop, from, to, start, duration)`。
+   - 优先级：高。
+   - 涉及文件：`src/engine/timeline.h` (KeyframeTrack结构), `src/engine/timeline.c` (插入/查找), `src/engine/compositor.c` (渲染时计算值)。
+   - 预计时间：5人日。
+   - 依赖：阶段3。
+
+2. **动画缓动函数**（扩展）。
+   - 描述：支持lambda作为缓动函数。
+   - 优先级：中。
+   - 涉及文件：`src/engine/timeline.c` (get_property_value调用lambda)。
+   - 预计时间：2人日。
+   - 依赖：本阶段关键帧 + 阶段1 Lambda。
+
+3. **模块导入**（方向1: 导入语句）。
+   - 描述：支持`import mod`。益处：分离动画脚本。
+   - 优先级：高。
+   - 涉及文件：`src/vm/compiler.c` (import解析), `src/vm/vm.c` (模块加载执行)。
+   - 预计时间：4人日。
+   - 依赖：阶段1。
+
+4. **内置方法扩展**（方向1: 内置方法）。
+   - 描述：为列表/字符串添加`sort`、`split`等。
+   - 优先级：中。
+   - 涉及文件：`src/binding/bind_std.c` (新native函数), `src/vm/object.c` (方法绑定)。
+   - 预计时间：2人日。
+   - 依赖：阶段3推导式。
+
+5. **最终优化与测试**（通用）。
+   - 描述：性能调优、文档更新。
+   - 优先级：高。
+   - 涉及文件：所有（重点`src/vm/memory.c` GC）。
+   - 预计时间：3人日。
+   - 依赖：所有阶段。
+
+---
+
+**总结与调整建议**：
+- **总预计时长**：42-62人日（约2-3个月）。
+- **里程碑**：阶段1后发布v0.1（语言稳定）；阶段4后发布v1.0（完整功能）。
+- **潜在风险**：动画系统的热路径性能瓶颈——在阶段4前基准测试渲染循环。
+- **灵活性**：如果资源有限，优先高优先级任务。方向1的低优先级（如枚举）可推迟到维护阶段。
+- **下一步**：从阶段0开始，设置Git仓库，并编写一个简单测试脚本验证每个阶段。
+
+如果需要更详细的任务分解、代码片段或调整优先级，请提供反馈！

@@ -1,0 +1,26 @@
+{
+  "name": "luna",
+  "publisher": "Luna5akura",
+  "displayName": "LunaCode",
+  "description": "Syntax Highlighter for luna language",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.105.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "luna",
+      "aliases": ["Luna", "luna"],
+      "extensions": [".luna"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "luna",
+      "scopeName": "source.luna",
+      "path": "./syntaxes/luna.tmLanguage.json"
+    }]
+  }
+}

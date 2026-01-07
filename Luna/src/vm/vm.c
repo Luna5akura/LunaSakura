@@ -293,7 +293,7 @@ static InterpretResult run(VM* vm) {
             case OP_LOOP: { u16 offset = READ_SHORT(); ip -= offset; break; }
             case OP_INVOKE: {
                 ObjString* name = READ_STRING();
-                int argCount = READ_BYTE();
+                i32 argCount = READ_BYTE();
                 Value receiver = peek(vm, argCount);
                 if (!IS_INSTANCE(receiver)) {
                     frame->ip = ip;
@@ -321,7 +321,7 @@ static InterpretResult run(VM* vm) {
             }
             case OP_SUPER_INVOKE: {
                 ObjString* name = READ_STRING();
-                int argCount = READ_BYTE();
+                i32 argCount = READ_BYTE();
                 ObjClass* superclass = AS_CLASS(pop(vm));
                
                 // [修复] 使用 peek 获取参数下方的 receiver，而不是 pop 掉最后一个参数

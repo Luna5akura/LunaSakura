@@ -1,6 +1,5 @@
-// src/vm/object.h
-
 #pragma once
+
 #include "chunk.h"
 #include "table.h"
 
@@ -64,7 +63,7 @@ typedef struct {
 typedef struct {
     Obj obj;
     i32 arity;
-    int upvalueCount; // [新增] 该函数需要捕获多少个上值
+    i32 upvalueCount; // [新增] 该函数需要捕获多少个上值
     Chunk chunk;
     ObjString* name;
 } ObjFunction;
@@ -80,7 +79,7 @@ struct sObjClosure {
     Obj obj;
     ObjFunction* function;
     ObjUpvalue** upvalues; // 指针数组
-    int upvalueCount;
+    i32 upvalueCount;
 };
 // --- Clip Object ---
 struct sObjClip {

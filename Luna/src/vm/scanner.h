@@ -1,5 +1,3 @@
-// src/vm/scanner.h
-
 #pragma once
 #include "common.h"
 typedef enum {
@@ -42,13 +40,12 @@ typedef struct {
     const char* start;
     const char* current;
     i32 line;
- 
     // [新增] 缩进控制状态
-    int indentStack[MAX_INDENT_STACK];
-    int indentTop;
-    int pendingDedents;
+    i32 indentStack[MAX_INDENT_STACK];
+    i32 indentTop;
+    i32 pendingDedents;
     bool isAtStartOfLine;
-    int parenDepth; // 用于处理括号内的换行（忽略）
+    i32 parenDepth; // 用于处理括号内的换行（忽略）
 } Scanner;
 void initScanner(Scanner* scanner, const char* source);
 Token scanToken(Scanner* scanner);

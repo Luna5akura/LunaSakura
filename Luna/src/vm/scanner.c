@@ -146,7 +146,7 @@ Token scanToken(Scanner* scanner) {
     for (;;) {
         // 如果在行首，计算缩进
         if (scanner->isAtStartOfLine) {
-            int indent = 0;
+            i32 indent = 0;
             // 计算空格 (Tab算4个空格，建议禁止混用)
             while (*current == ' ' || *current == '\t') {
                 if (*current == '\t') indent += 4;
@@ -160,7 +160,7 @@ Token scanToken(Scanner* scanner) {
                 // 有效代码行开始，检查缩进
                 scanner->isAtStartOfLine = false;
              
-                int currentIndent = scanner->indentStack[scanner->indentTop];
+                i32 currentIndent = scanner->indentStack[scanner->indentTop];
                 if (indent > currentIndent) {
                     if (scanner->indentTop >= MAX_INDENT_STACK - 1)
                         return errorToken("Too much indentation.", line);
