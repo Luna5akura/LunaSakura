@@ -22,15 +22,18 @@ typedef enum {
     TOKEN_FOR, TOKEN_FUN, TOKEN_IF, TOKEN_NIL, TOKEN_OR,
     TOKEN_PRINT, TOKEN_RETURN, TOKEN_SUPER, TOKEN_THIS,
     TOKEN_TRUE, TOKEN_VAR, TOKEN_WHILE,
-   
+  
     // 循环控制
     TOKEN_CONTINUE, TOKEN_BREAK, TOKEN_IN,
     // Lambda关键字
-    TOKEN_LAM,  // 新增: lam
+    TOKEN_LAM, // 新增: lam
     // 格式控制
     TOKEN_NEWLINE,
     TOKEN_INDENT,
     TOKEN_DEDENT,
+    // 异常处理
+    TOKEN_TRY,
+    TOKEN_EXCEPT,
     TOKEN_ERROR, TOKEN_EOF
 } TokenType;
 typedef struct {
@@ -45,12 +48,12 @@ typedef struct {
     const char* start;
     const char* current;
     u32 line;
-   
+  
     // 缩进控制状态
     u16 indentStack[MAX_INDENT_STACK]; // 使用 u16 节省空间 (缩进层级很少超过 65535 空格)
     i32 indentTop;
     i32 pendingDedents;
-   
+  
     bool isAtStartOfLine;
     i32 parenDepth; // 括号深度，用于忽略括号内的换行
 } Scanner;

@@ -56,7 +56,7 @@ typedef struct Compiler {
     struct Compiler* enclosing;
     ObjFunction* function;
     FunctionType type;
-   
+  
     Local locals[U8_COUNT];
     i32 localCount;
     Upvalue upvalues[U8_COUNT];
@@ -68,7 +68,7 @@ typedef struct Loop {
     i32 start;
     i32 bodyJump; // 用于 while 的条件检查跳转
     i32 scopeDepth;
-   
+  
     // Break 补丁列表
     i32 breakJumps[U8_COUNT];
     i32 breakCount;
@@ -90,15 +90,15 @@ static Chunk* currentChunk() {
 static void errorAt(Token* token, const char* message) {
     if (parser.panicMode) return;
     parser.panicMode = true;
-   
+  
     fprintf(stderr, "[line %d] Error", token->line);
-   
+  
     if (token->type == TOKEN_EOF) {
         fprintf(stderr, " at end");
     } else if (token->type != TOKEN_ERROR) {
         fprintf(stderr, " at '%.*s'", token->length, token->start);
     }
-   
+  
     fprintf(stderr, ": %s\n", message);
     parser.hadError = true;
 }
@@ -110,7 +110,7 @@ static void errorAtCurrent(const char* message) {
 }
 static void advance() {
     parser.previous = parser.current;
-   
+  
     for (;;) {
         parser.current = scanToken(&scanner);
         if (parser.current.type != TOKEN_ERROR) break;
@@ -190,7 +190,7 @@ static void emitLoop(i32 loopStart) {
     emitByte(OP_LOOP);
     i32 offset = currentChunk()->count - loopStart + 2;
     if (offset > UINT16_MAX) error("Loop body too large.");
-   
+  
     emitByte((offset >> 8) & 0xff);
     emitByte(offset & 0xff);
 }
@@ -201,19 +201,19 @@ static void initCompiler(Compiler* compiler, VM* vm, FunctionType type) {
     compiler->type = type;
     compiler->localCount = 0;
     compiler->scopeDepth = 0;
-   
+  
     compiler->function = newFunction(vm);
-   
+  
     current = compiler;
-   
+  
     if (type != TYPE_SCRIPT) {
         compiler->function->name = copyString(compilingVM, parser.previous.start, parser.previous.length);
     }
-   
+  
     Local* local = &current->locals[current->localCount++];
     local->depth = 0;
     local->isCaptured = false;
-   
+  
     if (type == TYPE_METHOD || type == TYPE_INITIALIZER) {
         local->name.start = "this";
         local->name.length = 4;
@@ -225,14 +225,14 @@ static void initCompiler(Compiler* compiler, VM* vm, FunctionType type) {
 static ObjFunction* endCompiler() {
     emitReturn();
     ObjFunction* function = current->function;
-   
+  
 #ifdef DEBUG_PRINT_CODE
     if (!parser.hadError) {
         printf("---DISASSEMBLE CHUNK---\n")
         disassembleChunk(currentChunk(), function->name != NULL ? function->name->chars : "<script>");
     }
 #endif
-   
+  
     current = current->enclosing;
     return function;
 }
@@ -462,11 +462,11 @@ static void super_(bool canAssign) {
     UNUSED(canAssign);
     if (currentClass == NULL) error("Can't use 'super' outside of a class.");
     else if (!currentClass->hasSuperclass) error("Can't use 'super' in a class with no superclass.");
-   
+  
     consume(TOKEN_DOT, "Expect '.' after 'super'.");
     consume(TOKEN_IDENTIFIER, "Expect superclass method name.");
     u8 name = identifierConstant(&parser.previous);
-   
+  
     namedVariable(syntheticToken("this"), false);
     if (match(TOKEN_LEFT_PAREN)) {
         u8 argCount = argumentList();
@@ -539,7 +539,7 @@ static void lambda(bool canAssign) {
         block();
     } else {
         expression();
-        emitByte(OP_RETURN);  // 隐式返回表达式值
+        emitByte(OP_RETURN); // 隐式返回表达式值
     }
     ObjFunction* func = endCompiler();
     emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(func)));
@@ -556,13 +556,13 @@ static void conditional(bool canAssign) {
     parsePrecedence((Precedence)(PREC_CONDITIONAL + 1));
     // 栈: true_branch, cond
     int falseJump = emitJump(OP_JUMP_IF_FALSE);
-    emitByte(OP_POP);  // cond 为 true 时，弹出 cond，保留 true_branch
-    int endJump = emitJump(OP_JUMP);  // 从 true 分支跳过 false 分支
-    patchJump(falseJump);  // false 分支标签
-    emitBytes(OP_POP, OP_POP);  // cond 为 false 时，弹出 cond 和 true_branch
+    emitByte(OP_POP); // cond 为 true 时，弹出 cond，保留 true_branch
+    int endJump = emitJump(OP_JUMP); // 从 true 分支跳过 false 分支
+    patchJump(falseJump); // false 分支标签
+    emitBytes(OP_POP, OP_POP); // cond 为 false 时，弹出 cond 和 true_branch
     consume(TOKEN_ELSE, "Expect 'else' after condition.");
-    parsePrecedence(PREC_CONDITIONAL);  // 解析 false_branch（支持右结合链式）
-    patchJump(endJump);  // 结束标签
+    parsePrecedence(PREC_CONDITIONAL); // 解析 false_branch（支持右结合链式）
+    patchJump(endJump); // 结束标签
 }
 ParseRule rules[] = {
     [TOKEN_LEFT_PAREN] = {grouping, call, PREC_CALL},
@@ -595,7 +595,7 @@ ParseRule rules[] = {
     [TOKEN_FALSE] = {literal, NULL, PREC_NONE},
     [TOKEN_FOR] = {NULL, NULL, PREC_NONE},
     [TOKEN_FUN] = {NULL, NULL, PREC_NONE},
-    [TOKEN_IF] = {NULL, conditional, PREC_CONDITIONAL},  // 新增 infix for if
+    [TOKEN_IF] = {NULL, conditional, PREC_CONDITIONAL}, // 新增 infix for if
     [TOKEN_NIL] = {literal, NULL, PREC_NONE},
     [TOKEN_OR] = {NULL, NULL, PREC_OR},
     [TOKEN_PRINT] = {NULL, NULL, PREC_NONE},
@@ -605,7 +605,7 @@ ParseRule rules[] = {
     [TOKEN_TRUE] = {literal, NULL, PREC_NONE},
     [TOKEN_VAR] = {NULL, NULL, PREC_NONE},
     [TOKEN_WHILE] = {NULL, NULL, PREC_NONE},
-    [TOKEN_LAM] = {lambda, NULL, PREC_PRIMARY},  // 新增: lam 作为前缀，优先级PRIMARY
+    [TOKEN_LAM] = {lambda, NULL, PREC_PRIMARY}, // 新增: lam 作为前缀，优先级PRIMARY
     [TOKEN_ERROR] = {NULL, NULL, PREC_NONE},
     [TOKEN_EOF] = {NULL, NULL, PREC_NONE},
 };
@@ -646,7 +646,7 @@ static void endLoop() {
     for (i32 i = 0; i < currentLoop->breakCount; i++) {
         patchJump(currentLoop->breakJumps[i]);
     }
-   
+  
     // Patch Continues
     for (i32 i = 0; i < currentLoop->continueCount; i++) {
         i32 offset = currentLoop->continueJumps[i];
@@ -681,28 +681,28 @@ static void forStatement() {
     expression(); // End
     consume(TOKEN_COLON, "Expect ':'.");
     consume(TOKEN_NEWLINE, "Expect newline.");
-   
+  
     beginScope();
     addLocal(varName); defineVariable(0);
     addLocal(syntheticToken("<limit>")); defineVariable(0);
-   
+  
     Loop loop;
     beginLoop(&loop);
-   
+  
     emitBytes(OP_GET_LOCAL, (u8)(current->localCount - 2));
     emitBytes(OP_GET_LOCAL, (u8)(current->localCount - 1));
     emitByte(OP_LESS_EQUAL);
-   
+  
     i32 exitJump = emitJump(OP_JUMP_IF_FALSE);
     emitByte(OP_POP);
     block();
-   
+  
     emitBytes(OP_GET_LOCAL, (u8)(current->localCount - 2));
     emitConstant(NUMBER_VAL(1));
     emitByte(OP_ADD);
     emitBytes(OP_SET_LOCAL, (u8)(current->localCount - 2));
     emitByte(OP_POP);
-   
+  
     emitLoop(loop.start);
     patchJump(exitJump);
     emitByte(OP_POP);
@@ -742,6 +742,20 @@ static void ifStatement() {
     }
     patchJump(elseJump);
 }
+static void tryStatement() {
+    consume(TOKEN_COLON, "Expect ':' after try.");
+    consume(TOKEN_NEWLINE, "Expect newline after ':'.");
+    int handlerPos = emitJump(OP_TRY);
+    block();
+    emitByte(OP_POP_HANDLER);
+    int skipExcept = emitJump(OP_JUMP);
+    patchJump(handlerPos);
+    consume(TOKEN_EXCEPT, "Expect 'except' after try block.");
+    consume(TOKEN_COLON, "Expect ':' after except.");
+    consume(TOKEN_NEWLINE, "Expect newline after ':'.");
+    block();
+    patchJump(skipExcept);
+}
 static void statement() {
     if (match(TOKEN_PRINT)) { expression(); consumeLineEnd(); emitByte(OP_PRINT); }
     else if (match(TOKEN_IF)) ifStatement();
@@ -750,6 +764,7 @@ static void statement() {
     else if (match(TOKEN_FOR)) forStatement();
     else if (match(TOKEN_BREAK)) breakStatement();
     else if (match(TOKEN_CONTINUE)) continueStatement();
+    else if (match(TOKEN_TRY)) tryStatement();
     else { expression(); consumeLineEnd(); emitByte(OP_POP); }
 }
 static void function(FunctionType type) {

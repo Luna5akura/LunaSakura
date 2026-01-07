@@ -53,7 +53,7 @@ static inline Token errorToken(const char* message, u32 line) {
 // 使用 SWAR (SIMD Within A Register) 技术快速比较短字符串
 static inline TokenType checkKeyword(const char* start, i32 length, const char* rest, i32 restLen, TokenType type) {
     if (length != restLen) return TOKEN_IDENTIFIER;
-   
+  
     // 优化：针对常见长度直接比较，避免 memcmp 调用开销
     if (restLen == 2) {
         if (load16(start) == load16(rest)) return type;
@@ -68,7 +68,7 @@ static inline TokenType checkKeyword(const char* start, i32 length, const char* 
     } else {
         if (memcmp(start, rest, restLen) == 0) return type;
     }
-   
+  
     return TOKEN_IDENTIFIER;
 }
 static TokenType identifierType(const char* start, i32 length) {
@@ -83,7 +83,14 @@ static TokenType identifierType(const char* start, i32 length) {
                 }
             }
             break;
-        case 'e': return checkKeyword(start + 1, length - 1, "lse", 3, TOKEN_ELSE);
+        case 'e':
+            if (length > 1) {
+                switch (start[1]) {
+                    case 'l': return checkKeyword(start + 2, length - 2, "se", 2, TOKEN_ELSE);
+                    case 'x': return checkKeyword(start + 2, length - 2, "cept", 4, TOKEN_EXCEPT);
+                }
+            }
+            break;
         case 'f':
             if (length > 1) {
                 switch (start[1]) {
@@ -101,7 +108,7 @@ static TokenType identifierType(const char* start, i32 length) {
                 }
             }
             break;
-        case 'l': return checkKeyword(start + 1, length - 1, "am", 2, TOKEN_LAM);  // 新增: lam
+        case 'l': return checkKeyword(start + 1, length - 1, "am", 2, TOKEN_LAM); // 新增: lam
         case 'n': return checkKeyword(start + 1, length - 1, "il", 2, TOKEN_NIL);
         case 'o': return checkKeyword(start + 1, length - 1, "r", 1, TOKEN_OR);
         case 'p': return checkKeyword(start + 1, length - 1, "rint", 4, TOKEN_PRINT);
@@ -111,7 +118,9 @@ static TokenType identifierType(const char* start, i32 length) {
             if (length > 1) {
                 switch (start[1]) {
                     case 'h': return checkKeyword(start + 2, length - 2, "is", 2, TOKEN_THIS);
-                    case 'r': return checkKeyword(start + 2, length - 2, "ue", 2, TOKEN_TRUE);
+                    case 'r': 
+                        if (checkKeyword(start + 2, length - 2, "ue", 2, TOKEN_TRUE) == TOKEN_TRUE) return TOKEN_TRUE;
+                        return checkKeyword(start + 2, length - 2, "y", 1, TOKEN_TRY);
                 }
             }
             break;
@@ -123,7 +132,7 @@ static TokenType identifierType(const char* start, i32 length) {
 // --- Init ---
 void initScanner(Scanner* scanner, const char* source) {
     initCharAttrs(); // 确保查找表已初始化
-   
+  
     scanner->start = source;
     scanner->current = source;
     scanner->line = 1;
@@ -165,7 +174,7 @@ Token scanToken(Scanner* scanner) {
         if (scanner->isAtStartOfLine) {
             const char* indentStart = scanner->current;
             u16 indent = 0;
-           
+          
             // 计算缩进量
             while (peek(scanner) == ' ' || peek(scanner) == '\t') {
                 if (peek(scanner) == '\t') indent += 4;
@@ -177,12 +186,12 @@ Token scanToken(Scanner* scanner) {
                 // 不重置 isAtStartOfLine，继续下一轮循环
             } else if (!isAtEnd(scanner)) {
                 // -> 遇到有效代码，检查缩进层级
-               
+              
                 u16 currentIndent = scanner->indentStack[scanner->indentTop];
                 if (indent > currentIndent) {
                     if (scanner->indentTop >= MAX_INDENT_STACK - 1)
                         return errorToken("Too much indentation.", scanner->line);
-                   
+                  
                     scanner->indentStack[++scanner->indentTop] = indent;
                     // 发送 INDENT，并标记不再处于行首，防止死循环
                     scanner->isAtStartOfLine = false;
@@ -194,53 +203,53 @@ Token scanToken(Scanner* scanner) {
                         scanner->pendingDedents++;
                         scanner->indentTop--;
                     }
-                   
+                  
                     if (scanner->indentStack[scanner->indentTop] != indent) {
                         return errorToken("Indentation error: unaligned level.", scanner->line);
                     }
-                   
+                  
                     // 发送第一个 DEDENT
                     scanner->pendingDedents--;
                     scanner->isAtStartOfLine = false;
                     return makeToken(TOKEN_DEDENT, scanner->current, scanner->current, scanner->line);
                 }
-               
+              
                 // indent == currentIndent: 正常，标记行首处理结束，进入普通扫描
                 scanner->isAtStartOfLine = false;
             }
         }
         // --- 普通空白处理 ---
         char c = peek(scanner);
-       
+      
         if (c == ' ' || c == '\t' || c == '\r') {
             advance(scanner);
             continue;
         }
-       
+      
         if (c == '#') {
             while (peek(scanner) != '\n' && !isAtEnd(scanner)) {
                 advance(scanner);
             }
             continue;
         }
-       
+      
         if (c == '\n') {
             scanner->line++;
             advance(scanner);
-           
+          
             // 如果在括号内，或者文件开头，换行被视为普通空白
             if (scanner->parenDepth > 0) continue;
-           
+          
             // 标记下一轮循环需要检查行首缩进
             scanner->isAtStartOfLine = true;
-           
+          
             // 只有当不仅是连续空行时才返回 NEWLINE (简化逻辑：解析器会处理多余 NEWLINE)
             return makeToken(TOKEN_NEWLINE, scanner->current - 1, scanner->current, scanner->line - 1);
         }
         break; // 找到有效字符
     }
     start = scanner->current;
-   
+  
     if (isAtEnd(scanner)) {
         // EOF 处理：如果还有缩进，自动补全 DEDENT
         if (scanner->indentTop > 0) {
@@ -277,7 +286,7 @@ Token scanToken(Scanner* scanner) {
     // 宏定义简化
     #define MAKE_TOKEN(type) \
         return makeToken(type, start, scanner->current, scanner->line)
-   
+  
     #define MAKE_TOKEN_MATCH(expected, type_if, type_else) \
         if (peek(scanner) == expected) { \
             advance(scanner); \
@@ -300,19 +309,19 @@ Token scanToken(Scanner* scanner) {
         case '+': MAKE_TOKEN(TOKEN_PLUS);
         case '/': MAKE_TOKEN(TOKEN_SLASH);
         case '*': MAKE_TOKEN(TOKEN_STAR);
-       
+      
         case '!': MAKE_TOKEN_MATCH('=', TOKEN_BANG_EQUAL, TOKEN_BANG);
         case '=': MAKE_TOKEN_MATCH('=', TOKEN_EQUAL_EQUAL, TOKEN_EQUAL);
         case '<': MAKE_TOKEN_MATCH('=', TOKEN_LESS_EQUAL, TOKEN_LESS);
         case '>': MAKE_TOKEN_MATCH('=', TOKEN_GREATER_EQUAL, TOKEN_GREATER);
-       
+      
         case '"': {
             // [修复] 正确处理转义字符和字符串结束
             while (peek(scanner) != '"' && !isAtEnd(scanner)) {
                 if (peek(scanner) == '\n') {
                     scanner->line++;
                 }
-               
+              
                 if (peek(scanner) == '\\') {
                     advance(scanner); // 消耗 '\'
                     // 如果不是 EOF，消耗转义后的字符（哪怕是 '"' 也不作为结束符）
@@ -323,11 +332,11 @@ Token scanToken(Scanner* scanner) {
                     advance(scanner);
                 }
             }
-           
+          
             if (isAtEnd(scanner)) {
                 return errorToken("Unterminated string.", scanner->line);
             }
-           
+          
             advance(scanner); // 消耗闭合的 '"'
             return makeToken(TOKEN_STRING, start, scanner->current, scanner->line);
         }
