@@ -10,11 +10,14 @@
 #include "object.h"
 #include "chunk.h"
 void runtimeError(VM* vm, const char* format, ...) {
+    // [增强] 添加类型错误上下文
     va_list args;
     va_start(args, format);
+    fprintf(stderr, "Runtime Error: ");
     vfprintf(stderr, format, args);
     va_end(args);
     fputs("\n", stderr);
+    // 打印栈追踪
     for (i32 i = vm->frameCount - 1; i >= 0; i--) {
         CallFrame* frame = &vm->frames[i];
         ObjFunction* function = frame->closure->function;
@@ -144,25 +147,30 @@ static InterpretResult run(VM* vm) {
     #define READ_STRING() AS_STRING(READ_CONSTANT())
     #define BINARY_OP(valueType, op) \
         do { \
-            if (UNLIKELY(!IS_NUMBER(peek(vm, 0)) || !IS_NUMBER(peek(vm, 1)))) { \
+            Value b = peek(vm, 0); \
+            Value a = peek(vm, 1); \
+            if (UNLIKELY(!typesMatch(a, b) || !IS_NUMBER(a))) { \
                 frame->ip = ip; \
-                runtimeError(vm, "Operands must be numbers."); \
+                runtimeError(vm, "Operands must be numbers and of the same type. (a: %g, b: %g)", AS_NUMBER(a), AS_NUMBER(b)); /* [增强] 添加详细错误信息 */ \
                 return INTERPRET_RUNTIME_ERROR; \
             } \
-            double b = AS_NUMBER(pop(vm)); \
-            double a = AS_NUMBER(pop(vm)); \
-            push(vm, valueType(a op b)); \
+            double bb = AS_NUMBER(pop(vm)); \
+            double aa = AS_NUMBER(pop(vm)); \
+            push(vm, valueType(aa op bb)); \
         } while (false)
+    // 类似地，修改BINARY_BOOL_OP
     #define BINARY_BOOL_OP(op) \
         do { \
-            if (UNLIKELY(!IS_NUMBER(peek(vm, 0)) || !IS_NUMBER(peek(vm, 1)))) { \
+            Value b = peek(vm, 0); \
+            Value a = peek(vm, 1); \
+            if (UNLIKELY(!typesMatch(a, b) || !IS_NUMBER(a))) { \
                 frame->ip = ip; \
-                runtimeError(vm, "Operands must be numbers."); \
+                runtimeError(vm, "Operands must be numbers and of the same type. (a: %g, b: %g)", AS_NUMBER(a), AS_NUMBER(b)); /* [增强] 添加详细错误信息 */ \
                 return INTERPRET_RUNTIME_ERROR; \
             } \
-            double b = AS_NUMBER(pop(vm)); \
-            double a = AS_NUMBER(pop(vm)); \
-            push(vm, BOOL_VAL(a op b)); \
+            double bb = AS_NUMBER(pop(vm)); \
+            double aa = AS_NUMBER(pop(vm)); \
+            push(vm, BOOL_VAL(aa op bb)); \
         } while (false)
     for (;;) {
         u8 instruction = READ_BYTE();
@@ -323,10 +331,10 @@ static InterpretResult run(VM* vm) {
                 ObjString* name = READ_STRING();
                 i32 argCount = READ_BYTE();
                 ObjClass* superclass = AS_CLASS(pop(vm));
-               
+              
                 // [修复] 使用 peek 获取参数下方的 receiver，而不是 pop 掉最后一个参数
                 Value receiver = peek(vm, argCount);
-               
+              
                 Value method;
                 if (!tableGet(&superclass->methods, OBJ_VAL(name), &method)) {
                     frame->ip = ip;
@@ -335,7 +343,7 @@ static InterpretResult run(VM* vm) {
                 }
                 ObjBoundMethod* bound = newBoundMethod(vm, receiver, method);
                 vm->stackTop[-argCount - 1] = OBJ_VAL(bound);
-               
+              
                 frame->ip = ip; // 记得保存 IP
                 if (!callValue(vm, OBJ_VAL(bound), argCount)) return INTERPRET_RUNTIME_ERROR;
                 frame = &vm->frames[vm->frameCount - 1];
@@ -359,6 +367,12 @@ static InterpretResult run(VM* vm) {
                     list->items = ALLOCATE(vm, Value, itemCount);
                     for (int i = itemCount - 1; i >= 0; i--) {
                         list->items[i] = pop(vm);
+                    }
+                    // [新增] 检查同质性
+                    if (!isListHomogeneous(list)) {
+                        frame->ip = ip;
+                        runtimeError(vm, "List elements must be of the same type.");
+                        return INTERPRET_RUNTIME_ERROR;
                     }
                 }
                 push(vm, OBJ_VAL(list));

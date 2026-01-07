@@ -1,9 +1,10 @@
+// src/vm/object.h
+
 #pragma once
 
-#include "chunk.h"
 #include "table.h"
+#include "chunk.h"
 
-// --- Forward Declarations ---
 typedef struct VM VM;
 typedef struct sObj Obj;
 typedef struct sObjString ObjString;
@@ -125,6 +126,7 @@ typedef struct sObjBoundMethod {
 #define OBJ_TYPE(value) (AS_OBJ(value)->type)
 #define IS_STRING(value) isObjType(value, OBJ_STRING)
 #define IS_LIST(value) isObjType(value, OBJ_LIST)
+#define IS_LIST_HOMOGENEOUS(value) (IS_LIST(value) && isListHomogeneous(AS_LIST(value))) // [增强] 新增宏，用于检查列表同质性
 #define IS_DICT(value) isObjType(value, OBJ_DICT)
 #define IS_FUNCTION(value) isObjType(value, OBJ_FUNCTION)
 #define IS_NATIVE(value) isObjType(value, OBJ_NATIVE)
@@ -166,3 +168,5 @@ ObjBoundMethod* newBoundMethod(VM* vm, Value receiver, Value method);
 ObjClosure* newClosure(VM* vm, ObjFunction* function); // [新增]
 ObjUpvalue* newUpvalue(VM* vm, Value* slot); // [新增]
 void printObject(Value value);
+bool typesMatch(Value a, Value b);
+bool isListHomogeneous(ObjList* list);

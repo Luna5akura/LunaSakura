@@ -5,7 +5,7 @@
 #include "vm/memory.h"
 // --- Helper: Type Checking ---
 // 用于确保列表是同类型的 (Homogeneous)
-static bool typesMatch(Value a, Value b) {
+bool typesMatch(Value a, Value b) {
     if (IS_NUMBER(a) && IS_NUMBER(b)) return true;
     if (IS_BOOL(a) && IS_BOOL(b)) return true;
     if (IS_NIL(a) && IS_NIL(b)) return true;

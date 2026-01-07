@@ -106,7 +106,7 @@ ObjClip* newClip(VM* vm, ObjString* path) {
     ObjClip* clip = (ObjClip*)allocateObject(vm, sizeof(ObjClip), OBJ_CLIP);
     clip->path = path;
     // ... (初始化其他字段为0/默认值)
-    clip->start_time = 0; clip->duration = 0; clip->in_point = 0; clip->out_point = 0;
+    clip->duration = 0; clip->start_time = 0; clip->in_point = 0; clip->out_point = 0;
     clip->fps = 0; clip->width = 0; clip->height = 0; clip->layer = 0;
     clip->default_scale_x = 1; clip->default_scale_y = 1;
     clip->default_x = 0; clip->default_y = 0; clip->default_opacity = 1;
@@ -190,4 +190,16 @@ void printObject(Value value) {
             printf("<timeline>");
             break;
     }
+}
+
+// [新增] 检查列表是否同质（所有元素类型相同）
+bool isListHomogeneous(ObjList* list) {
+    if (list->count == 0) return true; // 空列表视为同质
+    // ObjType firstType = VALUE_TYPE(list->items[0]); // 假设Value有VALUE_TYPE宏，如果没有，可用类似isObjType的逻辑
+    for (u32 i = 1; i < list->count; i++) {
+        if (!typesMatch(list->items[0], list->items[i])) {
+            return false;
+        }
+    }
+    return true;
 }
