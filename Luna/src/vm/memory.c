@@ -228,9 +228,31 @@ static void sweep(VM* vm) {
     }
 }
 void collectGarbage(VM* vm) {
+    // [新增] GC调试日志
+#ifdef DEBUG_LOG_GC
+    size_t before = vm->bytesAllocated;
+    printf("-- GC begin: %zu bytes allocated\n", before);
+#endif
+
     markRoots(vm);
     traceReferences(vm);
     tableRemoveWhite(&vm->strings);
     sweep(vm);
-    vm->nextGC = vm->bytesAllocated * 2;
+
+    // [调整] GC阈值调优：基于回收后内存使用率动态调整
+    // 如果回收后内存 > 原阈值的70%，则下次阈值设置为当前1.5倍（更频繁GC）；否则2倍
+    size_t after = vm->bytesAllocated;
+    double usageRatio = (double)after / vm->nextGC;
+    if (usageRatio > 0.7) {
+        vm->nextGC = after * 1.5;
+    } else {
+        vm->nextGC = after * 2;
+    }
+    // 最小阈值保护
+    if (vm->nextGC < 1024 * 1024) vm->nextGC = 1024 * 1024;
+
+#ifdef DEBUG_LOG_GC
+    printf("-- GC end: %zu bytes allocated (freed %zu)\n", after, before - after);
+    printf("-- Next GC threshold: %zu\n", vm->nextGC);
+#endif
 }

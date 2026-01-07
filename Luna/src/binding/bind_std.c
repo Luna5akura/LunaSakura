@@ -10,7 +10,14 @@ bool typesMatch(Value a, Value b) {
     if (IS_BOOL(a) && IS_BOOL(b)) return true;
     if (IS_NIL(a) && IS_NIL(b)) return true;
     if (IS_OBJ(a) && IS_OBJ(b)) {
-        return OBJ_TYPE(a) == OBJ_TYPE(b);
+        ObjType typeA = OBJ_TYPE(a);
+        ObjType typeB = OBJ_TYPE(b);
+        if (typeA != typeB) return false;
+        // 对于列表，额外检查同质性（如果需要深入检查内部类型）
+        if (typeA == OBJ_LIST) {
+            return isListHomogeneous(AS_LIST(a)) && isListHomogeneous(AS_LIST(b));
+        }
+        return true;
     }
     return false;
 }

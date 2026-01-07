@@ -15,6 +15,8 @@ static const u8 charAttrs[256] = {
 #define IS_DIGIT(c) (charAttrs[(u8)(c)] & 2)
 #define IS_SPACE(c) (charAttrs[(u8)(c)] & 4)
 #define IS_ALPHANUM(c) (charAttrs[(u8)(c)] & 3)
+// [新增] UTF-8 辅助：检查是否是UTF-8延续字节
+#define IS_UTF8_CONT(c) (((u8)(c) & 0xC0) == 0x80)
 // --- Memory Helpers ---
 static inline u16 load16(const char* p) {
     u16 result;
@@ -124,7 +126,6 @@ void initScanner(Scanner* scanner, const char* source) {
     scanner->start = source;
     scanner->current = source;
     scanner->line = 1;
- 
     // 初始化缩进状态
     scanner->indentStack[0] = 0;
     scanner->indentTop = 0;
@@ -159,7 +160,7 @@ Token scanToken(Scanner* scanner) {
             } else if (*current != '\0') {
                 // 有效代码行开始，检查缩进
                 scanner->isAtStartOfLine = false;
-             
+            
                 i32 currentIndent = scanner->indentStack[scanner->indentTop];
                 if (indent > currentIndent) {
                     if (scanner->indentTop >= MAX_INDENT_STACK - 1)
@@ -202,21 +203,21 @@ Token scanToken(Scanner* scanner) {
         if (c == '\n') {
             line++;
             current++;
-         
+        
             // 如果在括号内，或者这行本身就是空的（isAtStartOfLine仍为true说明没遇到代码），则忽略换行
             if (scanner->parenDepth > 0) {
                 // 括号内换行等同于空格
                 continue;
             }
-         
+        
             // 预读：如果下一行也是空行或注释，我们这里可以继续循环，不发出 NEWLINE
             // 但为了简单，我们总是进入下一轮循环，让 isAtStartOfLine 逻辑决定
             scanner->isAtStartOfLine = true;
-         
+        
             // 只有当上一行也是代码时（非连续换行），才发出 NEWLINE
             // 这里简化策略：每次换行都重置为行首，下一轮循环如果遇到代码则发出 indent check
             // 我们需要发出 TOKEN_NEWLINE 给 parser 来结束语句
-         
+        
             // 优化：只有当该行包含非空内容后遇到的换行才算有效，
             // 但因为我们已经在循环里跳过了前面的空行，所以这里遇到的 '\n' 通常是语句结束。
             // 除非... 它是文件的第一个字符
@@ -269,7 +270,6 @@ Token scanToken(Scanner* scanner) {
     }
     // 5. 符号
     char next = *scanner->current;
- 
     // 宏定义简化
     #define MAKE_TOKEN(type) \
         do { return makeToken(type, start, scanner->current, line); } while(0)
@@ -296,6 +296,7 @@ Token scanToken(Scanner* scanner) {
         case '<': MAKE_TOKEN_MATCH('=', TOKEN_LESS_EQUAL, TOKEN_LESS);
         case '>': MAKE_TOKEN_MATCH('=', TOKEN_GREATER_EQUAL, TOKEN_GREATER);
         case '"': {
+            // [调整] 支持UTF-8字符串扫描：逐字节推进，但允许多字节字符
             const char* str_ptr = scanner->current;
             for (;;) {
                 char sc = *str_ptr;
@@ -308,7 +309,16 @@ Token scanToken(Scanner* scanner) {
                     return errorToken("Unterminated string.", line);
                 }
                 if (sc == '\n') line++;
-                str_ptr++;
+                // [新增] 处理UTF-8：如果是非ASCII，继续推进，但不解析，仅计数字节
+                if ((sc & 0x80) != 0) {  // UTF-8 起始字节
+                    int bytes = 1;
+                    if ((sc & 0xE0) == 0xC0) bytes = 2;
+                    else if ((sc & 0xF0) == 0xE0) bytes = 3;
+                    else if ((sc & 0xF8) == 0xF0) bytes = 4;
+                    str_ptr += bytes;
+                } else {
+                    str_ptr++;
+                }
             }
         }
     }

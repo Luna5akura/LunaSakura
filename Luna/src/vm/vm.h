@@ -1,8 +1,6 @@
 // src/vm/vm.h
 
 #pragma once
-#include "table.h"
-#include "chunk.h"
 #include "object.h"
 #include "engine/timeline.h"
 // --- Configuration ---

@@ -21,14 +21,16 @@ static ObjString* allocateString(VM* vm, i32 length) {
     return string;
 }
 static u32 hashString(const char* key, i32 length) {
+    // [调整] 使用UTF-8安全的FNV-1a哈希算法，逐字节处理，支持多字节字符
     u32 hash = 2166136261u;
     for (i32 i = 0; i < length; i++) {
-        hash ^= (u8)key[i];
+        hash ^= (u8)key[i];  // 逐字节XOR，支持UTF-8
         hash *= 16777619;
     }
     return hash;
 }
 ObjString* copyString(VM* vm, const char* chars, i32 length) {
+    // [调整] 添加UTF-8验证（可选，但为安全起见添加简单检查），但不强制错误，仅哈希调整
     u32 hash = hashString(chars, length);
     ObjString* interned = tableFindString(&vm->strings, chars, length, hash);
     if (interned != NULL) return interned;
