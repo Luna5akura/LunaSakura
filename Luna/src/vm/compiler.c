@@ -14,6 +14,7 @@ typedef struct {
 typedef enum {
     PREC_NONE,
     PREC_ASSIGNMENT, // =
+    PREC_CONDITIONAL, // if ... else (新增)
     PREC_OR, // or
     PREC_AND, // and
     PREC_EQUALITY, // == !=
@@ -547,6 +548,22 @@ static void lambda(bool canAssign) {
         emitByte(compiler.upvalues[i].index);
     }
 }
+// 新增: 三元运算符 true_branch if cond else false_branch
+static void conditional(bool canAssign) {
+    UNUSED(canAssign);
+    // 栈: true_branch (已解析的左侧表达式)
+    // 解析 cond
+    parsePrecedence((Precedence)(PREC_CONDITIONAL + 1));
+    // 栈: true_branch, cond
+    int falseJump = emitJump(OP_JUMP_IF_FALSE);
+    emitByte(OP_POP);  // cond 为 true 时，弹出 cond，保留 true_branch
+    int endJump = emitJump(OP_JUMP);  // 从 true 分支跳过 false 分支
+    patchJump(falseJump);  // false 分支标签
+    emitBytes(OP_POP, OP_POP);  // cond 为 false 时，弹出 cond 和 true_branch
+    consume(TOKEN_ELSE, "Expect 'else' after condition.");
+    parsePrecedence(PREC_CONDITIONAL);  // 解析 false_branch（支持右结合链式）
+    patchJump(endJump);  // 结束标签
+}
 ParseRule rules[] = {
     [TOKEN_LEFT_PAREN] = {grouping, call, PREC_CALL},
     [TOKEN_RIGHT_PAREN] = {NULL, NULL, PREC_NONE},
@@ -578,7 +595,7 @@ ParseRule rules[] = {
     [TOKEN_FALSE] = {literal, NULL, PREC_NONE},
     [TOKEN_FOR] = {NULL, NULL, PREC_NONE},
     [TOKEN_FUN] = {NULL, NULL, PREC_NONE},
-    [TOKEN_IF] = {NULL, NULL, PREC_NONE},
+    [TOKEN_IF] = {NULL, conditional, PREC_CONDITIONAL},  // 新增 infix for if
     [TOKEN_NIL] = {literal, NULL, PREC_NONE},
     [TOKEN_OR] = {NULL, NULL, PREC_OR},
     [TOKEN_PRINT] = {NULL, NULL, PREC_NONE},
