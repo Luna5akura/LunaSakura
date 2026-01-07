@@ -81,6 +81,11 @@ static void freeObject(VM* vm, Obj* object) {
         case OBJ_FUNCTION: {
             ObjFunction* function = (ObjFunction*)object;
             freeChunk(vm, &function->chunk);
+            // [新增] 释放参数名数组
+            if (function->paramNames != NULL) {
+                // 注意：这里释放的是指针数组本身，字符串对象由 GC 管理
+                FREE_ARRAY(vm, ObjString*, function->paramNames, function->arity);
+            }
             FREE(vm, ObjFunction, object);
             break;
         }
@@ -226,6 +231,13 @@ static void blackenObject(VM* vm, Obj* object) {
             ObjFunction* function = (ObjFunction*)object;
             if (function->name) markObject(vm, (Obj*)function->name);
             markArray(vm, &function->chunk.constants);
+            
+            // [重要修复] 必须标记参数名，否则字符串会被 GC 回收
+            if (function->paramNames != NULL) {
+                for (i32 i = 0; i < function->arity; i++) {
+                    markObject(vm, (Obj*)function->paramNames[i]);
+                }
+            }
             break;
         }
         case OBJ_CLIP: {

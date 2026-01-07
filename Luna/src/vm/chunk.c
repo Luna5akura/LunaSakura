@@ -157,6 +157,18 @@ i32 disassembleInstruction(Chunk* chunk, i32 offset) {
         case OP_JUMP:           return jumpInstruction("OP_JUMP", 1, chunk, offset);
         case OP_JUMP_IF_FALSE:  return jumpInstruction("OP_JUMP_IF_FALSE", 1, chunk, offset);
         case OP_LOOP:           return jumpInstruction("OP_LOOP", -1, chunk, offset);
+        case OP_CHECK_DEFAULT: {
+            u8 slot = chunk->code[offset + 1];
+            u16 jump = (u16)(chunk->code[offset + 2] << 8) | chunk->code[offset + 3];
+            printf("%-16s %4d -> %d\n", "OP_CHECK_DEFAULT", slot, offset + 4 + jump);
+            return offset + 4;
+        }
+        case OP_CALL_KW: {
+            u8 argCount = chunk->code[offset + 1];
+            u8 kwCount = chunk->code[offset + 2];
+            printf("%-16s %d args, %d kws\n", "OP_CALL_KW", argCount, kwCount);
+            return offset + 3;
+        }
         case OP_CALL:           return byteInstruction("OP_CALL", chunk, offset);
         case OP_BUILD_LIST:     return byteInstruction("OP_BUILD_LIST", chunk, offset);
         case OP_BUILD_DICT:     return byteInstruction("OP_BUILD_DICT", chunk, offset);

@@ -34,6 +34,8 @@ typedef enum {
     OP_JUMP_IF_FALSE,
     OP_LOOP,
     OP_CALL,
+    OP_CALL_KW,      // [新增] 调用带关键字的函数 (argCount, kwCount)
+    OP_CHECK_DEFAULT,// [新增] 检查参数是否为 UNDEFINED (slot, jump_offset)
     OP_BUILD_LIST,
     OP_BUILD_DICT,
     OP_CLOSURE,
@@ -46,7 +48,9 @@ typedef enum {
     OP_SET_PROPERTY,
     OP_GET_SUPER,
     OP_INVOKE,
+    OP_INVOKE_KW,
     OP_SUPER_INVOKE,
+    OP_SUPER_INVOKE_KW, // [新增]
     OP_TRY,
     OP_POP_HANDLER
 } OpCode;

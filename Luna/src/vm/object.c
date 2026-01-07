@@ -110,8 +110,10 @@ ObjDict* newDict(VM* vm) {
 ObjFunction* newFunction(VM* vm) {
     ObjFunction* function = (ObjFunction*)allocateObject(vm, sizeof(ObjFunction), OBJ_FUNCTION);
     function->arity = 0;
+    function->minArity = 0; // [新增] 必须初始化
     function->upvalueCount = 0;
     function->name = NULL;
+    function->paramNames = NULL; // [重要修复] 必须初始化为 NULL，否则 reallocate 会崩溃
     initChunk(&function->chunk);
     return function;
 }

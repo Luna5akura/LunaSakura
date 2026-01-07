@@ -71,9 +71,11 @@ struct sObjDict {
 struct sObjFunction {
     Obj obj;
     i32 arity;
+    i32 minArity;     // [新增] 最少需要的参数数量 (Required)
     i32 upvalueCount;
     Chunk chunk;
     ObjString* name;
+    ObjString** paramNames; // [新增] 参数名称数组，用于关键字匹配
 };
 
 // --- Native Function ---

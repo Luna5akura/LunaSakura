@@ -228,7 +228,7 @@ static ObjFunction* endCompiler() {
   
 #ifdef DEBUG_PRINT_CODE
     if (!parser.hadError) {
-        printf("---DISASSEMBLE CHUNK---\n")
+        printf("---DISASSEMBLE CHUNK---\n");
         disassembleChunk(currentChunk(), function->name != NULL ? function->name->chars : "<script>");
     }
 #endif
@@ -416,34 +416,90 @@ static void binary(bool canAssign) {
         default: return;
     }
 }
-static u8 argumentList() {
+static void argumentList(u8* outArgCount, u8* outKwCount) {
     u8 argCount = 0;
+    u8 kwCount = 0;
+    bool isKeyword = false;
+
     if (!check(TOKEN_RIGHT_PAREN)) {
         do {
-            expression();
-            if (argCount == 255) error("Can't have more than 255 arguments.");
-            argCount++;
+            if (check(TOKEN_RIGHT_PAREN)) break;
+
+            // 预读检查 keyword: identifier = ...
+            if (parser.current.type == TOKEN_IDENTIFIER && scanner.current[0] == '=') {
+                isKeyword = true;
+                
+                // 压入参数名 (String Object)
+                u8 nameConst = identifierConstant(&parser.current);
+                emitBytes(OP_CONSTANT, nameConst); 
+                consume(TOKEN_IDENTIFIER, "Expect keyword name.");
+                consume(TOKEN_EQUAL, "Expect '='.");
+                
+                expression(); // 压入参数值
+                
+                if (kwCount == 255) error("Can't have more than 255 keyword arguments.");
+                kwCount++;
+            } else {
+                if (isKeyword) {
+                    error("Positional argument cannot follow keyword argument.");
+                }
+                expression();
+                if (argCount == 255) error("Can't have more than 255 arguments.");
+                argCount++;
+            }
         } while (match(TOKEN_COMMA));
     }
     consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
-    return argCount;
+    *outArgCount = argCount;
+    *outKwCount = kwCount;
 }
 static void call(bool canAssign) {
     UNUSED(canAssign);
-    u8 argCount = argumentList();
-    emitBytes(OP_CALL, argCount);
+    u8 argCount = 0;
+    u8 kwCount = 0;
+    argumentList(&argCount, &kwCount);
+
+    if (kwCount > 0) {
+        emitByte(OP_CALL_KW);
+        emitByte(argCount);
+        emitByte(kwCount);
+    } else {
+        emitBytes(OP_CALL, argCount);
+    }
 }
 static void dot(bool canAssign) {
     consume(TOKEN_IDENTIFIER, "Expect property name after '.'.");
     u8 name = identifierConstant(&parser.previous);
+
     if (canAssign && match(TOKEN_EQUAL)) {
+        // 赋值: obj.field = val
         expression();
         emitBytes(OP_SET_PROPERTY, name);
     } else if (match(TOKEN_LEFT_PAREN)) {
-        u8 argCount = argumentList();
-        emitBytes(OP_INVOKE, name);
-        emitByte(argCount);
+        // 方法调用: obj.method(...)
+        u8 argCount = 0;
+        u8 kwCount = 0;
+        
+        // 解析参数列表
+        argumentList(&argCount, &kwCount);
+
+        if (kwCount > 0) {
+            // 情况 A: 包含关键字参数
+            // 无法使用 OP_INVOKE 优化，拆解为两步：
+            // 1. 取出方法/字段 (OP_GET_PROPERTY)
+            // 2. 执行关键字调用 (OP_CALL_KW)
+
+            emitBytes(OP_INVOKE_KW, name); // 新指令
+            emitByte(argCount);
+            emitByte(kwCount);
+        } else {
+            // 情况 B: 仅有位置参数
+            // 使用 OP_INVOKE 优化指令
+            emitBytes(OP_INVOKE, name);
+            emitByte(argCount);
+        }
     } else {
+        // 属性访问: obj.field
         emitBytes(OP_GET_PROPERTY, name);
     }
 }
@@ -462,17 +518,33 @@ static void super_(bool canAssign) {
     UNUSED(canAssign);
     if (currentClass == NULL) error("Can't use 'super' outside of a class.");
     else if (!currentClass->hasSuperclass) error("Can't use 'super' in a class with no superclass.");
-  
+ 
     consume(TOKEN_DOT, "Expect '.' after 'super'.");
     consume(TOKEN_IDENTIFIER, "Expect superclass method name.");
     u8 name = identifierConstant(&parser.previous);
-  
+ 
+    // 1. 压入 'this' (Receiver)
     namedVariable(syntheticToken("this"), false);
+    
     if (match(TOKEN_LEFT_PAREN)) {
-        u8 argCount = argumentList();
+        u8 argCount = 0;
+        u8 kwCount = 0;
+        
+        // 2. 解析参数 (压入 args 和 keywords)
+        argumentList(&argCount, &kwCount);
+        
+        // 3. 压入 'super' (Superclass)
         namedVariable(syntheticToken("super"), false);
-        emitBytes(OP_SUPER_INVOKE, name);
-        emitByte(argCount);
+        
+        if (kwCount > 0) {
+            // [新增] 使用带关键字的 super 调用指令
+            emitBytes(OP_SUPER_INVOKE_KW, name);
+            emitByte(argCount);
+            emitByte(kwCount);
+        } else {
+            emitBytes(OP_SUPER_INVOKE, name);
+            emitByte(argCount);
+        }
     } else {
         namedVariable(syntheticToken("super"), false);
         emitBytes(OP_GET_SUPER, name);
@@ -514,33 +586,42 @@ static void lambda(bool canAssign) {
     Compiler compiler;
     initCompiler(&compiler, compilingVM, TYPE_FUNCTION);
     beginScope();
-    // 参数列表（支持无括号单参数，或有括号多参数）
-    bool hasParen = match(TOKEN_LEFT_PAREN);
+    
+    // Lambda 暂不支持默认参数，但需要修复 GC 安全性
     if (!check(TOKEN_COLON) && !check(TOKEN_LEFT_BRACE)) {
         do {
-            current->function->arity++;
-            if (current->function->arity > 255) errorAtCurrent("Max args.");
-            if (current->function->arity == 1 && !hasParen) {
-                // 单参数无括号
-                consume(TOKEN_IDENTIFIER, "Expect param.");
-            } else {
-                consume(TOKEN_IDENTIFIER, "Expect param.");
-            }
+            if (current->function->arity >= 255) errorAtCurrent("Max args.");
+            
+            Token paramName = parser.current;
+            ObjString* nameStr = copyString(compilingVM, paramName.start, paramName.length);
+            push(compilingVM, OBJ_VAL(nameStr)); // [GC保护]
+
+            consume(TOKEN_IDENTIFIER, "Expect param.");
+
+            ObjFunction* f = current->function;
+            f->paramNames = (ObjString**)reallocate(compilingVM, f->paramNames, 
+                sizeof(ObjString*) * f->arity, sizeof(ObjString*) * (f->arity + 1));
+            f->paramNames[f->arity] = nameStr;
+            
+            // [关键] 最后增加计数
+            f->arity++;
+            f->minArity++; // Lambda 默认必填
+
             declareVariable();
             defineVariable(0);
+            
+            pop(compilingVM); // [GC保护]
         } while (match(TOKEN_COMMA));
     }
-    if (hasParen) {
-        consume(TOKEN_RIGHT_PAREN, "Expect ')' after params.");
-    }
     consume(TOKEN_COLON, "Expect ':' after params.");
-    // 支持单表达式体（隐式返回）或块体
+    
     if (match(TOKEN_LEFT_BRACE)) {
         block();
     } else {
         expression();
-        emitByte(OP_RETURN); // 隐式返回表达式值
+        emitByte(OP_RETURN);
     }
+    
     ObjFunction* func = endCompiler();
     emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(func)));
     for (i32 i = 0; i < func->upvalueCount; i++) {
@@ -630,6 +711,66 @@ static void block() {
     while (!check(TOKEN_DEDENT) && !check(TOKEN_EOF)) declaration();
     if (!check(TOKEN_EOF)) consume(TOKEN_DEDENT, "Expect dedent.");
     endScope();
+}
+static void parseFunctionParameters(FunctionType type) {
+    bool isOptional = false; 
+    
+    consume(TOKEN_LEFT_PAREN, "Expect '(' after function name.");
+    if (!check(TOKEN_RIGHT_PAREN)) {
+        do {
+            if (current->function->arity >= 255) errorAtCurrent("Max args.");
+
+            // 1. 创建并保护参数名
+            Token paramName = parser.current;
+            ObjString* nameStr = copyString(compilingVM, paramName.start, paramName.length);
+            push(compilingVM, OBJ_VAL(nameStr)); 
+
+            consume(TOKEN_IDENTIFIER, "Expect param name.");
+            
+            declareVariable();
+            defineVariable(0);
+
+            // 2. 扩容数组
+            ObjFunction* f = current->function;
+            f->paramNames = (ObjString**)reallocate(compilingVM, f->paramNames, 
+                sizeof(ObjString*) * f->arity, sizeof(ObjString*) * (f->arity + 1));
+            
+            // 3. 填入数据
+            f->paramNames[f->arity] = nameStr;
+            f->arity++;
+            
+            pop(compilingVM); // 弹出 nameStr
+
+            // 4. 处理默认值
+            if (match(TOKEN_EQUAL)) {
+                isOptional = true;
+                
+                // [修复] 计算正确的 Slot 索引
+                // 函数的局部变量从 slot 1 开始（slot 0 是函数自身）
+                // 所以第 1 个参数 (arity=1) 对应 slot 1
+                // 刚才 f->arity 已经加了 1，所以当前参数就是 f->arity 对应的 index
+                // 或者直接用 localCount - 1 更稳妥
+                u8 paramSlot = (u8)(current->localCount - 1);
+
+                int jump = emitJump(OP_CHECK_DEFAULT);
+                currentChunk()->count -= 3; 
+                emitByte(OP_CHECK_DEFAULT);
+                emitByte(paramSlot); 
+                int checkJump = currentChunk()->count;
+                emitByte(0xff);
+                emitByte(0xff);
+
+                expression();
+                emitBytes(OP_SET_LOCAL, paramSlot);
+                emitByte(OP_POP); 
+                patchJump(checkJump);
+            } else {
+                if (isOptional) error("Non-default argument follows default argument.");
+                f->minArity++;
+            }
+        } while (match(TOKEN_COMMA));
+    }
+    consume(TOKEN_RIGHT_PAREN, "Expect ')' after params.");
 }
 static void function(FunctionType type); // Forward
 // --- Loop Control ---
@@ -771,20 +912,14 @@ static void function(FunctionType type) {
     Compiler compiler;
     initCompiler(&compiler, compilingVM, type);
     beginScope();
-    consume(TOKEN_LEFT_PAREN, "Expect '('.");
-    if (!check(TOKEN_RIGHT_PAREN)) {
-        do {
-            current->function->arity++;
-            if (current->function->arity > 255) errorAtCurrent("Max args.");
-            consume(TOKEN_IDENTIFIER, "Expect param.");
-            declareVariable();
-            defineVariable(0);
-        } while (match(TOKEN_COMMA));
-    }
-    consume(TOKEN_RIGHT_PAREN, "Expect ')'.");
+
+    // 替换原有的参数解析循环
+    parseFunctionParameters(type);
+
     consume(TOKEN_COLON, "Expect ':'.");
     consume(TOKEN_NEWLINE, "Expect newline.");
     block();
+    
     ObjFunction* func = endCompiler();
     emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(func)));
     for (i32 i = 0; i < func->upvalueCount; i++) {

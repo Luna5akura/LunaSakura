@@ -174,50 +174,127 @@ static bool call(VM* vm, ObjClosure* closure, i32 argCount) {
     frame->slots = vm->stackTop - argCount - 1;
     return true;
 }
+static bool bindKeywordArgs(VM* vm, ObjFunction* function, int argCount, int kwCount) {
+    // 栈布局: [ ... | arg0 | arg1 | key0 | val0 | key1 | val1 ]
+    // key 是 ObjString*, val 是 Value
+    // 我们需要把 val 填入 frame->slots 对应的位置
+    
+    // 关键字参数起始位置
+    Value* kwBase = vm->stackTop - (kwCount * 2);
+    
+    // 1. 遍历栈上的关键字参数
+    for (int i = 0; i < kwCount; i++) {
+        Value keyVal = kwBase[i * 2]; // Name
+        Value valVal = kwBase[i * 2 + 1]; // Value
+        
+        if (!IS_STRING(keyVal)) {
+            return runtimeError(vm, "Keyword keys must be strings.");
+        }
+        ObjString* name = AS_STRING(keyVal);
+        
+        // 查找参数索引
+        int paramIndex = -1;
+        for (int j = 0; j < function->arity; j++) {
+            // [优化] 字符串哈希比较
+            if (function->paramNames[j] == name || 
+               (function->paramNames[j]->hash == name->hash && 
+                memcmp(function->paramNames[j]->chars, name->chars, name->length) == 0)) {
+                paramIndex = j;
+                break;
+            }
+        }
+        
+        if (paramIndex == -1) {
+            return runtimeError(vm, "Unexpected keyword argument '%s'.", name->chars);
+        }
+        
+        // 检查是否已经通过位置参数传递
+        if (paramIndex < argCount) {
+            return runtimeError(vm, "Argument '%s' passed multiple times.", name->chars);
+        }
+        
+        // 检查是否重复关键字 (VM 栈上的 slots 此时已被 argCount 填充，其余是垃圾值或上帧数据)
+        // 实际上新帧的 slots 指向 arg0。
+        // 我们需要小心：VM 的 call 逻辑是在 frame 创建后执行的。
+        // 这里我们实际上在修改当前栈顶部分，随后 call 会将 stackTop 调整。
+        
+        // 目标 slot 相对于 arg0 的位置
+        Value* slot = (vm->stackTop - argCount - (kwCount * 2)) + paramIndex;
+        
+        // 检查该 slot 是否已经被之前的关键字填充
+        // 由于我们还未初始化 UNDEFINED，这里比较棘手。
+        // 策略：我们先把所有位置参数保留，非位置参数初始化为 UNDEFINED，然后填充关键字。
+    }
+    return true;
+}
 static bool callValue(VM* vm, Value callee, i32 argCount) {
     if (IS_OBJ(callee)) {
         switch (OBJ_TYPE(callee)) {
-            case OBJ_CLOSURE:
-                return call(vm, AS_CLOSURE(callee), argCount);
-           
+            case OBJ_CLOSURE: {
+                ObjClosure* closure = AS_CLOSURE(callee);
+                ObjFunction* func = closure->function;
+
+                // 1. 检查参数数量是否在合法范围内 [minArity, arity]
+                if (argCount < func->minArity || argCount > func->arity) {
+                    return runtimeError(vm, "Expected %d-%d arguments but got %d.", 
+                                        func->minArity, func->arity, argCount);
+                }
+
+                // 2. 填充缺省参数 (Padding)
+                // 只有当传入参数少于总参数时才执行
+                for (int i = argCount; i < func->arity; i++) {
+                    push(vm, UNDEFINED_VAL);
+                }
+
+                // 3. 执行调用
+                // 注意：此时栈上参数个数已补齐为 func->arity，所以传给 call 的是 arity
+                return call(vm, closure, func->arity);
+            }
+
             case OBJ_BOUND_METHOD: {
                 ObjBoundMethod* bound = AS_BOUND_METHOD(callee);
-                // 将 stack[top - arg - 1] (即 receiver 占位) 替换为真实的 receiver
+                
+                // 将栈深处的 receiver 占位符替换为真实的 bound->receiver
+                // 此时 stackTop 还未移动（未填充 padding），receiver 在 stackTop - argCount - 1
                 vm->stackTop[-argCount - 1] = bound->receiver;
-                // 递归调用实际的方法 (通常是 Closure)
+                
+                // 递归调用 bound->method
+                // 这里的递归非常关键：它会进入 OBJ_CLOSURE 分支，从而复用上面的 Padding 逻辑
                 return callValue(vm, bound->method, argCount);
             }
-           
+
             case OBJ_CLASS: {
                 ObjClass* klass = AS_CLASS(callee);
-                // 1. 创建实例
+                
+                // 1. 创建实例并替换栈上的 Class 对象
                 vm->stackTop[-argCount - 1] = OBJ_VAL(newInstance(vm, klass));
-                // 2. 调用初始化器 (init)
+                
+                // 2. 查找并调用初始化器 (init)
                 Value initializer;
                 if (tableGet(&klass->methods, OBJ_VAL(vm->initString), &initializer)) {
-                    return call(vm, AS_CLOSURE(initializer), argCount);
+                    // 递归调用 init 方法
+                    // 同样利用递归来复用 Padding 逻辑，支持 init(a, b=1) 这种写法
+                    return callValue(vm, initializer, argCount);
                 } else if (argCount != 0) {
-                    if (runtimeError(vm, "Expected 0 arguments for initializer but got %d.", argCount)) return true;
-                    return false;
+                    return runtimeError(vm, "Expected 0 arguments for initializer but got %d.", argCount);
                 }
                 return true;
             }
-           
+
             case OBJ_NATIVE: {
                 NativeFn native = AS_NATIVE(callee);
-                // Native 负责直接操作栈或返回结果
+                // Native 函数通常不支持默认参数（除非在 Native 内部实现），直接透传
                 Value result = native(vm, argCount, vm->stackTop - argCount);
                 vm->stackTop -= argCount + 1;
                 push(vm, result);
                 return true;
             }
-           
+
             default: break; // Fallthrough
         }
     }
-   
-    if (runtimeError(vm, "Can only call functions and classes.")) return true;
-    return false;
+
+    return runtimeError(vm, "Can only call functions and classes.");
 }
 static bool bindMethod(VM* vm, ObjClass* klass, ObjString* name, Value receiver) {
     Value method;
@@ -228,6 +305,107 @@ static bool bindMethod(VM* vm, ObjClass* klass, ObjString* name, Value receiver)
    
     ObjBoundMethod* bound = newBoundMethod(vm, receiver, method);
     push(vm, OBJ_VAL(bound));
+    return true;
+}
+static bool prepareKeywordCall(VM* vm, ObjFunction* func, int argCount, int kwCount) {
+        // === 调试探针 START ===
+    printf("DEBUG: prepareKeywordCall func=%p\n", (void*)func);
+    printf("DEBUG: func->arity = %d\n", func->arity);
+    printf("DEBUG: func->minArity = %d\n", func->minArity);
+    printf("DEBUG: func->paramNames pointer = %p\n", (void*)func->paramNames);
+    
+    if (func->paramNames != NULL) {
+        for (int i = 0; i < func->arity; i++) {
+            printf("DEBUG: paramNames[%d] at %p = ", i, (void*)func->paramNames[i]);
+            if (func->paramNames[i] != NULL) {
+                // 尝试打印字符串内容，如果这里崩了，说明字符串指针是坏的
+                printf("'%s'\n", func->paramNames[i]->chars); 
+            } else {
+                printf("NULL\n");
+            }
+        }
+    } else {
+        printf("DEBUG: paramNames is NULL! This will crash.\n");
+    }
+    fflush(stdout); // 确保崩溃前打印出来
+    // 1. 检查位置参数是否超标
+    if (argCount > func->arity) {
+        runtimeError(vm, "Expected at most %d arguments but got %d.", func->arity, argCount);
+        return false;
+    }
+
+    // 计算参数在栈上的起始位置 (callee 之后的第一个参数)
+    // 栈布局: [callee/receiver] [arg0..N] [kwName0][kwVal0]...
+    Value* argsBase = vm->stackTop - (kwCount * 2) - argCount;
+
+    // 为了安全和简单，我们使用栈顶上方的未分配空间作为暂存区
+    // 注意：假设 STACK_MAX 足够大，且暂存区不涉及 GC (因为只存 Value，且期间不分配对象)
+    Value* tempSlots = vm->stackTop;
+
+    // 2. 初始化暂存区：全部填为 UNDEFINED
+    for (int i = 0; i < func->arity; i++) {
+        tempSlots[i] = UNDEFINED_VAL;
+    }
+
+    // 3. 填充位置参数
+    for (int i = 0; i < argCount; i++) {
+        tempSlots[i] = argsBase[i];
+    }
+
+    // 4. 解析并填充关键字参数
+    Value* kwBase = vm->stackTop - (kwCount * 2);
+    for (int i = 0; i < kwCount; i++) {
+        Value nameVal = kwBase[i * 2];     // Key
+        Value valVal = kwBase[i * 2 + 1];  // Value
+
+        // 这里的 Key 必定是 String (Compiler 保证)
+        ObjString* name = AS_STRING(nameVal);
+        
+        // 在函数参数名列表中查找匹配项
+        int paramIndex = -1;
+        // [优化] 如果参数多，这里可以用 hash map，但一般函数参数少，线性扫描够快
+        for (int j = 0; j < func->arity; j++) {
+            // 指针相等检查 (String Interning 优势) || 内容检查
+            if (func->paramNames[j] == name || 
+               (func->paramNames[j]->hash == name->hash && 
+                memcmp(func->paramNames[j]->chars, name->chars, name->length) == 0)) {
+                paramIndex = j;
+                break;
+            }
+        }
+
+        if (paramIndex == -1) {
+            runtimeError(vm, "Unexpected keyword argument '%s'.", name->chars);
+            return false;
+        }
+
+        // 检查重复赋值 (位置参数已填入 || 之前的关键字已填入)
+        if (!IS_UNDEFINED(tempSlots[paramIndex])) {
+            runtimeError(vm, "Argument '%s' passed multiple times.", name->chars);
+            return false;
+        }
+
+        tempSlots[paramIndex] = valVal;
+    }
+
+    // 5. 检查必填参数 (minArity)
+    for (int i = 0; i < func->minArity; i++) {
+        if (IS_UNDEFINED(tempSlots[i])) {
+            runtimeError(vm, "Missing required argument '%s'.", func->paramNames[i]->chars);
+            return false;
+        }
+    }
+
+    // 6. 重构栈 (In-place replace)
+    // 将整理好的参数复制回 argsBase，覆盖掉原来的 args 和 kw_pairs
+    for (int i = 0; i < func->arity; i++) {
+        argsBase[i] = tempSlots[i];
+    }
+
+    // 7. 调整栈顶指针
+    // 现在栈顶应该指向最后一个整理好的参数之后
+    vm->stackTop = argsBase + func->arity;
+
     return true;
 }
 // --- Interpreter Loop (The Hot Path) ---
@@ -536,17 +714,23 @@ static InterpretResult run(VM* vm) {
                     }
                    
                     // [优化] Fast Path: 如果是闭包，直接调用，避免分配 BoundMethod
-                    if (IS_CLOSURE(value)) {
+                    if (IS_CLOSURE(value) && argCount == AS_CLOSURE(value)->function->arity) {
                         frame->ip = ip;
-                        vm->stackTop = stackTop; // Sync
+                        vm->stackTop = stackTop;
                         if (!call(vm, AS_CLOSURE(value), argCount)) return INTERPRET_RUNTIME_ERROR;
                     } else {
-                        // Slow Path: 非闭包（如 Native 或 Class）或者需要统一处理
+                        // Slow Path: 
+                        // 1. 非闭包
+                        // 2. 或者是闭包但参数不足（需要 callValue 处理 Padding）
                         ObjBoundMethod* bound = newBoundMethod(vm, receiver, value);
+                        
+                        // 将 BoundMethod 放入栈中原本 receiver 的位置
                         stackTop[-argCount - 1] = OBJ_VAL(bound);
-                       
+
                         frame->ip = ip;
-                        vm->stackTop = stackTop; // Sync
+                        vm->stackTop = stackTop;
+                        
+                        // 让 callValue 去处理参数检查和 Padding
                         if (!callValue(vm, OBJ_VAL(bound), argCount)) return INTERPRET_RUNTIME_ERROR;
                     }
                 }
@@ -590,7 +774,205 @@ static InterpretResult run(VM* vm) {
                 stackTop = vm->stackTop;
                 break;
             }
-           
+            
+            case OP_CHECK_DEFAULT: {
+                u8 slot = READ_BYTE();
+                u16 offset = READ_SHORT();
+                
+                // 如果参数不是 UNDEFINED，说明已经传递了值，跳过默认值计算代码
+                if (!IS_UNDEFINED(frame->slots[slot])) {
+                    ip += offset;
+                }
+                break;
+            }
+
+            case OP_CALL_KW: {
+                u8 argCount = READ_BYTE();
+                u8 kwCount = READ_BYTE();
+                
+                // [关键] 同步局部寄存器到 VM 结构体
+                vm->stackTop = stackTop; 
+
+                // 1. 获取被调用者 (位于所有参数之下)
+                Value callee = PEEK(argCount + kwCount * 2);
+                ObjFunction* func = NULL;
+                ObjClosure* closure = NULL;
+
+                // 2. 解析 Callee 类型
+                if (IS_CLOSURE(callee)) {
+                    closure = AS_CLOSURE(callee);
+                    func = closure->function;
+                } else if (IS_BOUND_METHOD(callee)) {
+                    ObjBoundMethod* bound = AS_BOUND_METHOD(callee);
+                    if (IS_CLOSURE(bound->method)) {
+                        closure = AS_CLOSURE(bound->method);
+                        func = closure->function;
+                    } else {
+                        frame->ip = ip; // 报错前保存 IP 以便打印堆栈
+                        runtimeError(vm, "Keyword arguments only supported for declared functions.");
+                        return INTERPRET_RUNTIME_ERROR;
+                    }
+                } else {
+                    frame->ip = ip;
+                    runtimeError(vm, "Keyword arguments only supported for declared functions.");
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+
+                // 3. 执行参数标准化
+                if (!prepareKeywordCall(vm, func, argCount, kwCount)) {
+                    frame->ip = ip;
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+                
+                // 4. [关键] 保存当前 IP，防止死循环
+                frame->ip = ip;
+
+                // 5. 执行调用
+                if (!call(vm, closure, func->arity)) return INTERPRET_RUNTIME_ERROR;
+
+                // 6. 刷新 VM 寄存器
+                frame = &vm->frames[vm->frameCount - 1];
+                ip = frame->ip;
+                stackTop = vm->stackTop;
+                break;
+            }
+
+            case OP_INVOKE_KW: {
+                ObjString* name = READ_STRING();
+                u8 argCount = READ_BYTE();
+                u8 kwCount = READ_BYTE();
+                
+                // [关键] 同步栈指针
+                vm->stackTop = stackTop;
+
+                // 栈布局: [receiver] [args...] [kw_pairs...]
+                Value* receiverPtr = stackTop - (kwCount * 2) - argCount - 1;
+                Value receiver = *receiverPtr;
+
+                if (!IS_INSTANCE(receiver)) {
+                    frame->ip = ip;
+                    runtimeError(vm, "Only instances have methods.");
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+                ObjInstance* instance = AS_INSTANCE(receiver);
+
+                Value value;
+                // 1. 尝试查找字段 (Shadows methods)
+                if (tableGet(&instance->fields, OBJ_VAL(name), &value)) {
+                    *receiverPtr = value; // 将 receiver 替换为字段值
+                    
+                    if (!IS_CLOSURE(value)) {
+                         frame->ip = ip;
+                         runtimeError(vm, "Can only call functions.");
+                         return INTERPRET_RUNTIME_ERROR;
+                    }
+                    ObjFunction* func = AS_CLOSURE(value)->function;
+                    
+                    if (!prepareKeywordCall(vm, func, argCount, kwCount)) {
+                        frame->ip = ip;
+                        return INTERPRET_RUNTIME_ERROR;
+                    }
+                    
+                    // [关键] 保存 IP
+                    frame->ip = ip;
+                    
+                    if (!call(vm, AS_CLOSURE(value), func->arity)) return INTERPRET_RUNTIME_ERROR;
+                } 
+                else {
+                    // 2. 查找类方法
+                    if (!tableGet(&instance->klass->methods, OBJ_VAL(name), &value)) {
+                        frame->ip = ip;
+                        runtimeError(vm, "Undefined property '%s'.", name->chars);
+                        return INTERPRET_RUNTIME_ERROR;
+                    }
+                    
+                    if (!IS_CLOSURE(value)) {
+                        frame->ip = ip;
+                        runtimeError(vm, "Method must be a closure.");
+                        return INTERPRET_RUNTIME_ERROR;
+                    }
+                    ObjFunction* func = AS_CLOSURE(value)->function;
+
+                    // 创建 BoundMethod 并替换 receiver
+                    ObjBoundMethod* bound = newBoundMethod(vm, receiver, value);
+                    *receiverPtr = OBJ_VAL(bound);
+
+                    // 标准化参数
+                    if (!prepareKeywordCall(vm, func, argCount, kwCount)) {
+                        frame->ip = ip;
+                        return INTERPRET_RUNTIME_ERROR;
+                    }
+                    
+                    // [关键] 保存 IP
+                    frame->ip = ip;
+                    
+                    // 调用 BoundMethod (使用 callValue 处理解包)
+                    if (!callValue(vm, OBJ_VAL(bound), func->arity)) return INTERPRET_RUNTIME_ERROR;
+                }
+
+                // 刷新寄存器
+                frame = &vm->frames[vm->frameCount - 1];
+                ip = frame->ip;
+                stackTop = vm->stackTop;
+                break;
+            }
+
+            case OP_SUPER_INVOKE_KW: {
+                ObjString* name = READ_STRING();
+                u8 argCount = READ_BYTE();
+                u8 kwCount = READ_BYTE();
+
+                // [关键] 同步栈指针
+                vm->stackTop = stackTop;
+
+                // 1. Pop superclass
+                // 注意：POP() 宏修改的是局部变量 stackTop
+                ObjClass* superclass = AS_CLASS(POP());
+                
+                // 再次同步，因为 POP 改变了局部 stackTop，而 prepareKeywordCall 依赖 vm->stackTop
+                vm->stackTop = stackTop; 
+
+                // 2. 定位 Receiver
+                Value* receiverPtr = stackTop - (kwCount * 2) - argCount - 1;
+                Value receiver = *receiverPtr;
+
+                // 3. 查找方法
+                Value method;
+                if (!tableGet(&superclass->methods, OBJ_VAL(name), &method)) {
+                    frame->ip = ip;
+                    runtimeError(vm, "Undefined property '%s'.", name->chars);
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+
+                if (!IS_CLOSURE(method)) {
+                    frame->ip = ip;
+                    runtimeError(vm, "Super method must be a closure.");
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+
+                // 4. 绑定 this (receiver)
+                ObjBoundMethod* bound = newBoundMethod(vm, receiver, method);
+                *receiverPtr = OBJ_VAL(bound);
+
+                // 5. 标准化参数
+                ObjFunction* func = AS_CLOSURE(method)->function;
+                if (!prepareKeywordCall(vm, func, argCount, kwCount)) {
+                    frame->ip = ip;
+                    return INTERPRET_RUNTIME_ERROR;
+                }
+
+                // [关键] 保存 IP
+                frame->ip = ip;
+
+                // 6. 调用
+                if (!callValue(vm, OBJ_VAL(bound), func->arity)) return INTERPRET_RUNTIME_ERROR;
+
+                // 刷新寄存器
+                frame = &vm->frames[vm->frameCount - 1];
+                ip = frame->ip;
+                stackTop = vm->stackTop;
+                break;
+            }
             case OP_CALL: {
                 i32 argCount = READ_BYTE();
                 frame->ip = ip;

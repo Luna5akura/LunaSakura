@@ -25,10 +25,12 @@ typedef u64 Value;
 #define TAG_NIL 1
 #define TAG_FALSE 2
 #define TAG_TRUE 3
+#define TAG_UNDEFINED 4
 
 #define IS_NUMBER(v) (((v) & QNAN) != QNAN)
 #define IS_NIL(v) ((v) == NIL_VAL)
 #define IS_BOOL(v) (((v) | 1) == TRUE_VAL)
+#define IS_UNDEFINED(v) ((v) == UNDEFINED_VAL)
 
 #define IS_OBJ(v) (((v) & (QNAN | SIGN_BIT)) == (QNAN | SIGN_BIT))
 
@@ -40,6 +42,7 @@ typedef u64 Value;
 #define NIL_VAL ((Value)(u64)(QNAN | TAG_NIL))
 #define TRUE_VAL ((Value)(u64)(QNAN | TAG_TRUE))
 #define FALSE_VAL ((Value)(u64)(QNAN | TAG_FALSE))
+#define UNDEFINED_VAL ((Value)(u64)(QNAN | TAG_UNDEFINED))
 
 #define BOOL_VAL(b) ((Value)(FALSE_VAL | (!!(b))))
 #define OBJ_VAL(obj) ((Value)(SIGN_BIT | QNAN | (u64)(uintptr_t)(obj)))
