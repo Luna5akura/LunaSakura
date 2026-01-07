@@ -1,11 +1,12 @@
 // src/vm/scanner.h
+
 #pragma once
 #include "common.h"
 typedef enum {
     // 单字符 Token
     TOKEN_LEFT_PAREN, TOKEN_RIGHT_PAREN,
-    TOKEN_LEFT_BRACKET, TOKEN_RIGHT_BRACKET,  // Removed
-    // TOKEN_LEFT_BRACE, TOKEN_RIGHT_BRACE,  // Removed
+    TOKEN_LEFT_BRACKET, TOKEN_RIGHT_BRACKET,
+    TOKEN_LEFT_BRACE, TOKEN_RIGHT_BRACE, // [修改] 添加回 {}
     TOKEN_COMMA, TOKEN_DOT, TOKEN_MINUS, TOKEN_PLUS,
     TOKEN_COLON, // [新增] :
     TOKEN_SLASH, TOKEN_STAR,
@@ -41,7 +42,7 @@ typedef struct {
     const char* start;
     const char* current;
     i32 line;
-  
+ 
     // [新增] 缩进控制状态
     int indentStack[MAX_INDENT_STACK];
     int indentTop;

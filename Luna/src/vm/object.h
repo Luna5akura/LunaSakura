@@ -16,11 +16,11 @@ typedef struct sObjInstance ObjInstance;
 typedef struct sObjBoundMethod ObjBoundMethod;
 typedef struct sObjClosure ObjClosure; // [新增]
 typedef struct sObjUpvalue ObjUpvalue; // [新增]
-
 // --- Object Types ---
 typedef enum {
     OBJ_STRING,
     OBJ_LIST,
+    OBJ_DICT,
     OBJ_FUNCTION,
     OBJ_NATIVE,
     OBJ_CLIP,
@@ -29,23 +29,20 @@ typedef enum {
     OBJ_INSTANCE,
     OBJ_BOUND_METHOD,
     OBJ_CLOSURE, // [新增]
-    OBJ_UPVALUE  // [新增]
+    OBJ_UPVALUE // [新增]
 } ObjType;
-
 // --- Base Object Header ---
 struct sObj {
     struct sObj* next;
     u8 type;
     bool isMarked;
 };
-
 // --- Native Function ---
 typedef Value (*NativeFn)(VM* vm, i32 argCount, Value* args);
 typedef struct sObjNative {
     Obj obj;
     NativeFn function;
 } ObjNative;
-
 // --- String Object ---
 struct sObjString {
     Obj obj;
@@ -53,14 +50,16 @@ struct sObjString {
     u32 hash;
     char chars[];
 };
-
 typedef struct {
     Obj obj;
     u32 count;
     u32 capacity;
     Value* items;
 } ObjList;
-
+typedef struct {
+    Obj obj;
+    Table items; // 复用 Lox 中的 Table (哈希表)
+} ObjDict;
 // --- Function Object (Prototype) ---
 typedef struct {
     Obj obj;
@@ -69,15 +68,13 @@ typedef struct {
     Chunk chunk;
     ObjString* name;
 } ObjFunction;
-
 // [新增] 上值对象
 struct sObjUpvalue {
     Obj obj;
     Value* location; // 指向栈上的值，或者指向 closed
-    Value closed;    // 变量离开栈后的存储位置
+    Value closed; // 变量离开栈后的存储位置
     struct sObjUpvalue* next; // 链表指针
 };
-
 // [新增] 闭包对象 (函数的运行时实例)
 struct sObjClosure {
     Obj obj;
@@ -85,7 +82,6 @@ struct sObjClosure {
     ObjUpvalue** upvalues; // 指针数组
     int upvalueCount;
 };
-
 // --- Clip Object ---
 struct sObjClip {
     Obj obj;
@@ -104,13 +100,11 @@ struct sObjClip {
     u32 height;
     i32 layer;
 };
-
 struct Timeline;
 typedef struct sObjTimeline {
     Obj obj;
     struct Timeline* timeline;
 } ObjTimeline;
-
 // --- Class & Instance ---
 typedef struct sObjClass {
     Obj obj;
@@ -118,23 +112,21 @@ typedef struct sObjClass {
     struct sObjClass* superclass;
     Table methods;
 } ObjClass;
-
 typedef struct sObjInstance {
     Obj obj;
     ObjClass* klass;
     Table fields;
 } ObjInstance;
-
 typedef struct sObjBoundMethod {
     Obj obj;
     Value receiver;
     Value method; // 这里的 method 现在通常是 ObjClosure*
 } ObjBoundMethod;
-
 // --- Macros ---
 #define OBJ_TYPE(value) (AS_OBJ(value)->type)
 #define IS_STRING(value) isObjType(value, OBJ_STRING)
 #define IS_LIST(value) isObjType(value, OBJ_LIST)
+#define IS_DICT(value) isObjType(value, OBJ_DICT)
 #define IS_FUNCTION(value) isObjType(value, OBJ_FUNCTION)
 #define IS_NATIVE(value) isObjType(value, OBJ_NATIVE)
 #define IS_CLIP(value) isObjType(value, OBJ_CLIP)
@@ -144,9 +136,9 @@ typedef struct sObjBoundMethod {
 #define IS_BOUND_METHOD(value) isObjType(value, OBJ_BOUND_METHOD)
 #define IS_CLOSURE(value) isObjType(value, OBJ_CLOSURE) // [新增]
 #define IS_UPVALUE(value) isObjType(value, OBJ_UPVALUE) // [新增]
-
 #define AS_STRING(value) ((ObjString*)AS_OBJ(value))
 #define AS_LIST(value) ((ObjList*)AS_OBJ(value))
+#define AS_DICT(value) ((ObjDict*)AS_OBJ(value))
 #define AS_CSTRING(value) (((ObjString*)AS_OBJ(value))->chars)
 #define AS_NATIVE(value) (((ObjNative*)AS_OBJ(value))->function)
 #define AS_FUNCTION(value) ((ObjFunction*)AS_OBJ(value))
@@ -156,16 +148,15 @@ typedef struct sObjBoundMethod {
 #define AS_INSTANCE(value) ((ObjInstance*)AS_OBJ(value))
 #define AS_BOUND_METHOD(value) ((ObjBoundMethod*)AS_OBJ(value))
 #define AS_CLOSURE(value) ((ObjClosure*)AS_OBJ(value)) // [新增]
-
 // --- Inline Helpers ---
 static inline bool isObjType(Value value, ObjType type) {
     return IS_OBJ(value) && AS_OBJ(value)->type == type;
 }
-
 // --- API ---
 ObjString* copyString(VM* vm, const char* chars, i32 length);
 ObjString* takeString(VM* vm, char* chars, i32 length);
 ObjList* newList(VM* vm);
+ObjDict* newDict(VM* vm); // [新增]
 ObjFunction* newFunction(VM* vm);
 ObjNative* newNative(VM* vm, NativeFn function);
 ObjClip* newClip(VM* vm, ObjString* path);
@@ -175,5 +166,4 @@ ObjInstance* newInstance(VM* vm, ObjClass* klass);
 ObjBoundMethod* newBoundMethod(VM* vm, Value receiver, Value method);
 ObjClosure* newClosure(VM* vm, ObjFunction* function); // [新增]
 ObjUpvalue* newUpvalue(VM* vm, Value* slot); // [新增]
-
 void printObject(Value value);

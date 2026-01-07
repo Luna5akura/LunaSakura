@@ -2,7 +2,7 @@
 
 #pragma once
 #include "common.h"
-// [新增] 前置声明 VM，解决 vm.h 包含此文件时 VM 尚未定义的问题
+
 typedef struct VM VM;
 // --- Forward Declarations ---
 typedef struct sObj Obj;
@@ -79,3 +79,5 @@ static INLINE void writeValueArray(VM* vm, ValueArray* array, Value value) {
 // [修改] 声明增加 VM* vm
 void freeValueArray(VM* vm, ValueArray* array);
 void printValue(Value value);
+// [新增] 值哈希函数
+u32 valueHash(Value value);

@@ -1,7 +1,8 @@
 // src/vm/memory.h
+
 #pragma once
 #include "object.h"
-// [新增] 前置声明 VM，防止循环依赖
+
 typedef struct VM VM;
 // --- Allocation Macros ---
 #define ALLOCATE(vm, type, count) \

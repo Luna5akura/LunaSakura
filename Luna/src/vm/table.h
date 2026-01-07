@@ -6,7 +6,7 @@
 typedef struct VM VM;
 // --- Hash Table Entry ---
 typedef struct {
-    ObjString* key;
+    Value key;
     Value value;
 } Entry;
 // --- Hash Table ---
@@ -19,13 +19,12 @@ typedef struct {
 void initTable(Table* table);
 void freeTable(VM* vm, Table* table);
 // --- Core Operations ---
-bool tableGet(Table* table, ObjString* key, Value* value);
-bool tableSet(VM* vm, Table* table, ObjString* key, Value value);
-bool tableDelete(Table* table, ObjString* key);
+bool tableGet(Table* table, Value key, Value* value);
+bool tableSet(VM* vm, Table* table, Value key, Value value);
+bool tableDelete(Table* table, Value key);
 void tableAddAll(VM* vm, Table* from, Table* to);
 // --- String Interning ---
 ObjString* tableFindString(Table* table, const char* chars, u32 length, u32 hash);
 // [新增] GC 辅助函数声明
 void markTable(VM* vm, Table* table);
 void tableRemoveWhite(Table* table);
-

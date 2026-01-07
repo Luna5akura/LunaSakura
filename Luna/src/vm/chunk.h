@@ -2,7 +2,6 @@
 
 #pragma once
 #include "value.h"
-
 // --- Instruction Set ---
 typedef enum {
     OP_CONSTANT,
@@ -16,8 +15,8 @@ typedef enum {
     OP_GET_GLOBAL,
     OP_SET_GLOBAL,
     OP_DEFINE_GLOBAL,
-    OP_GET_UPVALUE,   // [新增]
-    OP_SET_UPVALUE,   // [新增]
+    OP_GET_UPVALUE, // [新增]
+    OP_SET_UPVALUE, // [新增]
     OP_EQUAL,
     OP_NOT_EQUAL,
     OP_GREATER,
@@ -36,7 +35,8 @@ typedef enum {
     OP_LOOP,
     OP_CALL,
     OP_BUILD_LIST,
-    OP_CLOSURE,       // [新增]
+    OP_BUILD_DICT, // [新增]
+    OP_CLOSURE, // [新增]
     OP_CLOSE_UPVALUE, // [新增]
     OP_RETURN,
     OP_CLASS,
@@ -48,19 +48,16 @@ typedef enum {
     OP_INVOKE,
     OP_SUPER_INVOKE,
 } OpCode;
-
 // --- Line Info ---
 typedef struct {
     i32 line;
     u32 count;
 } LineStart;
-
 typedef struct {
     u32 count;
     u32 capacity;
     LineStart* lines;
 } LineInfo;
-
 // --- Bytecode Chunk ---
 typedef struct {
     u32 count;
@@ -71,15 +68,12 @@ typedef struct {
     u32 bufferedCount;
     LineInfo lineInfo;
 } Chunk;
-
 typedef struct VM VM;
-
 void initChunk(Chunk* chunk);
 void freeChunk(VM* vm, Chunk* chunk);
 void growChunkCode(VM* vm, Chunk* chunk);
 void flushLineBuffer(VM* vm, Chunk* chunk, i32 newLine);
 i32 addConstant(VM* vm, Chunk* chunk, Value value);
-
 // --- Hot Path: Bytecode Writer ---
 static inline void writeChunk(VM* vm, Chunk* chunk, u8 byte, i32 line) {
     if (chunk->count == chunk->capacity) {
@@ -92,11 +86,9 @@ static inline void writeChunk(VM* vm, Chunk* chunk, u8 byte, i32 line) {
         flushLineBuffer(vm, chunk, line);
     }
 }
-
 static inline void writeChunkByte(VM* vm, Chunk* chunk, u8 byte) {
     writeChunk(vm, chunk, byte, chunk->bufferedLine);
 }
-
 i32 getLine(Chunk* chunk, i32 instructionOffset);
 i32 disassembleInstruction(Chunk* chunk, i32 offset);
 void disassembleChunk(Chunk* chunk, const char* name);

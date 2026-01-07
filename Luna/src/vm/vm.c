@@ -9,7 +9,6 @@
 #include "vm.h"
 #include "object.h"
 #include "chunk.h"
-
 void runtimeError(VM* vm, const char* format, ...) {
     va_list args;
     va_start(args, format);
@@ -26,7 +25,6 @@ void runtimeError(VM* vm, const char* format, ...) {
     }
     resetStack(vm);
 }
-
 void initVM(VM* vm) {
     memset(vm, 0, sizeof(VM));
     resetStack(vm);
@@ -37,7 +35,6 @@ void initVM(VM* vm) {
     vm->bytesAllocated = 0;
     vm->nextGC = 1024 * 1024;
 }
-
 void freeVM(VM* vm) {
     freeTable(vm, &vm->globals);
     freeTable(vm, &vm->strings);
@@ -45,17 +42,15 @@ void freeVM(VM* vm) {
     if (vm->grayStack) free(vm->grayStack);
     if (vm->active_timeline) timeline_free(vm, vm->active_timeline);
 }
-
 void defineNative(VM* vm, const char* name, NativeFn function) {
     ObjString* nameObj = copyString(vm, name, (i32)strlen(name));
     push(vm, OBJ_VAL(nameObj));
     ObjNative* nativeObj = newNative(vm, function);
     push(vm, OBJ_VAL(nativeObj));
-    tableSet(vm, &vm->globals, nameObj, OBJ_VAL(nativeObj));
+    tableSet(vm, &vm->globals, OBJ_VAL(nameObj), OBJ_VAL(nativeObj));
     pop(vm);
     pop(vm);
 }
-
 // [新增] 捕获上值
 static ObjUpvalue* captureUpvalue(VM* vm, Value* local) {
     ObjUpvalue* prevUpvalue = NULL;
@@ -71,7 +66,6 @@ static ObjUpvalue* captureUpvalue(VM* vm, Value* local) {
     else prevUpvalue->next = createdUpvalue;
     return createdUpvalue;
 }
-
 // [新增] 关闭上值
 static void closeUpvalues(VM* vm, Value* last) {
     while (vm->openUpvalues != NULL && vm->openUpvalues->location >= last) {
@@ -81,7 +75,6 @@ static void closeUpvalues(VM* vm, Value* last) {
         vm->openUpvalues = upvalue->next;
     }
 }
-
 static bool call(VM* vm, ObjClosure* closure, i32 argCount) {
     if (argCount != closure->function->arity) {
         runtimeError(vm, "Expected %d arguments but got %d.", closure->function->arity, argCount);
@@ -97,7 +90,6 @@ static bool call(VM* vm, ObjClosure* closure, i32 argCount) {
     frame->slots = vm->stackTop - argCount - 1;
     return true;
 }
-
 static bool callValue(VM* vm, Value callee, i32 argCount) {
     if (IS_OBJ(callee)) {
         switch (OBJ_TYPE(callee)) {
@@ -110,7 +102,7 @@ static bool callValue(VM* vm, Value callee, i32 argCount) {
                 ObjClass* klass = AS_CLASS(callee);
                 vm->stackTop[-argCount - 1] = OBJ_VAL(newInstance(vm, klass));
                 Value initializer;
-                if (tableGet(&klass->methods, vm->initString, &initializer)) {
+                if (tableGet(&klass->methods, OBJ_VAL(vm->initString), &initializer)) {
                     return call(vm, AS_CLOSURE(initializer), argCount);
                 } else if (argCount != 0) {
                     runtimeError(vm, "Expected 0 arguments for initializer but got %d.", argCount);
@@ -133,10 +125,9 @@ static bool callValue(VM* vm, Value callee, i32 argCount) {
     runtimeError(vm, "Can only call functions and classes.");
     return false;
 }
-
 static bool bindMethod(VM* vm, ObjClass* klass, ObjString* name, Value receiver) {
     Value method;
-    if (!tableGet(&klass->methods, name, &method)) {
+    if (!tableGet(&klass->methods, OBJ_VAL(name), &method)) {
         runtimeError(vm, "Undefined property '%s'.", name->chars);
         return false;
     }
@@ -144,7 +135,6 @@ static bool bindMethod(VM* vm, ObjClass* klass, ObjString* name, Value receiver)
     push(vm, OBJ_VAL(bound));
     return true;
 }
-
 static InterpretResult run(VM* vm) {
     CallFrame* frame = &vm->frames[vm->frameCount - 1];
     register u8* ip = frame->ip;
@@ -174,7 +164,6 @@ static InterpretResult run(VM* vm) {
             double a = AS_NUMBER(pop(vm)); \
             push(vm, BOOL_VAL(a op b)); \
         } while (false)
-
     for (;;) {
         u8 instruction = READ_BYTE();
         switch (instruction) {
@@ -195,7 +184,7 @@ static InterpretResult run(VM* vm) {
             case OP_GET_GLOBAL: {
                 ObjString* name = READ_STRING();
                 Value value;
-                if (!tableGet(&vm->globals, name, &value)) {
+                if (!tableGet(&vm->globals, OBJ_VAL(name), &value)) {
                     frame->ip = ip;
                     runtimeError(vm, "Undefined variable '%s'.", name->chars);
                     return INTERPRET_RUNTIME_ERROR;
@@ -205,14 +194,14 @@ static InterpretResult run(VM* vm) {
             }
             case OP_DEFINE_GLOBAL: {
                 ObjString* name = READ_STRING();
-                tableSet(vm, &vm->globals, name, peek(vm, 0));
+                tableSet(vm, &vm->globals, OBJ_VAL(name), peek(vm, 0));
                 pop(vm);
                 break;
             }
             case OP_SET_GLOBAL: {
                 ObjString* name = READ_STRING();
-                if (tableSet(vm, &vm->globals, name, peek(vm, 0))) {
-                    tableDelete(&vm->globals, name);
+                if (tableSet(vm, &vm->globals, OBJ_VAL(name), peek(vm, 0))) {
+                    tableDelete(&vm->globals, OBJ_VAL(name));
                     frame->ip = ip;
                     runtimeError(vm, "Undefined variable '%s'.", name->chars);
                     return INTERPRET_RUNTIME_ERROR;
@@ -244,7 +233,7 @@ static InterpretResult run(VM* vm) {
                 ObjInstance* instance = AS_INSTANCE(pop(vm));
                 ObjString* name = READ_STRING();
                 Value value;
-                if (tableGet(&instance->fields, name, &value)) {
+                if (tableGet(&instance->fields, OBJ_VAL(name), &value)) {
                     push(vm, value);
                     break;
                 }
@@ -262,7 +251,7 @@ static InterpretResult run(VM* vm) {
                     return INTERPRET_RUNTIME_ERROR;
                 }
                 ObjInstance* instance = AS_INSTANCE(peek(vm, 1));
-                tableSet(vm, &instance->fields, READ_STRING(), peek(vm, 0));
+                tableSet(vm, &instance->fields, OBJ_VAL(READ_STRING()), peek(vm, 0));
                 Value value = pop(vm);
                 pop(vm);
                 push(vm, value);
@@ -313,10 +302,10 @@ static InterpretResult run(VM* vm) {
                 }
                 ObjInstance* instance = AS_INSTANCE(receiver);
                 Value value;
-                if (tableGet(&instance->fields, name, &value)) {
+                if (tableGet(&instance->fields, OBJ_VAL(name), &value)) {
                     vm->stackTop[-argCount - 1] = value;
                 } else {
-                    if (!tableGet(&instance->klass->methods, name, &value)) {
+                    if (!tableGet(&instance->klass->methods, OBJ_VAL(name), &value)) {
                         frame->ip = ip;
                         runtimeError(vm, "Undefined property '%s'.", name->chars);
                         return INTERPRET_RUNTIME_ERROR;
@@ -334,19 +323,19 @@ static InterpretResult run(VM* vm) {
                 ObjString* name = READ_STRING();
                 int argCount = READ_BYTE();
                 ObjClass* superclass = AS_CLASS(pop(vm));
-                
+               
                 // [修复] 使用 peek 获取参数下方的 receiver，而不是 pop 掉最后一个参数
-                Value receiver = peek(vm, argCount); 
-                
+                Value receiver = peek(vm, argCount);
+               
                 Value method;
-                if (!tableGet(&superclass->methods, name, &method)) {
+                if (!tableGet(&superclass->methods, OBJ_VAL(name), &method)) {
                     frame->ip = ip;
                     runtimeError(vm, "Undefined property '%s'.", name->chars);
                     return INTERPRET_RUNTIME_ERROR;
                 }
                 ObjBoundMethod* bound = newBoundMethod(vm, receiver, method);
                 vm->stackTop[-argCount - 1] = OBJ_VAL(bound);
-                
+               
                 frame->ip = ip; // 记得保存 IP
                 if (!callValue(vm, OBJ_VAL(bound), argCount)) return INTERPRET_RUNTIME_ERROR;
                 frame = &vm->frames[vm->frameCount - 1];
@@ -373,6 +362,17 @@ static InterpretResult run(VM* vm) {
                     }
                 }
                 push(vm, OBJ_VAL(list));
+                break;
+            }
+            case OP_BUILD_DICT: {
+                u8 pairCount = READ_BYTE();
+                ObjDict* dict = newDict(vm);
+                for (u8 i = 0; i < pairCount; i++) {
+                    Value value = pop(vm);
+                    Value key = pop(vm);
+                    tableSet(vm, &dict->items, key, value);
+                }
+                push(vm, OBJ_VAL(dict));
                 break;
             }
             // [新增] 闭包指令
@@ -404,7 +404,7 @@ static InterpretResult run(VM* vm) {
             case OP_METHOD: {
                 Value method = peek(vm, 0);
                 ObjClass* klass = AS_CLASS(peek(vm, 1));
-                tableSet(vm, &klass->methods, READ_STRING(), method);
+                tableSet(vm, &klass->methods, OBJ_VAL(READ_STRING()), method);
                 pop(vm);
                 break;
             }
@@ -425,7 +425,6 @@ static InterpretResult run(VM* vm) {
         }
     }
 }
-
 InterpretResult interpret(VM* vm, Chunk* chunk) {
     ObjFunction* function = newFunction(vm);
     function->chunk = *chunk;
