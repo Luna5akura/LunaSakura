@@ -1,26 +1,8 @@
 // src/binding/bind_std.c
 
-#include <stdio.h>
 #include "vm/vm.h"
 #include "vm/memory.h"
-// --- Helper: Type Checking ---
-// 用于确保列表是同类型的 (Homogeneous)
-bool typesMatch(Value a, Value b) {
-    if (IS_NUMBER(a) && IS_NUMBER(b)) return true;
-    if (IS_BOOL(a) && IS_BOOL(b)) return true;
-    if (IS_NIL(a) && IS_NIL(b)) return true;
-    if (IS_OBJ(a) && IS_OBJ(b)) {
-        ObjType typeA = OBJ_TYPE(a);
-        ObjType typeB = OBJ_TYPE(b);
-        if (typeA != typeB) return false;
-        // 对于列表，额外检查同质性（如果需要深入检查内部类型）
-        if (typeA == OBJ_LIST) {
-            return isListHomogeneous(AS_LIST(a)) && isListHomogeneous(AS_LIST(b));
-        }
-        return true;
-    }
-    return false;
-}
+
 // --- List Native Functions ---
 // Constructor: List()
 Value nativeList(VM* vm, i32 argCount, Value* args) {

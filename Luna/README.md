@@ -16,32 +16,6 @@
 
 ---
 
-### **阶段0: 基础准备与修复 (Preparation & Fixes)**
-**目标**：修复现有代码问题，确保稳定基础。整合方向1的简单修复（如类型检查增强）。
-**预计时长**：3-5人日。
-1. **修复类型检查与运行时错误**（方向1: 类型错误处理）。
-   - 描述：增强IS_宏和runtimeError，支持更多类型检查（如列表同质性）。
-   - 优先级：高（防止崩溃）。
-   - 涉及文件：`src/vm/vm.c` (runtimeError增强), `src/vm/object.c` (typesMatch函数)。
-   - 预计时间：1人日。
-   - 依赖：无。
-
-2. **添加Unicode字符串支持**（方向1: Unicode）。
-   - 描述：字符串处理从ASCII升级到UTF-8，支持国际字符。
-   - 优先级：中。
-   - 涉及文件：`src/vm/object.c` (hashString/copyString调整), `src/vm/scanner.c` (字符串扫描)。
-   - 预计时间：1人日。
-   - 依赖：无。
-
-3. **GC调优与调试日志**（通用）。
-   - 描述：添加DEBUG_LOG_GC，调整nextGC阈值。
-   - 优先级：高。
-   - 涉及文件：`src/vm/memory.c` (collectGarbage日志)。
-   - 预计时间：1人日。
-   - 依赖：无。
-
----
-
 ### **阶段1: 核心语言增强 (Core Language Improvements)**
 **目标**：实现方向1的关键特性，提升脚本表达力（如简化动画表达式）。为后续Roadmap铺路。
 **预计时长**：10-15人日。

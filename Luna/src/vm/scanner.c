@@ -1,34 +1,45 @@
 // src/vm/scanner.c
 
-#include <stdio.h>
-#include <string.h>
 #include "scanner.h"
-// --- Character Attribute Table (Lookup Table) ---
-static const u8 charAttrs[256] = {
-    ['\t'] = 4, ['\r'] = 4, [' '] = 4,
-    ['a' ... 'z'] = 1,
-    ['A' ... 'Z'] = 1,
-    ['_'] = 1,
-    ['0' ... '9'] = 2
-};
-#define IS_ALPHA(c) (charAttrs[(u8)(c)] & 1)
-#define IS_DIGIT(c) (charAttrs[(u8)(c)] & 2)
-#define IS_SPACE(c) (charAttrs[(u8)(c)] & 4)
-#define IS_ALPHANUM(c) (charAttrs[(u8)(c)] & 3)
-// [新增] UTF-8 辅助：检查是否是UTF-8延续字节
-#define IS_UTF8_CONT(c) (((u8)(c) & 0xC0) == 0x80)
+
+// --- Character Attribute Table ---
+// 使用运行时初始化以保证标准 C 兼容性，避免 GCC 扩展语法
+static u8 charAttrs[256];
+static bool charAttrsInitialized = false;
+
+#define ATTR_ALPHA 1
+#define ATTR_DIGIT 2
+
+#define IS_ALPHA(c) (charAttrs[(u8)(c)] & ATTR_ALPHA)
+#define IS_DIGIT(c) (charAttrs[(u8)(c)] & ATTR_DIGIT)
+#define IS_ALPHANUM(c) (charAttrs[(u8)(c)] & (ATTR_ALPHA | ATTR_DIGIT))
+
+static void initCharAttrs() {
+    if (charAttrsInitialized) return;
+    memset(charAttrs, 0, sizeof(charAttrs));
+    for (int i = 'a'; i <= 'z'; i++) charAttrs[i] |= ATTR_ALPHA;
+    for (int i = 'A'; i <= 'Z'; i++) charAttrs[i] |= ATTR_ALPHA;
+    charAttrs['_'] |= ATTR_ALPHA;
+    for (int i = '0'; i <= '9'; i++) charAttrs[i] |= ATTR_DIGIT;
+    charAttrsInitialized = true;
+}
+
 // --- Memory Helpers ---
+
 static inline u16 load16(const char* p) {
     u16 result;
     memcpy(&result, p, sizeof(u16));
     return result;
 }
+
 static inline u32 load32(const char* p) {
     u32 result;
     memcpy(&result, p, sizeof(u32));
     return result;
 }
+
 // --- Token Constructors ---
+
 static inline Token makeToken(TokenType type, const char* start, const char* current, u32 line) {
     return (Token){
         .start = start,
@@ -38,6 +49,7 @@ static inline Token makeToken(TokenType type, const char* start, const char* cur
         .padding = 0
     };
 }
+
 static inline Token errorToken(const char* message, u32 line) {
     return (Token){
         .start = message,
@@ -47,32 +59,31 @@ static inline Token errorToken(const char* message, u32 line) {
         .padding = 0
     };
 }
-// --- Keyword Check ---
+
+// --- Keyword Trie / Checking ---
+// 使用 SWAR (SIMD Within A Register) 技术快速比较短字符串
+
 static inline TokenType checkKeyword(const char* start, i32 length, const char* rest, i32 restLen, TokenType type) {
     if (length != restLen) return TOKEN_IDENTIFIER;
+    
+    // 优化：针对常见长度直接比较，避免 memcmp 调用开销
     if (restLen == 2) {
         if (load16(start) == load16(rest)) return type;
-        return TOKEN_IDENTIFIER;
-    }
-    if (restLen == 3) {
+    } else if (restLen == 3) {
         if (load16(start) == load16(rest) && start[2] == rest[2]) return type;
-        return TOKEN_IDENTIFIER;
-    }
-    if (restLen == 4) {
+    } else if (restLen == 4) {
         if (load32(start) == load32(rest)) return type;
-        return TOKEN_IDENTIFIER;
-    }
-    if (restLen == 5) {
+    } else if (restLen == 5) {
         if (load32(start) == load32(rest) && start[4] == rest[4]) return type;
-        return TOKEN_IDENTIFIER;
-    }
-    if (restLen == 6) {
+    } else if (restLen == 6) {
         if (load32(start) == load32(rest) && load16(start + 4) == load16(rest + 4)) return type;
-        return TOKEN_IDENTIFIER;
+    } else {
+        if (memcmp(start, rest, restLen) == 0) return type;
     }
-    if (memcmp(start, rest, restLen) == 0) return type;
+    
     return TOKEN_IDENTIFIER;
 }
+
 static TokenType identifierType(const char* start, i32 length) {
     switch (start[0]) {
         case 'a': return checkKeyword(start + 1, length - 1, "nd", 2, TOKEN_AND);
@@ -99,7 +110,7 @@ static TokenType identifierType(const char* start, i32 length) {
             if (length > 1) {
                 switch (start[1]) {
                     case 'f': return checkKeyword(start + 2, length - 2, "", 0, TOKEN_IF);
-                    case 'n': return checkKeyword(start + 2, length - 2, "", 0, TOKEN_IN); // [新增] 识别 'in'
+                    case 'n': return checkKeyword(start + 2, length - 2, "", 0, TOKEN_IN);
                 }
             }
             break;
@@ -121,206 +132,238 @@ static TokenType identifierType(const char* start, i32 length) {
     }
     return TOKEN_IDENTIFIER;
 }
+
 // --- Init ---
+
 void initScanner(Scanner* scanner, const char* source) {
+    initCharAttrs(); // 确保查找表已初始化
+    
     scanner->start = source;
     scanner->current = source;
     scanner->line = 1;
-    // 初始化缩进状态
     scanner->indentStack[0] = 0;
     scanner->indentTop = 0;
     scanner->pendingDedents = 0;
     scanner->isAtStartOfLine = true;
     scanner->parenDepth = 0;
 }
+
 // --- Main Scanner Loop ---
+
+static inline bool isAtEnd(Scanner* scanner) {
+    return *scanner->current == '\0';
+}
+
+static inline char advance(Scanner* scanner) {
+    scanner->current++;
+    return scanner->current[-1];
+}
+
+static inline char peek(Scanner* scanner) {
+    return *scanner->current;
+}
+
+static inline char peekNext(Scanner* scanner) {
+    if (isAtEnd(scanner)) return '\0';
+    return scanner->current[1];
+}
+
 Token scanToken(Scanner* scanner) {
-    // 1. 处理挂起的 DEDENT (当缩进减少多层时)
+    // 1. 处理挂起的 DEDENT
     if (scanner->pendingDedents > 0) {
         scanner->pendingDedents--;
+        // 关键修复：DEDENT 产生时，逻辑上该行内容已开始，不再处于行首
+        // 防止下次循环再次计算缩进导致错误
+        scanner->isAtStartOfLine = false; 
         return makeToken(TOKEN_DEDENT, scanner->current, scanner->current, scanner->line);
     }
-    // 2. 状态循环 (跳过空格、注释，处理行首)
+
+    // 2. 状态循环 (跳过空格、处理缩进、注释、换行)
     const char* start;
-    const char* current = scanner->current;
-    u32 line = scanner->line;
+    bool indentWait = false; // 标记是否检测到了有效缩进
+
     for (;;) {
-        // 如果在行首，计算缩进
+        // --- 行首缩进处理逻辑 ---
         if (scanner->isAtStartOfLine) {
-            i32 indent = 0;
-            // 计算空格 (Tab算4个空格，建议禁止混用)
-            while (*current == ' ' || *current == '\t') {
-                if (*current == '\t') indent += 4;
-                else indent += 1;
-                current++;
-            }
-            // 如果遇到空行或注释行，忽略该行，重置行首状态
-            if (*current == '\n' || *current == '#' || *current == '\r') {
-                // 不做任何操作，让后面的逻辑去处理换行符，或者直接跳过
-            } else if (*current != '\0') {
-                // 有效代码行开始，检查缩进
-                scanner->isAtStartOfLine = false;
+            const char* indentStart = scanner->current;
+            u16 indent = 0;
             
-                i32 currentIndent = scanner->indentStack[scanner->indentTop];
+            // 计算缩进量
+            while (peek(scanner) == ' ' || peek(scanner) == '\t') {
+                if (peek(scanner) == '\t') indent += 4;
+                else indent += 1;
+                advance(scanner);
+            }
+
+            // 如果是空行或注释行，忽略缩进，继续寻找下一行
+            if (peek(scanner) == '\n' || peek(scanner) == '#' || peek(scanner) == '\r') {
+                // 不重置 isAtStartOfLine，继续下一轮循环
+            } else if (!isAtEnd(scanner)) {
+                // -> 遇到有效代码，检查缩进层级
+                
+                u16 currentIndent = scanner->indentStack[scanner->indentTop];
+
                 if (indent > currentIndent) {
                     if (scanner->indentTop >= MAX_INDENT_STACK - 1)
-                        return errorToken("Too much indentation.", line);
+                        return errorToken("Too much indentation.", scanner->line);
+                    
                     scanner->indentStack[++scanner->indentTop] = indent;
-                    scanner->current = current; // 更新指针，因为消耗了空格
-                    return makeToken(TOKEN_INDENT, current, current, line);
-                }
+                    // 发送 INDENT，并标记不再处于行首，防止死循环
+                    scanner->isAtStartOfLine = false;
+                    return makeToken(TOKEN_INDENT, indentStart, scanner->current, scanner->line);
+                } 
                 else if (indent < currentIndent) {
-                    // 计算需要退几层
+                    // 计算需要回退多少层
                     while (scanner->indentTop > 0 && scanner->indentStack[scanner->indentTop] > indent) {
                         scanner->pendingDedents++;
                         scanner->indentTop--;
                     }
+                    
                     if (scanner->indentStack[scanner->indentTop] != indent) {
-                        return errorToken("Indentation error.", line);
+                        return errorToken("Indentation error: unaligned level.", scanner->line);
                     }
+                    
                     // 发送第一个 DEDENT
                     scanner->pendingDedents--;
-                    scanner->current = current;
-                    return makeToken(TOKEN_DEDENT, current, current, line);
+                    scanner->isAtStartOfLine = false;
+                    return makeToken(TOKEN_DEDENT, scanner->current, scanner->current, scanner->line);
                 }
-                // indent == currentIndent: 正常同级代码，什么都不做
+                
+                // indent == currentIndent: 正常，标记行首处理结束，进入普通扫描
+                scanner->isAtStartOfLine = false;
             }
         }
-        // 正常的跳过空格 (非行首)
-        char c = *current;
+
+        // --- 普通空白处理 ---
+        char c = peek(scanner);
+        
         if (c == ' ' || c == '\t' || c == '\r') {
-            current++;
+            advance(scanner);
             continue;
         }
-        // 处理注释
+        
         if (c == '#') {
-            while (*current != '\n' && *current != '\0') {
-                current++;
+            while (peek(scanner) != '\n' && !isAtEnd(scanner)) {
+                advance(scanner);
             }
             continue;
         }
-        // 处理换行
+        
         if (c == '\n') {
-            line++;
-            current++;
-        
-            // 如果在括号内，或者这行本身就是空的（isAtStartOfLine仍为true说明没遇到代码），则忽略换行
-            if (scanner->parenDepth > 0) {
-                // 括号内换行等同于空格
-                continue;
-            }
-        
-            // 预读：如果下一行也是空行或注释，我们这里可以继续循环，不发出 NEWLINE
-            // 但为了简单，我们总是进入下一轮循环，让 isAtStartOfLine 逻辑决定
+            scanner->line++;
+            advance(scanner);
+            
+            // 如果在括号内，或者文件开头，换行被视为普通空白
+            if (scanner->parenDepth > 0) continue;
+            
+            // 标记下一轮循环需要检查行首缩进
             scanner->isAtStartOfLine = true;
-        
-            // 只有当上一行也是代码时（非连续换行），才发出 NEWLINE
-            // 这里简化策略：每次换行都重置为行首，下一轮循环如果遇到代码则发出 indent check
-            // 我们需要发出 TOKEN_NEWLINE 给 parser 来结束语句
-        
-            // 优化：只有当该行包含非空内容后遇到的换行才算有效，
-            // 但因为我们已经在循环里跳过了前面的空行，所以这里遇到的 '\n' 通常是语句结束。
-            // 除非... 它是文件的第一个字符
-            if (current - 1 == scanner->start) {
-                // 文件开头的换行，忽略
-                continue;
-            }
-            scanner->current = current;
-            scanner->line = line;
-            return makeToken(TOKEN_NEWLINE, current - 1, current, line - 1);
+            
+            // 只有当不仅是连续空行时才返回 NEWLINE (简化逻辑：解析器会处理多余 NEWLINE)
+            return makeToken(TOKEN_NEWLINE, scanner->current - 1, scanner->current, scanner->line - 1);
         }
-        break; // 遇到有效字符
+
+        break; // 找到有效字符
     }
-    // 更新 scanner 状态
-    scanner->current = current;
-    scanner->line = line;
-    start = current;
-    if (*current == '\0') {
+
+    start = scanner->current;
+    
+    if (isAtEnd(scanner)) {
         // EOF 处理：如果还有缩进，自动补全 DEDENT
         if (scanner->indentTop > 0) {
             scanner->pendingDedents = scanner->indentTop;
             scanner->indentTop = 0;
-            // 递归自己来发出 DEDENT
+            // 递归调用（或直接返回第一个）以处理剩余 DEDENT
             return scanToken(scanner);
         }
-        return makeToken(TOKEN_EOF, start, current, line);
+        return makeToken(TOKEN_EOF, start, scanner->current, scanner->line);
     }
-    char c = *current++;
-    scanner->current = current; // 消耗字符
+
+    char c = advance(scanner);
+
     // 3. 标识符 & 关键字
     if (IS_ALPHA(c)) {
-        while (IS_ALPHANUM(*scanner->current)) {
-            scanner->current++;
+        while (IS_ALPHANUM(peek(scanner))) {
+            advance(scanner);
         }
         TokenType type = identifierType(start, (i32)(scanner->current - start));
-        return makeToken(type, start, scanner->current, line);
+        return makeToken(type, start, scanner->current, scanner->line);
     }
+
     // 4. 数字
     if (IS_DIGIT(c)) {
-        while (IS_DIGIT(*scanner->current)) {
-            scanner->current++;
+        while (IS_DIGIT(peek(scanner))) {
+            advance(scanner);
         }
-        if (*scanner->current == '.' && IS_DIGIT(scanner->current[1])) {
-            scanner->current++; // Consume '.'
-            while (IS_DIGIT(*scanner->current)) {
-                scanner->current++;
+        if (peek(scanner) == '.' && IS_DIGIT(peekNext(scanner))) {
+            advance(scanner); // '.'
+            while (IS_DIGIT(peek(scanner))) {
+                advance(scanner);
             }
         }
-        return makeToken(TOKEN_NUMBER, start, scanner->current, line);
+        return makeToken(TOKEN_NUMBER, start, scanner->current, scanner->line);
     }
+
     // 5. 符号
-    char next = *scanner->current;
     // 宏定义简化
     #define MAKE_TOKEN(type) \
-        do { return makeToken(type, start, scanner->current, line); } while(0)
+        return makeToken(type, start, scanner->current, scanner->line)
+    
     #define MAKE_TOKEN_MATCH(expected, type_if, type_else) \
-        do { if (next == expected) scanner->current++; \
-             return makeToken(next == expected ? type_if : type_else, \
-                              start, scanner->current, line); } while(0)
+        if (peek(scanner) == expected) { \
+            advance(scanner); \
+            return makeToken(type_if, start, scanner->current, scanner->line); \
+        } else { \
+            return makeToken(type_else, start, scanner->current, scanner->line); \
+        }
+
     switch (c) {
         case '(': scanner->parenDepth++; MAKE_TOKEN(TOKEN_LEFT_PAREN);
         case ')': if (scanner->parenDepth > 0) scanner->parenDepth--; MAKE_TOKEN(TOKEN_RIGHT_PAREN);
-        case '[': MAKE_TOKEN(TOKEN_LEFT_BRACKET);
-        case ']': MAKE_TOKEN(TOKEN_RIGHT_BRACKET);
-        case '{': MAKE_TOKEN(TOKEN_LEFT_BRACE); // [修改] 添加
-        case '}': MAKE_TOKEN(TOKEN_RIGHT_BRACE); // [修改] 添加
-        case ':': MAKE_TOKEN(TOKEN_COLON); // Python 关键符号
+        case '[': scanner->parenDepth++; MAKE_TOKEN(TOKEN_LEFT_BRACKET); // 列表通常也忽略换行
+        case ']': if (scanner->parenDepth > 0) scanner->parenDepth--; MAKE_TOKEN(TOKEN_RIGHT_BRACKET);
+        case '{': scanner->parenDepth++; MAKE_TOKEN(TOKEN_LEFT_BRACE);
+        case '}': if (scanner->parenDepth > 0) scanner->parenDepth--; MAKE_TOKEN(TOKEN_RIGHT_BRACE);
+        case ':': MAKE_TOKEN(TOKEN_COLON);
+        case ';': MAKE_TOKEN(TOKEN_SEMICOLON);
         case ',': MAKE_TOKEN(TOKEN_COMMA);
         case '.': MAKE_TOKEN(TOKEN_DOT);
         case '-': MAKE_TOKEN(TOKEN_MINUS);
         case '+': MAKE_TOKEN(TOKEN_PLUS);
         case '/': MAKE_TOKEN(TOKEN_SLASH);
         case '*': MAKE_TOKEN(TOKEN_STAR);
+        
         case '!': MAKE_TOKEN_MATCH('=', TOKEN_BANG_EQUAL, TOKEN_BANG);
         case '=': MAKE_TOKEN_MATCH('=', TOKEN_EQUAL_EQUAL, TOKEN_EQUAL);
         case '<': MAKE_TOKEN_MATCH('=', TOKEN_LESS_EQUAL, TOKEN_LESS);
         case '>': MAKE_TOKEN_MATCH('=', TOKEN_GREATER_EQUAL, TOKEN_GREATER);
+        
         case '"': {
-            // [调整] 支持UTF-8字符串扫描：逐字节推进，但允许多字节字符
-            const char* str_ptr = scanner->current;
-            for (;;) {
-                char sc = *str_ptr;
-                if (sc == '"') {
-                    str_ptr++;
-                    scanner->current = str_ptr;
-                    return makeToken(TOKEN_STRING, start, str_ptr, line);
+            // [修复] 正确处理转义字符和字符串结束
+            while (peek(scanner) != '"' && !isAtEnd(scanner)) {
+                if (peek(scanner) == '\n') {
+                    scanner->line++;
                 }
-                if (sc == '\0') {
-                    return errorToken("Unterminated string.", line);
-                }
-                if (sc == '\n') line++;
-                // [新增] 处理UTF-8：如果是非ASCII，继续推进，但不解析，仅计数字节
-                if ((sc & 0x80) != 0) {  // UTF-8 起始字节
-                    int bytes = 1;
-                    if ((sc & 0xE0) == 0xC0) bytes = 2;
-                    else if ((sc & 0xF0) == 0xE0) bytes = 3;
-                    else if ((sc & 0xF8) == 0xF0) bytes = 4;
-                    str_ptr += bytes;
+                
+                if (peek(scanner) == '\\') {
+                    advance(scanner); // 消耗 '\'
+                    // 如果不是 EOF，消耗转义后的字符（哪怕是 '"' 也不作为结束符）
+                    if (!isAtEnd(scanner)) {
+                        advance(scanner);
+                    }
                 } else {
-                    str_ptr++;
+                    advance(scanner);
                 }
             }
+            
+            if (isAtEnd(scanner)) {
+                return errorToken("Unterminated string.", scanner->line);
+            }
+            
+            advance(scanner); // 消耗闭合的 '"'
+            return makeToken(TOKEN_STRING, start, scanner->current, scanner->line);
         }
     }
-    return errorToken("Unexpected character.", line);
+
+    return errorToken("Unexpected character.", scanner->line);
 }

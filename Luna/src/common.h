@@ -1,7 +1,12 @@
 // include/common.h
 
-#ifndef LUNA_COMMON_H
-#define LUNA_COMMON_H
+#pragma once
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdio.h>
 
 #if defined(__GNUC__) || defined(__clang__)
     #define LIKELY(x) __builtin_expect(!!(x), 1)
@@ -11,10 +16,15 @@
     #define UNLIKELY(x) (x)
 #endif
 
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <string.h> // for memcmp optimization
+#if defined(_MSC_VER)
+    #define INLINE __forceinline
+#elif defined(__GNUC__) || defined(__clang__)
+    #define INLINE __attribute__((always_inline)) inline
+#else
+    #define INLINE inline
+#endif
+
+#define UNUSED(x) ((void)(x))
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -24,15 +34,8 @@ typedef int8_t i8;
 typedef int16_t i16;
 typedef int32_t i32;
 typedef int64_t i64;
-#define U8_COUNT 256
 
-// --- 性能优化宏 ---
-// 强制内联，减少函数调用开销
-#if defined(_MSC_VER)
-#define INLINE __forceinline
-#else
-#define INLINE __attribute__((always_inline)) inline
-#endif
+#define U8_COUNT 256
 
 // --- Bithack 辅助 ---
 static inline u32 loadWord4(const void* ptr) {
@@ -45,5 +48,3 @@ static inline u32 loadWord4(const void* ptr) {
 // #define DEBUG_PRINT_CODE
 // #define DEBUG_LOG_GC
 // #define DEBUG_TRACE_EXECUTION
-
-#endif

@@ -9,7 +9,7 @@ CC = gcc
 # -O2: 开启优化 (关键！否则 static inline 不会生效，VM 会很慢)
 # -DDEBUG_TRACE_EXECUTION: 如果你想看 VM 指令执行过程，可以取消注释下面这行
 # DEBUG_FLAGS = -DDEBUG_TRACE_EXECUTION
-CFLAGS = -g -O3 -Wall -Wextra -std=c11 -Iinclude -Isrc -MMD -MP -DDEBUG_TRACE_EXECUTION $(DEBUG_FLAGS)
+CFLAGS = -g -O3 -Wall -Wextra -std=c11 -Iinclude -Isrc -MMD -MP 
 
 # 2. 引入 FFmpeg 和 SDL2 配置 (自动查找路径)
 FFMPEG_LIBS = libavcodec libavformat libavutil libswscale sdl2
