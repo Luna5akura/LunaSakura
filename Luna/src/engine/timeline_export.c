@@ -9,10 +9,11 @@
 #include "timeline.h"
 #include "compositor.h"
 #include "video.h" // 假设这里有 VideoMeta 定义
-#include "vm/memory.h"
-#include "vm/vm.h" // Added for VM struct
+#include "core/memory.h"
+#include "core/vm/vm.h" // Added for VM struct
 // ... (复用 video_export.c 中的 open_encoder 实现) ...
 // 请确保 open_encoder 函数可见，或在此处重新复制一遍
+// src/engine/timeline_export.c 中的 open_encoder 函数
 static i32 open_encoder(VM* vm, AVFormatContext* out_fmt_ctx, AVCodecContext** enc_ctx,
                         AVStream** out_stream, i32 width, i32 height, double fps) {
     const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
@@ -21,6 +22,8 @@ static i32 open_encoder(VM* vm, AVFormatContext* out_fmt_ctx, AVCodecContext** e
     *enc_ctx = avcodec_alloc_context3(codec);
     vm->bytesAllocated += sizeof(AVCodecContext);
     AVRational fps_rat = av_d2q(fps, 100000);
+    // 修改此处：移除赋值，直接调用 av_reduce 以简化分数
+    av_reduce(&fps_rat.num, &fps_rat.den, fps_rat.num, fps_rat.den, INT_MAX);
     (*enc_ctx)->width = width;
     (*enc_ctx)->height = height;
     (*enc_ctx)->time_base = av_inv_q(fps_rat);
@@ -41,7 +44,7 @@ void export_timeline(VM* vm, Timeline* tl, const char* output_filename) {
     // 1. 创建 Compositor (注意：当前线程必须有 GL Context)
     // 在 main.c 的调用链中，主线程已经有 Context 了。
     Compositor* comp = compositor_create(vm, tl);
-   
+  
     // 2. FFmpeg Encoder Setup
     AVFormatContext* out_fmt_ctx = NULL;
     AVCodecContext* enc_ctx = NULL;
@@ -54,7 +57,7 @@ void export_timeline(VM* vm, Timeline* tl, const char* output_filename) {
     if (!(out_fmt_ctx->oformat->flags & AVFMT_NOFILE)) {
         if (avio_open(&out_fmt_ctx->pb, output_filename, AVIO_FLAG_WRITE) < 0) goto cleanup;
     }
-    (void)avformat_write_header(out_fmt_ctx, NULL); // Ignore return value with cast to void
+    if (avformat_write_header(out_fmt_ctx, NULL) < 0) goto cleanup;
     // 3. SWS Context (RGBA -> YUV420P)
     struct SwsContext* sws_ctx = NULL; // Initialize to NULL to fix uninitialized warning
     sws_ctx = sws_getContext(
@@ -74,37 +77,50 @@ void export_timeline(VM* vm, Timeline* tl, const char* output_filename) {
     vm->bytesAllocated += sizeof(AVPacket);
     i32 total_frames = (i32)(tl->duration * tl->fps);
     double step = 1.0 / tl->fps;
-   
+  
+    GLuint pbo = 0;
+    glGenBuffers(1, &pbo);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+    glBufferData(GL_PIXEL_PACK_BUFFER, tl->width * tl->height * 4, NULL, GL_DYNAMIC_READ);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+  
     for (i32 i = 0; i < total_frames; i++) {
         double t = i * step;
-       
+      
         // A. GPU Render
         compositor_render(comp, t);
-       
-        // B. Readback (RGBA)
-        u8* pixels = compositor_get_cpu_buffer(comp);
-       
-        // C. Convert to YUV
-        const u8* src_slice[] = { pixels };
-        i32 src_stride[] = { tl->width * 4 };
-       
-        av_frame_make_writable(yuv_frame);
-        sws_scale(sws_ctx, src_slice, src_stride, 0, tl->height,
+      
+        // B. Async Readback (RGBA)
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, comp->fbo);
+        glReadPixels(0, 0, tl->width, tl->height, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        u8* pixels = (u8*)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+        if (pixels) {
+            // C. Convert to YUV
+            const u8* src_slice[] = { pixels };
+            i32 src_stride[] = { tl->width * 4 };
+      
+            av_frame_make_writable(yuv_frame);
+            sws_scale(sws_ctx, src_slice, src_stride, 0, tl->height,
                   yuv_frame->data, yuv_frame->linesize);
-                 
-        // D. Encode
-        yuv_frame->pts = i;
-        avcodec_send_frame(enc_ctx, yuv_frame);
-        while (avcodec_receive_packet(enc_ctx, pkt) >= 0) {
-            av_packet_rescale_ts(pkt, enc_ctx->time_base, out_stream->time_base);
-            pkt->stream_index = out_stream->index;
-            av_interleaved_write_frame(out_fmt_ctx, pkt);
-            av_packet_unref(pkt);
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+                
+            // D. Encode
+            yuv_frame->pts = i;
+            avcodec_send_frame(enc_ctx, yuv_frame);
+            while (avcodec_receive_packet(enc_ctx, pkt) >= 0) {
+                av_packet_rescale_ts(pkt, enc_ctx->time_base, out_stream->time_base);
+                pkt->stream_index = out_stream->index;
+                av_interleaved_write_frame(out_fmt_ctx, pkt);
+                av_packet_unref(pkt);
+            }
         }
-       
-        if (i % 10 == 0) printf("\r[Export] %d / %d", i, total_frames);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+      
+        if (i % 100 == 0) printf("\r[Export] %d / %d", i, total_frames);
     }
-   
+  
     // Flush
     avcodec_send_frame(enc_ctx, NULL);
     while (avcodec_receive_packet(enc_ctx, pkt) >= 0) {
@@ -116,6 +132,7 @@ void export_timeline(VM* vm, Timeline* tl, const char* output_filename) {
     av_write_trailer(out_fmt_ctx);
     printf("\n[Export] Done.\n");
 cleanup:
+    glDeleteBuffers(1, &pbo);
     if (comp) compositor_free(vm, comp); // Release GL resources
     if (sws_ctx) {
         sws_freeContext(sws_ctx);

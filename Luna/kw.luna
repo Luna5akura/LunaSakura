@@ -1,7 +1,0 @@
-fun calc(a, b, op = "add") :
-    if (op == "add"):
-        print a + b
-    else: 
-        print a - b
-
-calc(a=10, b=5)  

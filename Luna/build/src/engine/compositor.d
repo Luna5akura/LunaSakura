@@ -1,15 +1,17 @@
 build/src/engine/compositor.o: src/engine/compositor.c \
  include/glad/glad.h include/KHR/khrplatform.h src/engine/compositor.h \
- src/engine/timeline.h src/vm/object.h src/common.h src/vm/chunk.h \
- src/vm/value.h src/vm/table.h src/vm/memory.h src/vm/vm.h
+ src/engine/timeline.h src/core/object.h src/core/chunk.h \
+ src/core/value.h src/common.h src/core/table.h src/core/memory.h \
+ src/core/vm/vm.h src/core/vm/error.h
 include/glad/glad.h:
 include/KHR/khrplatform.h:
 src/engine/compositor.h:
 src/engine/timeline.h:
-src/vm/object.h:
+src/core/object.h:
+src/core/chunk.h:
+src/core/value.h:
 src/common.h:
-src/vm/chunk.h:
-src/vm/value.h:
-src/vm/table.h:
-src/vm/memory.h:
-src/vm/vm.h:
+src/core/table.h:
+src/core/memory.h:
+src/core/vm/vm.h:
+src/core/vm/error.h:

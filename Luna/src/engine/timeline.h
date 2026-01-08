@@ -1,7 +1,7 @@
 // src/engine/timeline.h
 
 #pragma once // 1. 编译优化
-#include "vm/object.h"
+#include "core/object.h"
 // Forward declare VM to avoid including vm.h
 typedef struct VM VM;
 // === 基础组件 ===
@@ -12,7 +12,7 @@ typedef struct __attribute__((aligned(16))) {
     float x, y; // 0-8
     float scale_x; // 8-12
     float scale_y; // 12-16 (128-bit boundary)
-  
+ 
     float rotation; // 16-20
     float opacity; // 20-24
     i32 z_index; // 24-28
@@ -24,18 +24,19 @@ typedef struct __attribute__((aligned(16))) {
 typedef struct {
     // --- Data Source ---
     ObjClip* media; // 8 bytes
-  
+ 
     // --- Time Mapping ---
     // Double precision is good, but consider keeping them together
     double timeline_start; // 8 bytes
     double timeline_duration; // 8 bytes
     double source_in; // 8 bytes
-  
+ 
     // --- Spatial Props ---
     Transform transform; // 32 bytes (Aligned)
     // --- Runtime Flags ---
     // u8 is_selected;
     // u8 is_muted;
+    u32 _padding; // Padding to 64-byte cache line
 } TimelineClip;
 // === 容器结构 ===
 // 轨道 (Track)
@@ -43,13 +44,13 @@ typedef struct {
 // 渲染时这是热数据 (Hot Data)
 typedef struct {
     i32 id;
-  
+ 
     // 5. 优化：使用位掩码代替多个 bool
     // bit 0: visible, bit 1: locked, bit 2: solo
     u8 flags;
-  
+ 
     char name[31]; // 调整大小使得 Track 头部对齐 (4+1+31 = 36 bytes)
-  
+ 
     // 核心优化：连续内存数组
     // Clips 必须始终保持按 timeline_start 升序排序
     TimelineClip* clips;
@@ -58,6 +59,7 @@ typedef struct {
     // 6. 优化：渲染游标缓存
     // 视频播放通常是线性的，记录上次访问的索引可将查询降为 O(1)
     i32 last_lookup_index;
+    double max_end_time; // Cache max end time per track
 } Track;
 // 时间轴工程 (Project Root)
 typedef struct Timeline {
@@ -66,7 +68,7 @@ typedef struct Timeline {
     u32 height;
     double fps;
     double duration;
-  
+ 
     struct {
         u8 r, g, b, a;
     } background_color;

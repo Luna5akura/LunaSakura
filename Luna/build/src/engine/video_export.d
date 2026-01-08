@@ -1,13 +1,14 @@
 build/src/engine/video_export.o: src/engine/video_export.c \
- src/engine/video.h src/vm/object.h src/common.h src/vm/chunk.h \
- src/vm/value.h src/vm/table.h src/vm/memory.h src/vm/vm.h \
- src/engine/timeline.h
+ src/engine/video.h src/core/object.h src/core/chunk.h src/core/value.h \
+ src/common.h src/core/table.h src/core/memory.h src/core/vm/vm.h \
+ src/core/vm/error.h src/engine/timeline.h
 src/engine/video.h:
-src/vm/object.h:
+src/core/object.h:
+src/core/chunk.h:
+src/core/value.h:
 src/common.h:
-src/vm/chunk.h:
-src/vm/value.h:
-src/vm/table.h:
-src/vm/memory.h:
-src/vm/vm.h:
+src/core/table.h:
+src/core/memory.h:
+src/core/vm/vm.h:
+src/core/vm/error.h:
 src/engine/timeline.h:

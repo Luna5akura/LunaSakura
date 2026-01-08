@@ -1,11 +1,10 @@
 // src/binding/bind_video.c
 
 #include <stdio.h>
-#include "vm/memory.h"
-#include "vm/vm.h"
+#include "core/memory.h"
+#include "core/vm/vm.h"
 #include "engine/video.h"
 #include "engine/timeline.h"
-
 // 供 main.c 调用
 Timeline* get_active_timeline(VM* vm) {
     return vm->active_timeline;
@@ -22,16 +21,14 @@ Value nativeCreateClip(VM* vm, i32 argCount, Value* args) {
         return NIL_VAL;
     }
     ObjString* path = AS_STRING(args[0]);
- 
     // IO Blocking Call
     VideoMeta meta = load_video_metadata(path->chars);
- 
     if (UNLIKELY(!meta.success)) {
         fprintf(stderr, "Runtime Error: Could not load video metadata from '%s'\n", path->chars);
         return NIL_VAL;
     }
     ObjClip* clip = newClip(vm, path);
-  
+ 
     clip->duration = meta.duration;
     clip->width = meta.width;
     clip->height = meta.height;
@@ -51,13 +48,12 @@ Value nativeProject(VM* vm, i32 argCount, Value* args) {
     double w = AS_NUMBER(args[0]);
     double h = AS_NUMBER(args[1]);
     double fps = AS_NUMBER(args[2]);
- 
     return OBJ_VAL(newTimeline(vm, (u32)w, (u32)h, fps));
 }
 // add(timeline, track_id, clip, start_time)
 Value nativeAdd(VM* vm, i32 argCount, Value* args) {
     if (argCount != 4) return NIL_VAL; // 简化错误处理以聚焦上下文
-  
+ 
     if (!IS_TIMELINE(args[0]) || !IS_NUMBER(args[1]) || !IS_CLIP(args[2]) || !IS_NUMBER(args[3])) {
         return NIL_VAL;
     }
@@ -65,12 +61,11 @@ Value nativeAdd(VM* vm, i32 argCount, Value* args) {
     i32 trackIdx = (i32)AS_NUMBER(args[1]);
     ObjClip* clip = AS_CLIP(args[2]);
     double start = AS_NUMBER(args[3]);
-  
+ 
     while (tlObj->timeline->track_count <= (u32)trackIdx) {
         timeline_add_track(vm, tlObj->timeline);
     }
     timeline_add_clip(vm, tlObj->timeline, trackIdx, clip, start);
- 
     return NIL_VAL;
 }
 // preview(timeline)

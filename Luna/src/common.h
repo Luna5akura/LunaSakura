@@ -47,4 +47,4 @@ static inline u32 loadWord4(const void* ptr) {
 // 开启调试打印的宏
 #define DEBUG_PRINT_CODE
 #define DEBUG_LOG_GC
-// #define DEBUG_TRACE_EXECUTION
+#define DEBUG_TRACE_EXECUTION

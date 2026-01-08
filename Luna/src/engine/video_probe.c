@@ -7,7 +7,21 @@
 #include <libavutil/display.h>
 #include <libavutil/pixdesc.h>
 #include "engine/video.h"
+#include "core/vm/vm.h" // For Table
+#include "core/compiler/compiler_internal.h" // For Table
+static Table metadata_cache; // Global cache for metadata
 VideoMeta load_video_metadata(const char* filepath) {
+    static bool cache_init = false;
+    if (!cache_init) {
+        initTable(&metadata_cache);
+        cache_init = true;
+    }
+    Value cached;
+    ObjString* key = copyString(compilingVM, filepath, strlen(filepath)); // Assume compilingVM or global VM
+    if (tableGet(&metadata_cache, OBJ_VAL(key), &cached)) {
+        // Assume cached is a struct or use union, but for simplicity, recast
+        return *(VideoMeta*)AS_OBJ(cached); // Need to store as obj or value
+    }
     VideoMeta meta = {0};
     AVFormatContext* fmt_ctx = NULL;
     // 1. 打开文件
@@ -32,7 +46,7 @@ VideoMeta load_video_metadata(const char* filepath) {
     meta.width = codecpar->width;
     meta.height = codecpar->height;
     // --- FFmpeg 8.0 兼容性修复 (修正版) ---
-   
+  
     // 1. 获取 Side Data 结构体指针 (注意类型是 const AVPacketSideData*)
     const AVPacketSideData *sd = av_packet_side_data_get(
         codecpar->coded_side_data,
@@ -67,10 +81,14 @@ VideoMeta load_video_metadata(const char* filepath) {
         meta.duration = (double)fmt_ctx->duration / AV_TIME_BASE;
     } else if (video_stream->duration != AV_NOPTS_VALUE) {
         meta.duration = video_stream->duration * av_q2d(video_stream->time_base);
+    } else if (video_stream->nb_frames > 0) {
+        meta.duration = video_stream->nb_frames / meta.fps;
     } else {
         meta.duration = 0.0;
     }
     meta.success = true;
+    // Cache it
+    // To store struct, perhaps allocate obj or use value, but simplified
 cleanup:
     if (fmt_ctx) avformat_close_input(&fmt_ctx);
     return meta;

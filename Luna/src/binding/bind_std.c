@@ -1,7 +1,7 @@
 // src/binding/bind_std.c
 
-#include "vm/vm.h"
-#include "vm/memory.h"
+#include "core/vm/vm.h"
+#include "core/memory.h"
 
 // --- List Native Functions ---
 // Constructor: List()
@@ -156,16 +156,25 @@ Value nativeDictKeys(VM* vm, i32 argCount, Value* args) {
         return OBJ_VAL(newList(vm));
     }
     ObjDict* dict = AS_DICT(args[0]);
+    
     ObjList* list = newList(vm);
+    // [修复] 立即压栈，防止后续 ALLOCATE 触发 GC 时回收掉 list
+    push(vm, OBJ_VAL(list)); 
+
     list->capacity = dict->items.count;
+    // 即使这里触发 GC，list 此时在栈上，是安全的
     list->items = ALLOCATE(vm, Value, list->capacity);
     list->count = 0;
+    
     for (u32 i = 0; i < dict->items.capacity; i++) {
         Entry* entry = &dict->items.entries[i];
         if (!IS_NIL(entry->key)) {
             list->items[list->count++] = entry->key;
         }
     }
+    
+    // [修复] 操作完成，弹出 list
+    pop(vm); 
     return OBJ_VAL(list);
 }
 
@@ -175,16 +184,22 @@ Value nativeDictValues(VM* vm, i32 argCount, Value* args) {
         return OBJ_VAL(newList(vm));
     }
     ObjDict* dict = AS_DICT(args[0]);
+    
     ObjList* list = newList(vm);
+    push(vm, OBJ_VAL(list)); // [修复] 压栈保护
+
     list->capacity = dict->items.count;
     list->items = ALLOCATE(vm, Value, list->capacity);
     list->count = 0;
+    
     for (u32 i = 0; i < dict->items.capacity; i++) {
         Entry* entry = &dict->items.entries[i];
         if (!IS_NIL(entry->key)) {
             list->items[list->count++] = entry->value;
         }
     }
+    
+    pop(vm); // [修复] 弹栈
     return OBJ_VAL(list);
 }
 // --- Registration Entry Point ---

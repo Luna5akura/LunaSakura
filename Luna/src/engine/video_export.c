@@ -7,12 +7,12 @@
 #include <libavutil/opt.h>
 #include <libavutil/rational.h> // For av_d2q
 #include "video.h"
-#include "vm/memory.h"
-#include "vm/vm.h" // Added for VM struct
+#include "core/memory.h"
+#include "core/vm/vm.h" // Added for VM struct
 // --- Helper: Initialize H.264 Encoder ---
 static i32 open_encoder(VM* vm, AVFormatContext* out_fmt_ctx, AVCodecContext** enc_ctx,
                         AVStream** out_stream, i32 width, i32 height, double fps) {
-  
+ 
     const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
     if (!codec) {
         fprintf(stderr, "[Export] Error: H.264 encoder not found.\n");
@@ -29,10 +29,10 @@ static i32 open_encoder(VM* vm, AVFormatContext* out_fmt_ctx, AVCodecContext** e
     (*enc_ctx)->height = height;
     (*enc_ctx)->time_base = av_inv_q(fps_rat); // Timebase is 1/FPS
     (*enc_ctx)->framerate = fps_rat;
-  
+ 
     // Note: For production, libswscale is needed to ensure input frame format matches this.
     (*enc_ctx)->pix_fmt = AV_PIX_FMT_YUV420P;
-  
+ 
     // GOP Setup: 1 keyframe per second for reasonable seeking/scrubbing
     (*enc_ctx)->gop_size = (i32)(fps + 0.5);
     (*enc_ctx)->max_b_frames = 2;
@@ -90,10 +90,10 @@ void export_video_clip(VM* vm, ObjClip* clip, const char* output_filename) {
     // Calculate target timestamp in stream's timebase
     i64 seek_target_us = (i64)(clip->in_point * AV_TIME_BASE);
     i64 seek_target_ts = av_rescale_q(seek_target_us, AV_TIME_BASE_Q, in_stream->time_base);
-  
+ 
     if (clip->in_point > 0) {
         // Seek to the nearest keyframe BEFORE the target
-        av_seek_frame(in_fmt_ctx, video_stream_idx, seek_target_ts, AVSEEK_FLAG_BACKWARD);
+        av_seek_frame(in_fmt_ctx, video_stream_idx, seek_target_ts, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
         avcodec_flush_buffers(dec_ctx);
     }
     // --- Allocation ---
@@ -110,7 +110,7 @@ void export_video_clip(VM* vm, ObjClip* clip, const char* output_filename) {
     // --- Main Transcode Loop ---
     while (av_read_frame(in_fmt_ctx, pkt) >= 0) {
         if (pkt->stream_index == video_stream_idx) {
-          
+         
             ret = avcodec_send_packet(dec_ctx, pkt);
             if (ret < 0) {
                 av_packet_unref(pkt);
@@ -161,7 +161,7 @@ void export_video_clip(VM* vm, ObjClip* clip, const char* output_filename) {
     while (1) {
         ret = avcodec_receive_packet(enc_ctx, out_pkt);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
-      
+     
         av_packet_rescale_ts(out_pkt, enc_ctx->time_base, out_stream->time_base);
         out_pkt->stream_index = out_stream->index;
         av_interleaved_write_frame(out_fmt_ctx, out_pkt);

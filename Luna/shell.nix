@@ -10,13 +10,22 @@ pkgs.mkShell {
 
   # 2. 链接时需要的库
   buildInputs = with pkgs; [
-    ffmpeg      # 包含了 libavcodec, libavformat 等
-    SDL2        # 窗口和上下文管理
-    libGL       # OpenGL 核心库 (Me<tab>a)
-    nodejs_20 
+    ffmpeg      
+    SDL2        
+    libGL       
+    nodejs_20
+    xorg.libX11
+    libva       
+    libdrm      # <--- 【这里是新增的】提供 drm_fourcc.h 和 libdrm 库
   ];
 
   shellHook = ''
     echo "进入 Luna 开发环境"
+    # 验证 pkg-config 能否找到 libdrm
+    if pkg-config --exists libdrm; then
+        echo "✅ libdrm found: $(pkg-config --modversion libdrm)"
+    else
+        echo "❌ libdrm not found by pkg-config"
+    fi
   '';
 }

@@ -1,1 +1,34 @@
-print "test"
+# --- New: Class Definition and Methods (without 'fun' keyword as per parser) ---
+print "--- Testing Class Definition ---"
+class Animal :
+    init(name) :
+        this.name = name
+        this.age = 0
+
+    speak() :
+        print "Animal speaks"
+
+    getName() :
+        return this.name
+
+var dog = Animal("Buddy")
+print dog.getName()  # Buddy
+dog.speak()  # Animal speaks
+
+# --- New: Inheritance and Method Override ---
+print "--- Testing Inheritance ---"
+class Dog < Animal :
+    init(name, breed) :
+        super.init(name)
+        this.breed = breed
+
+    speak() :
+        print "Woof!"
+
+    getBreed() :
+        return this.breed
+
+var myDog = Dog("Max", "Labrador")
+print myDog.getName()  # Max
+print myDog.getBreed()  # Labrador
+myDog.speak()  # Woof!
