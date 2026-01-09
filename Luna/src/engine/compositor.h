@@ -34,38 +34,37 @@ typedef struct {
     i32 video_stream_idx;
     
     // CPU Decoding
-    AVFrame* raw_frame;    // Native format (YUV)
-    AVFrame* rgb_frame;    // Converted RGB
-    u8* rgb_buffer;        // Raw buffer for RGB frame
+    AVFrame* raw_frame;
+    AVFrame* rgb_frame;
+    u8* rgb_buffer;
     struct SwsContext* sws_ctx;
 
     // OpenGL
-    GLuint texture;        // Stores the RGB frame
+    GLuint texture;
     
     double current_pts_sec;
     bool active_this_frame;
     
-    // HW Accel (Deprecated/Removed for stability)
-    bool hw_accel;
-    AVBufferRef* hw_device_ctx;
-    AVBufferRef* hw_frames_ctx;
-    void* egl_image;       // EGLImageKHR
-
-
-    // --- Audio Context [新增] ---
-    // 为了线程安全，音频使用独立的 FormatContext
+    // Audio Context
     AVFormatContext* fmt_ctx_audio; 
     AVCodecContext* dec_ctx_audio;
     i32 audio_stream_idx;
     struct SwrContext* swr_ctx;
 
-    // Audio Buffering
-    u8* audio_buffer;
-    size_t audio_buffer_size;  // 缓冲区总有效数据量 (字节)
-    size_t audio_buffer_index; // 当前读取位置
-    size_t audio_buffer_cap;   // 缓冲区容量
-    
-    double current_audio_pts; // 当前缓冲区的起始时间戳
+    // [修改] 环形缓冲区 (Ring Buffer)
+    // 使用 float 数组，直接存储解包后的采样数据 (Stereo Interleaved: L, R, L, R...)
+    float* audio_ring_buffer;
+    i32 rb_capacity;  // 总容量 (以 float 元素个数为单位，不是字节)
+    i32 rb_head;      // 写入位置 (Write Cursor)
+    i32 rb_tail;      // 读取位置 (Read Cursor)
+    i32 rb_count;     // 当前有效数据量
+
+    // [新增] 用于检测 Seek
+    double last_render_time;
+
+    // [新增] 当前音量 (由 TimelineClip 同步)
+    float current_volume; 
+
 } ClipDecoder;
 
 // --- Compositor ---
