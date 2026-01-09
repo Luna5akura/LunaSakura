@@ -2,6 +2,7 @@
 
 #pragma once
 #include "common.h"
+
 typedef enum {
     // 单字符 Token
     TOKEN_LEFT_PAREN, TOKEN_RIGHT_PAREN,
@@ -22,7 +23,7 @@ typedef enum {
     TOKEN_FOR, TOKEN_FUN, TOKEN_IF, TOKEN_NIL, TOKEN_OR,
     TOKEN_PRINT, TOKEN_RETURN, TOKEN_SUPER, TOKEN_THIS,
     TOKEN_TRUE, TOKEN_VAR, TOKEN_WHILE,
-  
+ 
     // 循环控制
     TOKEN_CONTINUE, TOKEN_BREAK, TOKEN_IN,
     // Lambda关键字
@@ -36,26 +37,46 @@ typedef enum {
     TOKEN_EXCEPT,
     TOKEN_ERROR, TOKEN_EOF
 } TokenType;
+
+// --- Token Flags ---
+#define TFLAG_NONE          0
+#define TFLAG_IS_FLOAT      (1 << 0)  // 用于 TOKEN_NUMBER: 是否为浮点数
+#define TFLAG_HAS_ESCAPES   (1 << 1)  // 用于 TOKEN_STRING: 是否包含转义序列
+#define TFLAG_SUPPRESSED_NEWLINE (1 << 2)  // 用于 TOKEN_NEWLINE: 是否被括号抑制
+#define TFLAG_SHORT_IDENT   (1 << 3)  // 用于 TOKEN_IDENTIFIER: 长度 < 4
+
 typedef struct {
-    const char* start;
-    u32 line;
-    u16 length;
-    u8 type;
-    u8 padding;
+    const char* start; // 8 bytes
+    u32 line; // 4 bytes
+    u16 length; // 2 bytes
+    u8 type; // 1 byte (TokenType)
+    u8 flags;
 } Token;
-#define MAX_INDENT_STACK 256
+
+#define MAX_INDENT_STACK 64
+
 typedef struct {
-    const char* start;
-    const char* current;
-    u32 line;
-  
-    // 缩进控制状态
-    u16 indentStack[MAX_INDENT_STACK]; // 使用 u16 节省空间 (缩进层级很少超过 65535 空格)
-    i32 indentTop;
-    i32 pendingDedents;
-  
-    bool isAtStartOfLine;
-    i32 parenDepth; // 括号深度，用于忽略括号内的换行
+    // Hot data (accessed every char)
+    const char* start; // 8
+    const char* current; // 8
+   
+    // Warm data (accessed every token)
+    u32 line; // 4
+    i32 parenDepth; // 4
+    // Cold data (accessed only at newlines/indents)
+    i32 indentTop; // 4
+    i32 pendingDedents; // 4
+   
+    // Array Data
+    u16 indentStack[MAX_INDENT_STACK]; // 128 bytes
+   
+    bool isAtStartOfLine; // 1
+    // Compiler adds 7 bytes padding at end to align struct size to 8
 } Scanner;
+
+static INLINE char peekChar(Scanner* scanner) {
+    return *scanner->current;
+}
+
 void initScanner(Scanner* scanner, const char* source);
 Token scanToken(Scanner* scanner);

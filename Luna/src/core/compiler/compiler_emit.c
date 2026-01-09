@@ -46,11 +46,11 @@ i32 emitJump(u8 instruction) {
     emitByte(instruction);
     emitByte(0xff);
     emitByte(0xff);
-    return currentChunk()->count - 2;
+    return getChunkCount(currentChunk()) - 2;
 }
 
 void patchJump(i32 offset) {
-    i32 jump = currentChunk()->count - offset - 2;
+    i32 jump = getChunkCount(currentChunk()) - offset - 2;
     if (jump > UINT16_MAX) {
         error("Too much code to jump over.");
     }
@@ -60,7 +60,7 @@ void patchJump(i32 offset) {
 
 void emitLoop(i32 loopStart) {
     emitByte(OP_LOOP);
-    i32 offset = currentChunk()->count - loopStart + 2;
+    i32 offset = getChunkCount(currentChunk()) - loopStart + 2;
     if (offset > UINT16_MAX) error("Loop body too large.");
   
     emitByte((offset >> 8) & 0xff);

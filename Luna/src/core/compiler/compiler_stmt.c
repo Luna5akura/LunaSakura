@@ -40,18 +40,23 @@ void parseFunctionParameters(FunctionType type) {
             if (match(TOKEN_EQUAL)) {
                 isOptional = true;
                 u8 paramSlot = (u8)(current->localCount - 1);
-                int jump = emitJump(OP_CHECK_DEFAULT);
-                currentChunk()->count -= 3; 
+
                 emitByte(OP_CHECK_DEFAULT);
-                emitByte(paramSlot); 
-                int checkJump = currentChunk()->count;
+                emitByte(paramSlot);
+
+                Chunk* chunk = currentChunk();
+                int jumpOffset = (int)(chunk->codeTop - chunk->code);
+
                 emitByte(0xff);
                 emitByte(0xff);
 
                 expression();
+                
                 emitBytes(OP_SET_LOCAL, paramSlot);
                 emitByte(OP_POP); 
-                patchJump(checkJump);
+
+                patchJump(jumpOffset);
+                
             } else {
                 if (isOptional) error("Non-default argument follows default argument.");
                 f->minArity++;
@@ -63,7 +68,7 @@ void parseFunctionParameters(FunctionType type) {
 
 static void beginLoop(Loop* loop) {
     loop->enclosing = currentLoop;
-    loop->start = currentChunk()->count;
+    loop->start = getChunkCount(currentChunk());
     loop->scopeDepth = current->scopeDepth;
     loop->breakCount = 0;
     loop->continueCount = 0;

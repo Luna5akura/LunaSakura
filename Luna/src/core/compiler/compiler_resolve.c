@@ -14,8 +14,8 @@ bool identifiersEqual(Token* a, Token* b) {
     return memcmp(a->start, b->start, a->length) == 0;
 }
 
-u8 identifierConstant(Token* name) {
-    return (u8)makeConstant(OBJ_VAL(copyString(compilingVM, name->start, name->length)));
+u32 identifierConstant(Token* name) {
+    return makeConstant(OBJ_VAL(copyString(compilingVM, name->start, name->length)));
 }
 
 void addLocal(Token name) {
@@ -86,32 +86,67 @@ void declareVariable() {
     addLocal(*name);
 }
 
-void defineVariable(u8 global) {
+void defineVariable(u32 global) {
     if (current->scopeDepth > 0) {
         current->locals[current->localCount - 1].depth = current->scopeDepth;
         return;
     }
-    emitBytes(OP_DEFINE_GLOBAL, global);
+    if (global > 255) {
+        // 假设你定义了 OP_DEFINE_GLOBAL_LONG
+        // 如果没定义，至少要报错，而不是截断
+        // emitByte(OP_DEFINE_GLOBAL_LONG);
+        // emitByte((global >> 0) & 0xff);
+        // emitByte((global >> 8) & 0xff);
+        // emitByte((global >> 16) & 0xff);
+        error("Too many globals (limit 255). Implement OP_DEFINE_GLOBAL_LONG to fix.");
+    } else {
+        emitBytes(OP_DEFINE_GLOBAL, (u8)global);
+    }
 }
 
 void namedVariable(Token name, bool canAssign) {
     u8 getOp, setOp;
     i32 arg = resolveLocal(current, &name);
+    
     if (arg != -1) {
         getOp = OP_GET_LOCAL;
         setOp = OP_SET_LOCAL;
+        // 局部变量 arg 是 u8 (localCount 上限是 256)，这里安全
+        if (canAssign && match(TOKEN_EQUAL)) {
+            expression();
+            emitBytes(setOp, (u8)arg);
+        } else {
+            emitBytes(getOp, (u8)arg);
+        }
     } else if ((arg = resolveUpvalue(current, &name)) != -1) {
         getOp = OP_GET_UPVALUE;
         setOp = OP_SET_UPVALUE;
+        // Upvalue 索引通常也是 u8，安全
+        if (canAssign && match(TOKEN_EQUAL)) {
+            expression();
+            emitBytes(setOp, (u8)arg);
+        } else {
+            emitBytes(getOp, (u8)arg);
+        }
     } else {
-        arg = identifierConstant(&name);
-        getOp = OP_GET_GLOBAL;
-        setOp = OP_SET_GLOBAL;
-    }
-    if (canAssign && match(TOKEN_EQUAL)) {
-        expression();
-        emitBytes(setOp, (u8)arg);
-    } else {
-        emitBytes(getOp, (u8)arg);
+        // [修改] 处理全局变量索引可能 > 255 的情况
+        u32 globalArg = identifierConstant(&name);
+        
+        if (canAssign && match(TOKEN_EQUAL)) {
+            expression();
+            if (globalArg > 255) {
+                 // 需要指令集支持 OP_SET_GLOBAL_LONG
+                 error("Global variable index too large.");
+            } else {
+                emitBytes(OP_SET_GLOBAL, (u8)globalArg);
+            }
+        } else {
+            if (globalArg > 255) {
+                // 需要指令集支持 OP_GET_GLOBAL_LONG
+                error("Global variable index too large.");
+            } else {
+                emitBytes(OP_GET_GLOBAL, (u8)globalArg);
+            }
+        }
     }
 }

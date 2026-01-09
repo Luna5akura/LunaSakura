@@ -27,13 +27,11 @@ static INLINE Value numToValue(double num) {
     memcpy(&bits, &num, sizeof(Value));
     return bits;
 }
-
 static INLINE double valueToNum(Value value) {
     double num;
     memcpy(&num, &value, sizeof(double));
     return num;
 }
-
 static INLINE bool valuesEqual(Value a, Value b) {
     return a == b;
 }
@@ -69,7 +67,7 @@ static INLINE bool valuesEqual(Value a, Value b) {
 typedef struct {
     u32 capacity;
     u32 count;
-    Value* values;
+    Value* values; // u64
 } ValueArray;
 
 static INLINE void initValueArray(ValueArray* array) {
@@ -87,5 +85,6 @@ static INLINE void writeValueArray(VM* vm, ValueArray* array, Value value) {
     }
     array->values[array->count++] = value;
 }
+
 void printValue(Value value);
 u32 valueHash(Value value);

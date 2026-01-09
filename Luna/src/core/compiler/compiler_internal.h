@@ -121,12 +121,12 @@ void emitLoop(i32 loopStart);
 // Resolver (compiler_resolve.c)
 Token syntheticToken(const char* text);
 bool identifiersEqual(Token* a, Token* b);
-u8 identifierConstant(Token* name);
+u32 identifierConstant(Token* name);
 void addLocal(Token name);
 i32 resolveLocal(Compiler* compiler, Token* name);
 i32 resolveUpvalue(Compiler* compiler, Token* name);
 void declareVariable();
-void defineVariable(u8 global);
+void defineVariable(u32 global);
 void namedVariable(Token name, bool canAssign);
 
 // Expressions (compiler_expr.c)

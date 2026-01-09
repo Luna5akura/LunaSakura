@@ -67,6 +67,8 @@ struct sObjFunction {
     Chunk chunk;
     ObjString* name;
     ObjString** paramNames; // [新增] 参数名称数组，用于关键字匹配
+
+    i32 paramCapacity; 
 };
 // --- Native Function ---
 typedef Value (*NativeFn)(VM* vm, i32 argCount, Value* args);
@@ -144,7 +146,6 @@ struct sObjBoundMethod {
 #define IS_BOUND_METHOD(value) isObjType(value, OBJ_BOUND_METHOD)
 #define IS_CLOSURE(value) isObjType(value, OBJ_CLOSURE)
 #define IS_UPVALUE(value) isObjType(value, OBJ_UPVALUE)
-// 同质列表检查宏
 #define IS_LIST_HOMOGENEOUS(value) (IS_LIST(value) && isListHomogeneous(AS_LIST(value)))
 #define AS_STRING(value) ((ObjString*)AS_OBJ(value))
 #define AS_CSTRING(value) (((ObjString*)AS_OBJ(value))->chars)

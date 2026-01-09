@@ -1,11 +1,9 @@
 // src/core/table.c
 
 #include <stdlib.h>
-
 #include "memory.h"
 #include "vm/vm.h"
 
-// 负载因子：0.75 是时间/空间的经典平衡点
 #define TABLE_MAX_LOAD 0.75
 
 void initTable(Table* table) {
@@ -20,61 +18,52 @@ void freeTable(VM* vm, Table* table) {
 }
 
 // --- Internal Helper: Find Entry ---
-// 核心热路径：查找 Key 对应的 Entry，或者适合插入的空位/墓碑
+// [优化] 核心热路径：查找 Key 对应的 Entry，或者适合插入的空位/墓碑
 static INLINE Entry* findEntry(Entry* entries, u32 capacity, Value key) {
-    // 假设 capacity 总是 2 的幂
-    u32 index = valueHash(key) & (capacity - 1);
+    u32 mask = capacity - 1;
+    u32 index = valueHash(key) & mask;
     Entry* tombstone = NULL;
 
     for (;;) {
         Entry* entry = &entries[index];
-
+        // [优化] 优先检查空位，这是查找失败的常见情况
         if (IS_NIL(entry->key)) {
             if (IS_NIL(entry->value)) {
-                // 找到真正的空位 (Empty)
-                // 如果之前遇到过墓碑，返回墓碑以便重用；否则返回这个空位
                 return tombstone != NULL ? tombstone : entry;
             } else {
-                // 找到墓碑 (Tombstone)，记录下来以便重用
                 if (tombstone == NULL) tombstone = entry;
             }
         } else if (valuesEqual(entry->key, key)) {
-            // 找到匹配的 Key
             return entry;
         }
-
-        // 线性探测 (Linear Probing)
-        index = (index + 1) & (capacity - 1);
+        index = (index + 1) & mask;
     }
 }
 
 // --- Internal Helper: Resize ---
 static void adjustCapacity(VM* vm, Table* table, u32 capacity) {
     Entry* entries = ALLOCATE(vm, Entry, capacity);
-    
-    // 初始化新数组
+    // 只有当 NIL_VAL 的二进制表示全为 0 时才使用 memset (通常 Value 是 double 或 tagged pointer，可能是 0)
     for (u32 i = 0; i < capacity; i++) {
         entries[i].key = NIL_VAL;
         entries[i].value = NIL_VAL;
     }
 
-    // 重新计算 count (只计算活跃条目，丢弃墓碑)
+    // 重新计算 count (只计算活跃条目，丢弃墓碑，从而“清洗”表)
     table->count = 0;
+    u32 mask = capacity - 1;
 
     for (u32 i = 0; i < table->capacity; i++) {
         Entry* entry = &table->entries[i];
-        
-        // 跳过空位和墓碑 (墓碑不会被复制，从而被清理)
         if (IS_NIL(entry->key)) continue;
-
-        // [优化] Fast Rehash
         // 在新数组中，我们确定：
-        // 1. 没有重复 Key (不需要 valuesEqual)
-        // 2. 没有墓碑 (不需要检查 tombstone)
+        // 1. 没有重复 Key
+        // 2. 没有墓碑
         // 3. 数组还没满
-        u32 index = valueHash(entry->key) & (capacity - 1);
+        // 因此不需要调用 findEntry，直接线性寻找第一个空位
+        u32 index = valueHash(entry->key) & mask;
         while (!IS_NIL(entries[index].key)) {
-            index = (index + 1) & (capacity - 1);
+            index = (index + 1) & mask;
         }
 
         entries[index].key = entry->key;
@@ -100,17 +89,16 @@ bool tableGet(Table* table, Value key, Value* value) {
 }
 
 bool tableSet(VM* vm, Table* table, Value key, Value value) {
-    // 扩容检查：确保有足够的空位 (包含墓碑占用的位置)
     if (table->count + 1 > table->capacity * TABLE_MAX_LOAD) {
         u32 capacity = GROW_CAPACITY(table->capacity);
         adjustCapacity(vm, table, capacity);
     }
 
     Entry* entry = findEntry(table->entries, table->capacity, key);
-    
     bool isNewKey = IS_NIL(entry->key);
     // 只有当写入真正的空位时，count 才增加
-    // 如果是覆盖墓碑 (isNewKey && !IS_NIL(value))，count 不变，因为墓碑已经计入 load factor
+    // 如果是覆盖墓碑 (isNewKey && !IS_NIL(value))，count 不变
+    // 因为墓碑之前已经被计入 "非空槽位" 的逻辑中（或者我们接受 count 只代表活跃数，扩容会清理墓碑）
     if (isNewKey && IS_NIL(entry->value)) {
         table->count++;
     }
@@ -125,12 +113,10 @@ bool tableDelete(Table* table, Value key) {
 
     Entry* entry = findEntry(table->entries, table->capacity, key);
     if (IS_NIL(entry->key)) return false;
-
-    // 放置墓碑 (Tombstone)
     entry->key = NIL_VAL;
     entry->value = BOOL_VAL(true); // Tombstone 标记
-    // 注意：删除不减少 table->count，防止负载因子计算错误导致无限循环
-    
+    // 注意：删除通常不减少 table->count
+    // 这样 findEntry 遇到墓碑时知道还要继续查找，防止链断裂
     return true;
 }
 
@@ -148,26 +134,25 @@ void tableAddAll(VM* vm, Table* from, Table* to) {
 ObjString* tableFindString(Table* table, const char* chars, u32 length, u32 hash) {
     if (table->count == 0) return NULL;
 
-    u32 index = hash & (table->capacity - 1);
+    u32 mask = table->capacity - 1;
+    u32 index = hash & mask;
 
     for (;;) {
         Entry* entry = &table->entries[index];
-
         if (IS_NIL(entry->key)) {
-            // 如果遇到真正的空位 (非墓碑)，说明字符串不存在
             if (IS_NIL(entry->value)) return NULL;
-            // 如果是墓碑，继续探测
         } else if (IS_OBJ(entry->key) && OBJ_TYPE(entry->key) == OBJ_STRING) {
-            // [优化] 比较顺序：Hash -> Length -> memcmp
             ObjString* string = AS_STRING(entry->key);
+            // [优化] 比较顺序：Hash -> Length -> Char[0] -> memcmp
+            // 增加 chars[0] 比较可以大幅减少长字符串调用 memcmp 的次数
             if (string->hash == hash && 
                 string->length == length &&
-                memcmp(string->chars, chars, length) == 0) {
+                (length == 0 || (string->chars[0] == chars[0] && memcmp(string->chars, chars, length) == 0))) {
                 return string;
             }
         }
 
-        index = (index + 1) & (table->capacity - 1);
+        index = (index + 1) & mask;
     }
 }
 
@@ -181,14 +166,18 @@ void markTable(VM* vm, Table* table) {
     }
 }
 
+// [重要优化] 原地清理白名单对象，避免 O(N) 的 tableDelete 开销
 void tableRemoveWhite(Table* table) {
-    for (u32 i = 0; i < table->capacity; i++) {
-        Entry* entry = &table->entries[i];
-        // 如果 Key 是对象且未被标记，则删除 (用于弱引用字符串池)
-        if (!IS_NIL(entry->key) && 
-            IS_OBJ(entry->key) && 
-            !AS_OBJ(entry->key)->isMarked) {
-            tableDelete(table, entry->key);
+    u32 capacity = table->capacity;
+    Entry* entries = table->entries;
+    
+    for (u32 i = 0; i < capacity; i++) {
+        Entry* entry = &entries[i];
+        if (IS_NIL(entry->key)) continue;
+        if (IS_OBJ(entry->key) && !AS_OBJ(entry->key)->isMarked) {
+            // [优化核心] 直接原地置为墓碑
+            entry->key = NIL_VAL;
+            entry->value = BOOL_VAL(true);
         }
     }
 }

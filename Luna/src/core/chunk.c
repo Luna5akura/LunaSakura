@@ -3,10 +3,11 @@
 #include "memory.h"
 #include "vm/vm.h"
 
+
 void initChunk(Chunk* chunk) {
-    chunk->count = 0;
-    chunk->capacity = 0;
     chunk->code = NULL;
+    chunk->codeTop = NULL;
+    chunk->codeLimit = NULL;
     initValueArray(&chunk->constants);
 
     chunk->lineInfo.count = 0;
@@ -18,7 +19,9 @@ void initChunk(Chunk* chunk) {
 }
 
 void freeChunk(VM* vm, Chunk* chunk) {
-    FREE_ARRAY(vm, u8, chunk->code, chunk->capacity);
+    size_t capacity = chunk->codeLimit - chunk->code;
+    
+    FREE_ARRAY(vm, u8, chunk->code, capacity);
     FREE_ARRAY(vm, LineStart, chunk->lineInfo.lines, chunk->lineInfo.capacity);
     freeValueArray(vm, &chunk->constants);
     initChunk(chunk);
@@ -26,10 +29,12 @@ void freeChunk(VM* vm, Chunk* chunk) {
 
 // Cold Path: Code Expansion
 void growChunkCode(VM* vm, Chunk* chunk) {
-    u32 oldCapacity = chunk->capacity;
-    u32 newCapacity = GROW_CAPACITY(oldCapacity);
+    size_t count = chunk->codeTop - chunk->code;
+    size_t oldCapacity = chunk->codeLimit - chunk->code;
+    size_t newCapacity = GROW_CAPACITY(oldCapacity);
     chunk->code = GROW_ARRAY(vm, u8, chunk->code, oldCapacity, newCapacity);
-    chunk->capacity = newCapacity;
+    chunk->codeTop = chunk->code + count;
+    chunk->codeLimit = chunk->code + newCapacity;
 }
 
 void flushLineBuffer(VM* vm, Chunk* chunk, i32 newLine) {
@@ -50,9 +55,20 @@ void flushLineBuffer(VM* vm, Chunk* chunk, i32 newLine) {
 }
 
 i32 addConstant(VM* vm, Chunk* chunk, Value value) {
-    push(vm, value);
+    // Number(double), Bool, Nil 等都是值类型，扩容触发 GC 也不会被回收
+    bool isObject = IS_OBJ(value);
+    if (isObject) push(vm, value);
+    // 避免重复添加相同的常量，减少 constants 数组扩容频率（扩容会触发 reallocate -> 可能触发 GC）
+    for (int i = 0; i < chunk->constants.count; i++) {
+        // 直接比较 u64，速度极快
+        if (chunk->constants.values[i] == value) {
+            if (isObject) pop(vm);
+            return i;
+        }
+    }
     writeValueArray(vm, &chunk->constants, value);
-    pop(vm);
+    
+    if (isObject) pop(vm);
     return (i32)chunk->constants.count - 1;
 }
 
@@ -206,7 +222,20 @@ i32 disassembleInstruction(Chunk* chunk, i32 offset) {
 }
 void disassembleChunk(Chunk* chunk, const char* name) {
     printf("== %s ==\n", name);
-    for (u32 offset = 0; offset < chunk->count;) {
+    
+    if (chunk->constants.count > 0) {
+        printf("-- Constants --\n");
+        for (int i = 0; i < chunk->constants.count; i++) {
+            printf("%04d ", i);
+            printValue(chunk->constants.values[i]);
+            printf("\n");
+        }
+        printf("-- Code --\n");
+    }
+
+    u32 count = getChunkCount(chunk);
+    
+    for (u32 offset = 0; offset < count;) {
         offset = (u32)disassembleInstruction(chunk, (i32)offset);
     }
 }

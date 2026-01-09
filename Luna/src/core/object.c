@@ -2,7 +2,7 @@
 
 #include "memory.h"
 #include "vm/vm.h"
-#include "engine/timeline.h" // 确保 Timeline 定义可见
+#include "engine/timeline.h" 
 // === Allocation Helper ===
 static Obj* allocateObject(VM* vm, size_t size, ObjType type) {
     Obj* object = (Obj*)reallocate(vm, NULL, 0, size);
@@ -198,9 +198,8 @@ void printObject(Value value) {
             break;
         case OBJ_UPVALUE:
             printf("upvalue");
-            // 可选：打印指向的值
-            // Value v = *AS_UPVALUE(value)->location;
-            // printf("(->"); printValue(v); printf(")");
+            Value v = *AS_UPVALUE(value)->location;
+            printf("(->"); printValue(v); printf(")");
             break;
         case OBJ_CLASS:
             printf("%s", AS_CLASS(value)->name->chars);
@@ -224,7 +223,6 @@ void printObject(Value value) {
         case OBJ_DICT: {
             ObjDict* dict = AS_DICT(value);
             printf("{");
-            // 简单的字典打印（仅遍历哈希表）
             bool first = true;
             for (u32 i = 0; i < dict->items.capacity; i++) {
                 if (!IS_NIL(dict->items.entries[i].key)) {
@@ -287,7 +285,6 @@ static HighLevelType getValueType(Value v) {
 }
 bool typesMatch(Value a, Value b) {
 #ifdef NAN_BOXING
-    // 快速检查：如果完全相等，类型肯定匹配
     if (a == b) return true;
 #endif
     return getValueType(a) == getValueType(b);
@@ -295,7 +292,6 @@ bool typesMatch(Value a, Value b) {
 bool isListHomogeneous(ObjList* list) {
     if (list->count <= 1) return true;
    
-    // 获取第一个元素的类型
     HighLevelType firstType = getValueType(list->items[0]);
    
     for (u32 i = 1; i < list->count; i++) {

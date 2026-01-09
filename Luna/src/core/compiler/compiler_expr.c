@@ -72,7 +72,7 @@ void argumentList(u8* outArgCount, u8* outKwCount) {
         do {
             if (check(TOKEN_RIGHT_PAREN)) break;
 
-            if (parser.current.type == TOKEN_IDENTIFIER && scanner.current[0] == '=') {
+            if (parser.current.type == TOKEN_IDENTIFIER && peekChar(&scanner) == '=') {
                 isKeyword = true;
                 u8 nameConst = identifierConstant(&parser.current);
                 emitBytes(OP_CONSTANT, nameConst); 
@@ -219,37 +219,65 @@ static void lambda(bool canAssign) {
     initCompiler(&compiler, compilingVM, TYPE_FUNCTION);
     beginScope();
     
-    // lambda 暂不支持默认参数，但逻辑可复用 parseFunctionParameters（需微调或直接在此解析）
-    // 为了复用性，这里内联解析逻辑的简化版，或者调用 stmt 中定义的通用参数解析
-    // 由于循环依赖，建议直接复用。
+    ObjString** tempParams = NULL;
+    int paramCapacity = 0;
+    int paramCount = 0;
+
+    // 检查是否有参数列表
     if (!check(TOKEN_COLON) && !check(TOKEN_LEFT_BRACE)) {
-        // 复用 statement 模块中的函数
-        parseFunctionParameters(TYPE_FUNCTION);
-    } else {
-         // 无参数，消耗掉可能的空括号？ lambda 语法是 `lam x, y: ...` 还是 `lam(x,y):`?
-         // 原始代码: lam param, param: body. 
-         // 这里我们手动解析以保持与原始 lambda 逻辑一致 (原始代码没有用 parseFunctionParameters)
          do {
-            if (current->function->arity >= 255) errorAtCurrent("Max args.");
+            if (paramCount >= 255) {
+                errorAtCurrent("Max args.");
+            }
+            
             Token paramName = parser.current;
             ObjString* nameStr = copyString(compilingVM, paramName.start, paramName.length);
-            push(compilingVM, OBJ_VAL(nameStr));
+            push(compilingVM, OBJ_VAL(nameStr)); // GC 保护
             consume(TOKEN_IDENTIFIER, "Expect param.");
             
-            ObjFunction* f = current->function;
-            f->paramNames = (ObjString**)reallocate(compilingVM, f->paramNames, 
-                sizeof(ObjString*) * f->arity, sizeof(ObjString*) * (f->arity + 1));
-            f->paramNames[f->arity] = nameStr;
-            f->arity++;
-            f->minArity++;
+            // [优化] 1. 临时数组容量检查与几何增长
+            if (paramCount + 1 > paramCapacity) {
+                int oldCapacity = paramCapacity;
+                paramCapacity = GROW_CAPACITY(oldCapacity);
+                // 扩容临时数组，而不是 ObjFunction 的属性
+                tempParams = (ObjString**)reallocate(compilingVM, tempParams, 
+                    sizeof(ObjString*) * oldCapacity, 
+                    sizeof(ObjString*) * paramCapacity);
+            }
+            
+            // [优化] 2. 存入临时数组
+            tempParams[paramCount++] = nameStr;
+
+            // 处理局部变量声明 (compiler.locals)
             declareVariable();
             defineVariable(0);
-            pop(compilingVM);
+            
+            pop(compilingVM); // nameStr 已经进入 locals 或 tempParams，可以解除栈顶保护
         } while (match(TOKEN_COMMA));
     }
 
     consume(TOKEN_COLON, "Expect ':' after params.");
     
+    // [优化] 3. 循环结束，一次性提交给 ObjFunction
+    // 将 tempParams 收缩到实际大小 (Shrink to fit)，避免浪费内存
+    ObjFunction* f = current->function;
+    f->arity = paramCount;
+    f->minArity = paramCount; // 假设 Lambda 没有默认参数，minArity = arity
+    
+    if (paramCount > 0) {
+        // 将临时数组的所有权转移给 function，并收缩多余容量
+        f->paramNames = (ObjString**)reallocate(compilingVM, tempParams, 
+            sizeof(ObjString*) * paramCapacity, 
+            sizeof(ObjString*) * paramCount);
+    } else {
+        // 如果没有参数，paramNames 应为 NULL
+        // 如果 tempParams 分配过内存（极少见情况），需要释放
+        if (tempParams != NULL) {
+            reallocate(compilingVM, tempParams, sizeof(ObjString*) * paramCapacity, 0);
+        }
+        f->paramNames = NULL;
+    }
+
     if (match(TOKEN_LEFT_BRACE)) {
         block();
     } else {

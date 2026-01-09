@@ -37,7 +37,6 @@ typedef int64_t i64;
 
 #define U8_COUNT 256
 
-// --- Bithack 辅助 ---
 static inline u32 loadWord4(const void* ptr) {
     u32 result;
     memcpy(&result, ptr, sizeof(u32));

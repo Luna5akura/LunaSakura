@@ -1,12 +1,11 @@
 // src/core/value.c
 
-#include <inttypes.h> // [新增] 用于 PRIx64 宏，保证跨平台打印 u64 格式正确
+#include <inttypes.h>
 
 #include "memory.h"
 #include "vm/vm.h"
 
 // --- 扩容逻辑 (Cold Path) ---
-
 #if defined(_MSC_VER)
 __declspec(noinline)
 #elif defined(__GNUC__) || defined(__clang__)
@@ -92,7 +91,6 @@ u32 valueHash(Value value) {
             return (u32)(bits ^ (bits >> 32));
         }
         case VAL_OBJ: {
-            // ... 同上 Obj 处理逻辑 ...
              Obj* obj = AS_OBJ(value);
              if (obj->type == OBJ_STRING) return ((ObjString*)obj)->hash;
              u64 ptr = (u64)(uintptr_t)obj;
