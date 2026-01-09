@@ -290,10 +290,31 @@ Value projectSetTimeline(VM* vm, i32 argCount, Value* args) {
 Value projectPreview(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
     ObjProject* proj = (ObjProject*)getHandle(vm, OBJ_VAL(thisObj), OBJ_PROJECT);
-    if (proj) {
-        vm->active_project = proj->project;
-        printf("[Binding] Project registered for preview.\n");
+    
+    if (!proj) return NIL_VAL;
+
+    // 默认关闭范围预览
+    proj->project->use_preview_range = false;
+
+    // 解析参数
+    if (argCount == 2) {
+        if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+             fprintf(stderr, "Usage: Project.preview(start: Number, end: Number)\n");
+             return NIL_VAL;
+        }
+        double start = AS_NUMBER(args[0]);
+        double end = AS_NUMBER(args[1]);
+
+        if (end > start) {
+            proj->project->use_preview_range = true;
+            proj->project->preview_start = start;
+            proj->project->preview_end = end;
+            printf("[Binding] Project preview range set: %.2f - %.2f\n", start, end);
+        }
     }
+
+    vm->active_project = proj->project;
+    // printf("[Binding] Project registered for preview.\n"); // 可选：减少日志噪音
     return NIL_VAL;
 }
 

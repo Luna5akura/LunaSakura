@@ -53,7 +53,7 @@
 **目标**：实现方向2的阶段一。整合语言特性（如用lambda定义自定义预览逻辑）。
 **预计时长**：7-10人日。
 1. **预览时间范围选择**（方向2: Loop Range）。
-   - 描述：API `setPreviewRange(start, end)`。
+   - 描述：API `Project.preview(start, end)`。
    - 优先级：高。
    - 涉及文件：`src/engine/timeline.h` (结构体字段), `src/binding/bind_video.c` (nativeSetPreviewRange), `src/main.c` (主循环边界检查)。
    - 预计时间：2人日。
@@ -74,7 +74,7 @@
    - 依赖：本阶段其他任务。
 
 4. **运算符重载初步**（方向1: 运算符重载）。
-   - 描述：类支持`__add__`等方法。益处：自定义时间线运算。
+   - 描述：类支持`__add`等方法。益处：自定义时间线运算。
    - 优先级：中（为动画铺路）。
    - 涉及文件：`src/vm/vm.c` (binary操作检查方法), `src/vm/compiler.c` (方法绑定)。
    - 预计时间：2人日。

@@ -1,34 +1,58 @@
-# 1. 创建项目
 var proj = Project(1920, 1080, 30)
+print "Project created with width:"
+print proj.width
+print "height:"
+print proj.height
+print "fps:"
+print proj.fps
+print "initial duration:"
+print proj.duration
 
-# 2. 创建时间线
 var tl = Timeline(1920, 1080, 30)
 proj.setTimeline(tl)
 
-# 3. 加载并处理素材
 var clip = Clip("test.mp4")
+print "Clip loaded with duration:"
+print clip.duration
+print "width:"
+print clip.width
+print "height:"
+print clip.height
+print "fps:"
+print clip.fps
 
-# 裁剪：从第0秒开始，取10秒
 clip.trim(0, 10)
+print "Clip trimmed, new duration:"
+print clip.duration
+print "in_point:"
+print clip.in_point
 
-# 变换：缩小并移动
 clip.setScale(0.5)
+print "Scale set, default_scale_x:"
+print clip.default_scale_x
+print "default_scale_y:"
+print clip.default_scale_y
+
 clip.setPos(100, 200)
+print "Position set, default_x:"
+print clip.default_x
+print "default_y:"
+print clip.default_y
+
 clip.setOpacity(0.8)
+print "Opacity set, default_opacity:"
+print clip.default_opacity
 
-# 4. 添加到时间线
-# 轨道0，从时间线第0秒开始播放
 tl.add(0, clip, 0)
+print "Clip added to track 0, timeline duration:"
+print tl.duration
 
-# 5. 添加第二个素材
 var clip2 = Clip("test.mp4")
 clip2.trim(5, 5) # 截取5秒
 clip2.setPos(500, 500)
-# 轨道1 (上层)，从时间线第2秒开始播放
 tl.add(1, clip2, 2)
-
-print "时间线总时长: "
+print "Second clip added to track 1, timeline duration:"
 print tl.duration
 
-# 6. 启动预览
 proj.preview()
+print "Project preview registered"

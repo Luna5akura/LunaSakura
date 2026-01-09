@@ -161,7 +161,11 @@ ObjProject* newProject(VM* vm, u32 width, u32 height, double fps) {
     obj->project->width = width;
     obj->project->height = height;
     obj->project->fps = fps;
-    obj->project->timeline = NULL;  // 初始无Timeline
+    obj->project->timeline = NULL;
+    obj->project->use_preview_range = false;
+    obj->project->preview_start = 0.0;
+    obj->project->preview_end = 0.0;
+    
     return obj;
 }
 ObjClass* newClass(VM* vm, ObjString* name) {

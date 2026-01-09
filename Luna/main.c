@@ -191,12 +191,33 @@ int main(int argc, char* argv[]) {
         uint64_t now = SDL_GetPerformanceCounter();
         double dt = (double)((now - last_perf) * 1000 / SDL_GetPerformanceFrequency()) / 1000.0;
         last_perf = now;
+
         if (script_loaded && comp && current_pr && current_pr->timeline) {
             if (!paused) {
                 current_time += dt;
-                if (current_time > current_pr->timeline->duration) current_time = 0.0;  // 使用timeline->duration
+
+                // [修改] 循环逻辑
+                double loop_end = current_pr->timeline->duration;
+                double loop_start = 0.0;
+
+                // 如果启用了范围预览，且范围有效
+                if (current_pr->use_preview_range && current_pr->preview_end <= loop_end) {
+                    loop_start = current_pr->preview_start;
+                    loop_end = current_pr->preview_end;
+                }
+
+                // 处理循环
+                if (current_time >= loop_end) {
+                    current_time = loop_start;
+                }
             }
-            if (current_time < 0) current_time = 0.0;
+            
+            // [修改] 确保时间不低于起点 (处理热重载或手动seek导致的越界)
+            double min_time = current_pr->use_preview_range ? current_pr->preview_start : 0.0;
+            if (current_time < min_time) {
+                current_time = min_time;
+            }
+
             compositor_render(comp, current_time);
             compositor_blit_to_screen(comp, win_w, win_h);
         } else {

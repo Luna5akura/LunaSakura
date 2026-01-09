@@ -125,8 +125,14 @@ typedef struct {
     u32 width;
     u32 height;
     double fps;
-    struct Timeline* timeline;  // 持有的Timeline
+    struct Timeline* timeline;
+    
+    // [新增] 预览范围控制
+    bool use_preview_range;
+    double preview_start;
+    double preview_end;
 } Project;
+
 struct sObjProject {
     Obj obj;
     Project* project;
