@@ -93,7 +93,7 @@
    - 依赖：阶段2。
 
 2. **音频相关API**（扩展）。
-   - 描述：`setVolume(clip, level)` 等。
+   - 描述：`Clip.volume(level)` 等。
    - 优先级：中。
    - 涉及文件：`src/binding/bind_video.c` (新native函数), `src/engine/video.h` (扩展VideoMeta)。
    - 预计时间：2人日。

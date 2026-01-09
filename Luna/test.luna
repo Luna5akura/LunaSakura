@@ -92,14 +92,14 @@ print get(strList, 1)  # World
 # --- New: Class Definition and Methods (without 'fun' keyword as per parser) ---
 print "--- Testing Class Definition ---"
 class Animal :
-    init(name) :
+    fun init(name) :
         this.name = name
         this.age = 0
 
-    speak() :
+    fun speak() :
         print "Animal speaks"
 
-    getName() :
+    fun getName() :
         return this.name
 
 var dog = Animal("Buddy")
@@ -109,14 +109,14 @@ dog.speak()  # Animal speaks
 # --- New: Inheritance and Method Override ---
 print "--- Testing Inheritance ---"
 class Dog < Animal :
-    init(name, breed) :
+    fun init(name, breed) :
         super.init(name)
         this.breed = breed
 
-    speak() :
+    fun speak() :
         print "Woof!"
 
-    getBreed() :
+    fun getBreed() :
         return this.breed
 
 var myDog = Dog("Max", "Labrador")
@@ -127,7 +127,7 @@ myDog.speak()  # Woof!
 # --- New: Super Call ---
 print "--- Testing Super ---"
 class Cat < Animal :
-    speak() :
+    fun speak() :
         super.speak()
         print "Meow!"
 

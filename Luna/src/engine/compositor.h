@@ -10,6 +10,7 @@
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <drm/drm_fourcc.h> // 新增: DRM_FORMAT_NV12 等
+#include <SDL2/SDL_audio.h>  // 新增: SDL_Thread 和 SDL_mutex
 #include <SDL2/SDL_thread.h>  // 新增: SDL_Thread 和 SDL_mutex
 
 // Forward declare VM
@@ -49,6 +50,22 @@ typedef struct {
     AVBufferRef* hw_device_ctx;
     AVBufferRef* hw_frames_ctx;
     void* egl_image;       // EGLImageKHR
+
+
+    // --- Audio Context [新增] ---
+    // 为了线程安全，音频使用独立的 FormatContext
+    AVFormatContext* fmt_ctx_audio; 
+    AVCodecContext* dec_ctx_audio;
+    i32 audio_stream_idx;
+    struct SwrContext* swr_ctx;
+
+    // Audio Buffering
+    u8* audio_buffer;
+    size_t audio_buffer_size;  // 缓冲区总有效数据量 (字节)
+    size_t audio_buffer_index; // 当前读取位置
+    size_t audio_buffer_cap;   // 缓冲区容量
+    
+    double current_audio_pts; // 当前缓冲区的起始时间戳
 } ClipDecoder;
 
 // --- Compositor ---
@@ -81,6 +98,13 @@ typedef struct {
     SDL_Thread* prefetch_thread;
     SDL_mutex* decoder_mutex; // 新增: 线程锁
     bool running;
+
+
+    // Audio State [新增]
+    SDL_AudioDeviceID audio_device;
+    bool audio_enabled;
+    // 混音时的全局时间 (由 audio callback 更新，用于同步)
+    double audio_time; 
 } Compositor;
 
 // --- API ---

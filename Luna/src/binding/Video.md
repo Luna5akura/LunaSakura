@@ -24,6 +24,10 @@
 *   `height`: 视频原始高度 (Number)。
 *   `fps`: 视频帧率 (Number)。
 *   `duration`: 素材的持续时间（秒）(Number)。
+*   `has_video`: 是否包含视频流 (Number, 1 为真, 0 为假)。
+*   `volume`: 素材的当前音量 (Number)。
+
+*   `has_audio`: 是否包含音频流 (Number, 1 为真, 0 为假)。
 *   `in_point`: 素材的入点时间（从视频文件开头的偏移秒数）(Number)。
 *   `default_x`: X 轴坐标 (Number)。
 *   `default_y`: Y 轴坐标 (Number)。
@@ -65,6 +69,16 @@
 *   **参数**:
     *   `opacity`: 0.0 (全透明) 到 1.0 (不透明)。
 *   **示例**: `clip.setOpacity(0.8)`
+
+#### `volume(level: Number)`
+设置素材的音量。
+
+*   **参数**:
+    *   `level`: 音量大小。
+        *   `0.0`: 静音。
+        *   `1.0`: 原始音量 (100%)。
+        *   大于 `1.0`: 音频增益 (例如 `2.0` 为 200% 音量)。
+*   **示例**: `clip.volume(0.5)` // 将音量减半
 
 #### `export(filename: Number)`
 将当前素材（包含裁剪设置）导出为新文件。

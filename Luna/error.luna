@@ -1,25 +1,6 @@
-class Vector:
-    fun init(x, y):
-        this.x = x
-        this.y = y
-    
-    # 重载加法 (+)
-    fun __add(other):
-        return Vector(this.x + other.x, this.y + other.y)
-    
-    # 重载小于 (<) 用于比较
-    fun __lt(other):
-        return (this.x + this.y) < (other.x + other.y)
-        
-    fun toString():
-        return "(" + this.x + ", " + this.y + ")"
-
-var v1 = Vector(2, 3)
-var v2 = Vector(4, 5)
-
-var v3 = v1 + v2     # 自动调用 v1.__add(v2)
-print v3.x           # 输出 6
-print v3.y           # 输出 8
-
-if v1 < v2:          # 自动调用 v1.__lt(v2)
-    print "v1 is smaller"
+var proj = Project(960, 540, 30)
+var tl = Timeline(960, 540, 30)
+proj.setTimeline(tl)
+var clip = Clip("test.mp4")
+tl.add(0, clip, 0)
+proj.preview()

@@ -101,8 +101,12 @@ Value clipInit(VM* vm, i32 argCount, Value* args) {
     // [关键修复] 同步属性到 Luna 实例，以便 print clip.width 能工作
     SET_PROP(thisObj, "width", clip->width);
     SET_PROP(thisObj, "height", clip->height);
+    SET_PROP(thisObj, "volume", clip->volume);
     SET_PROP(thisObj, "fps", clip->fps);
     SET_PROP(thisObj, "duration", clip->duration);
+
+    SET_PROP(thisObj, "has_audio", clip->has_audio ? 1 : 0);
+    SET_PROP(thisObj, "has_video", clip->has_video ? 1 : 0);
     
     // 初始化其他可读属性，防止访问时报错
     SET_PROP(thisObj, "in_point", clip->in_point);
@@ -114,6 +118,24 @@ Value clipInit(VM* vm, i32 argCount, Value* args) {
 
     // 返回实例本身
     return OBJ_VAL(thisObj);
+}
+
+Value clipSetVolume(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    // 获取底层 ObjClip 对象
+    ObjClip* clip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), OBJ_CLIP);
+    if (!clip || argCount != 1) return NIL_VAL;
+    
+    double val = AS_NUMBER(args[0]);
+    if (val < 0.0) val = 0.0;
+    
+    // 直接修改 ObjClip 的属性
+    clip->volume = val;
+
+    // 同步到 Luna 实例属性 (可选，便于 print 查看)
+    SET_PROP(thisObj, "volume", val);
+
+    return NIL_VAL;
 }
 
 // trim(start, duration)
@@ -350,6 +372,7 @@ static void registerClipMethods(VM* vm, ObjClass* klass) {
     defineNativeMethod(vm, klass, "setScale", clipSetScale);
     defineNativeMethod(vm, klass, "setPos", clipSetPos);
     defineNativeMethod(vm, klass, "setOpacity", clipSetOpacity);
+    defineNativeMethod(vm, klass, "setVolume", clipSetVolume);
 }
 
 static void registerTimelineMethods(VM* vm, ObjClass* klass) {

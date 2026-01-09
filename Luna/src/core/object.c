@@ -138,6 +138,7 @@ ObjClip* newClip(VM* vm, ObjString* path) {
     clip->in_point = 0;
     clip->out_point = 0;
     clip->fps = 0;
+    clip->volume = 1.0; 
     clip->width = 0;
     clip->height = 0;
     clip->layer = 0;

@@ -105,11 +105,19 @@ struct sObjClip {
     double in_point;
     double out_point;
     double fps;
+
+    bool has_video;
+    bool has_audio;
+    i32 audio_channels;
+    i32 audio_sample_rate;
+
     double default_scale_x;
     double default_scale_y;
     double default_x;
     double default_y;
     double default_opacity;
+
+    double volume; 
     u32 width;
     u32 height;
     i32 layer;

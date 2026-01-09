@@ -9,7 +9,7 @@ CC = gcc
 # DEBUG_FLAGS = -DDEBUG_TRACE_EXECUTION
 CFLAGS = -g -O3 -Wall -Wextra -std=c11 -Iinclude -Isrc -MMD -MP -Wno-unused-result -Wno-implicit-function-declaration -Wno-sign-compare -Wno-unused-function  # 新增: 抑制特定警告
 # 2. 引入 FFmpeg、SDL2 和新增依赖配置 (自动查找路径)
-ALL_LIBS = libavcodec libavformat libavutil libswscale sdl2 egl libva libva-glx libdrm x11
+ALL_LIBS = libavcodec libavformat libavutil libswscale libswresample sdl2 egl libva libva-glx libdrm x11
 CFLAGS += $(shell pkg-config --cflags $(ALL_LIBS))
 # 3. 链接选项
 # 注意：新增了 -lm (Math Library)，这是必须的；新增 -pthread 用于线程
