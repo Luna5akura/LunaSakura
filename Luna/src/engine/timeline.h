@@ -49,7 +49,7 @@ typedef struct {
     // bit 0: visible, bit 1: locked, bit 2: solo
     u8 flags;
  
-    char name[31]; // 调整大小使得 Track 头部对齐 (4+1+31 = 36 bytes)
+    char name[27]; // 调整大小使得 Track 头部对齐 (4+1+31 = 36 bytes)
  
     // 核心优化：连续内存数组
     // Clips 必须始终保持按 timeline_start 升序排序

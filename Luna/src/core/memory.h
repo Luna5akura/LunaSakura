@@ -2,7 +2,9 @@
 
 #pragma once
 #include "object.h"
+
 typedef struct VM VM;
+
 // --- Allocation Macros ---
 #define ALLOCATE(vm, type, count) \
     (type*)reallocate(vm, NULL, 0, sizeof(type) * (count))
@@ -17,6 +19,7 @@ typedef struct VM VM;
     reallocate(vm, pointer, sizeof(type) * (oldCount), 0); \
     (pointer) = NULL; \
 } while(0)
+
 // --- Core Memory Manager ---
 // GCC/Clang 属性优化：告知编译器此函数类似 malloc (返回新指针, 且如果不检查返回值会有警告)
 #if defined(__GNUC__) || defined(__clang__)
@@ -25,11 +28,13 @@ typedef struct VM VM;
     #define ATTR_ALLOC
 #endif
 void* reallocate(VM* vm, void* pointer, size_t oldSize, size_t newSize) ATTR_ALLOC;
+
 // --- Garbage Collection Interface ---
 void collectGarbage(VM* vm);
 void freeObjects(VM* vm);
 // 仅在 .c 内部使用的慢路径函数，暴露出来给 inline 函数调用
 void markObjectDo(VM* vm, Obj* object);
+
 // [优化] Hot Path: 内联标记对象的快速检查
 // 绝大多数对象在递归过程中已经被标记过，内联此检查可显著减少函数调用开销
 static INLINE void markObject(VM* vm, Obj* object) {
