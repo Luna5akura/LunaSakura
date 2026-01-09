@@ -50,6 +50,17 @@ void initVM(VM* vm) {
     initTable(&vm->strings);
     vm->initString = NULL;
     vm->initString = copyString(vm, "init", 4);
+
+    vm->opAddString = copyString(vm, "__add", 5);
+    vm->opSubString = copyString(vm, "__sub", 5);
+    vm->opMulString = copyString(vm, "__mul", 5);
+    vm->opDivString = copyString(vm, "__div", 5);
+    vm->opNegString = copyString(vm, "__neg", 5);
+    vm->opLtString = copyString(vm, "__lt", 4);
+    vm->opGtString = copyString(vm, "__gt", 4);
+    vm->opLeString = copyString(vm, "__le", 4);
+    vm->opGeString = copyString(vm, "__ge", 4);
+
     vm->active_project = NULL;
     vm->handlerCount = 0;
 }

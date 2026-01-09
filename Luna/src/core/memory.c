@@ -290,6 +290,17 @@ static void markRoots(VM* vm) {
         timeline_mark(vm, vm->active_project->timeline);
     }
     if (vm->initString) markObject(vm, (Obj*)vm->initString);
+
+    if (vm->opAddString) markObject(vm, (Obj*)vm->opAddString);
+    if (vm->opSubString) markObject(vm, (Obj*)vm->opSubString);
+    if (vm->opMulString) markObject(vm, (Obj*)vm->opMulString);
+    if (vm->opDivString) markObject(vm, (Obj*)vm->opDivString);
+    if (vm->opNegString) markObject(vm, (Obj*)vm->opNegString);
+    if (vm->opLtString) markObject(vm, (Obj*)vm->opLtString);
+    if (vm->opGtString) markObject(vm, (Obj*)vm->opGtString);
+    if (vm->opLeString) markObject(vm, (Obj*)vm->opLeString);
+    if (vm->opGeString) markObject(vm, (Obj*)vm->opGeString);
+
     markCompilerRoots(vm);
 }
 #if defined(__GNUC__) || defined(__clang__)

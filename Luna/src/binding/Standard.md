@@ -57,6 +57,24 @@ Luna 的编译器将源代码转换为字节码，由 VM 执行。语言使用�
   ```
 - **类型安全**：列表元素必须同类型；尝试混合类型会抛出运行时错误。
 
+### 运算符重载
+Luna 允许类通过定义特定名称的方法（魔术方法）来重载标准运算符。这使得自定义对象（如向量、时间对象）可以像内置类型一样参与运算。当操作数是对象实例时，VM 会自动调用相应的方法。
+
+*   **算术运算符**:
+    *   `+` (加法): 对应方法 `__add(other)`
+    *   `-` (减法): 对应方法 `__sub(other)`
+    *   `*` (乘法): 对应方法 `__mul(other)`
+    *   `/` (除法): 对应方法 `__div(other)`
+    *   `-` (一元负号): 对应方法 `__neg()` (例如 `-x`)
+*   **比较运算符**:
+    *   `<` (小于): 对应方法 `__lt(other)`
+    *   `>` (大于): 对应方法 `__gt(other)`
+    *   `<=` (小于等于): 对应方法 `__le(other)`
+    *   `>=` (大于等于): 对应方法 `__ge(other)`
+
+---
+
+
 ### 基本使用示例
 以下是一个简单脚本，展示变量、函数、类和控制流：
 ```
@@ -269,5 +287,31 @@ print divide(10, 0)  # 输出 Division error 和 nil
 # Lambda 示例
 var add = lam a, b: a + b
 print add(3, 4)  # 输出 7
+
+# 4. 运算符重载示例
+class Vector:
+    fun init(x, y):
+        this.x = x
+        this.y = y
+    
+    # 重载加法 (+)
+    fun __add(other):
+        return Vector(this.x + other.x, this.y + other.y)
+    
+    # 重载小于 (<) 用于比较
+    fun __lt(other):
+        return (this.x + this.y) < (other.x + other.y)
+        
+    fun toString():
+        return "(" + this.x + ", " + this.y + ")"
+
+var v1 = Vector(2, 3)
+var v2 = Vector(4, 5)
+
+var v3 = v1 + v2     # 自动调用 v1.__add(v2)
+print v3.x           # 输出 6
+print v3.y           # 输出 8
+
+if v1 < v2:          # 自动调用 v1.__lt(v2)
+    print "v1 is smaller"
 ```
----

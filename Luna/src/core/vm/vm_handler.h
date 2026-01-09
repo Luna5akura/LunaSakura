@@ -33,6 +33,35 @@
     IP = FRAME->ip; \
 } while(0)
 // --- Opcodes Implementation ---
+static INLINE bool invoke_binary_op(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr, ObjString* name) {
+    Value a = PEEK(1); // Receiver
+    
+    if (!IS_INSTANCE(a)) return false;
+    
+    ObjInstance* instance = AS_INSTANCE(a);
+    Value method;
+    
+    // 查找方法 (先在字段中找，再在类方法中找)
+    if (tableGet(&instance->fields, OBJ_VAL(name), &method)) {
+        // Found in fields
+    } else if (tableGet(&instance->klass->methods, OBJ_VAL(name), &method)) {
+        // Found in class
+    } else {
+        return false;
+    }
+    
+    // 同步 VM 状态，因为 callValue 可能会触发 GC 或需要栈信息
+    SYNC_VM();
+    
+    // 调用方法: Stack is [a, b]. 
+    // callValue(method, 1) 会将 a 视为 receiver (this)
+    if (!callValue(vm, method, 1)) RETURN_ERROR();
+    
+    // 恢复帧指针 (因为 callValue 可能推入了新帧或执行了 Native 代码)
+    LOAD_FRAME();
+    SP = vm->stackTop; 
+    return true;
+}
 static INLINE bool op_constant(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
     Value constant = READ_CONSTANT();
     PUSH(constant);
@@ -162,21 +191,16 @@ static INLINE bool op_add(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPt
     Value a = PEEK(1);
     
     if (LIKELY(IS_NUMBER(a) && IS_NUMBER(b))) {
-        double result = AS_NUMBER(a) + AS_NUMBER(b);
-        // [修复方案 A]：使用覆盖优化 (推荐，与 sub/mul 保持一致)
-        DROP(1);         // 弹出 b
-        SP[-1] = NUMBER_VAL(result); // 用结果覆盖 a
-        
-        // 或者 [修复方案 B]：标准的弹出再压入
-        // DROP(2);
-        // PUSH(NUMBER_VAL(result));
+        DROP(1);
+        SP[-1] = NUMBER_VAL(AS_NUMBER(a) + AS_NUMBER(b));
     } else if (IS_STRING(a) && IS_STRING(b)) {
         SYNC_VM();
         if (!concatenate_inline(vm, spPtr)) RETURN_ERROR();
-        // concatenate_inline 内部通常已经处理了 DROP(2)
+    } else if (invoke_binary_op(vm, framePtr, spPtr, ipPtr, vm->opAddString)) {
+        return true; // 重载调用成功
     } else {
         SYNC_VM();
-        if (!runtimeError(vm, "Operands must be two numbers or two strings.")) RETURN_ERROR();
+        if (!runtimeError(vm, "Operands must be two numbers, two strings, or implement __add.")) RETURN_ERROR();
         LOAD_FRAME();
     }
     return true;
@@ -187,9 +211,11 @@ static INLINE bool op_subtract(VM* vm, CallFrame** framePtr, Value** spPtr, u8**
     if (LIKELY(IS_NUMBER(a) && IS_NUMBER(b))) {
         DROP(1);
         SP[-1] = NUMBER_VAL(AS_NUMBER(a) - AS_NUMBER(b));
+    } else if (invoke_binary_op(vm, framePtr, spPtr, ipPtr, vm->opSubString)) {
+        return true;
     } else {
         SYNC_VM();
-        if (!runtimeError(vm, "Operands must be numbers.")) RETURN_ERROR();
+        if (!runtimeError(vm, "Operands must be numbers or implement __sub.")) RETURN_ERROR();
         LOAD_FRAME();
     }
     return true;
@@ -200,9 +226,11 @@ static INLINE bool op_multiply(VM* vm, CallFrame** framePtr, Value** spPtr, u8**
     if (LIKELY(IS_NUMBER(a) && IS_NUMBER(b))) {
         DROP(1);
         SP[-1] = NUMBER_VAL(AS_NUMBER(a) * AS_NUMBER(b));
+    } else if (invoke_binary_op(vm, framePtr, spPtr, ipPtr, vm->opMulString)) {
+        return true;
     } else {
         SYNC_VM();
-        if (!runtimeError(vm, "Operands must be numbers.")) RETURN_ERROR();
+        if (!runtimeError(vm, "Operands must be numbers or implement __mul.")) RETURN_ERROR();
         LOAD_FRAME();
     }
     return true;
@@ -213,9 +241,37 @@ static INLINE bool op_divide(VM* vm, CallFrame** framePtr, Value** spPtr, u8** i
     if (LIKELY(IS_NUMBER(a) && IS_NUMBER(b))) {
         DROP(1);
         SP[-1] = NUMBER_VAL(AS_NUMBER(a) / AS_NUMBER(b));
+    } else if (invoke_binary_op(vm, framePtr, spPtr, ipPtr, vm->opDivString)) {
+        return true;
     } else {
         SYNC_VM();
-        if (!runtimeError(vm, "Operands must be numbers.")) RETURN_ERROR();
+        if (!runtimeError(vm, "Operands must be numbers or implement __div.")) RETURN_ERROR();
+        LOAD_FRAME();
+    }
+    return true;
+}
+static INLINE bool op_negate(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
+    Value a = PEEK(0);
+    if (IS_NUMBER(a)) {
+        SP[-1] = NUMBER_VAL(-AS_NUMBER(a));
+    } else if (IS_INSTANCE(a)) {
+        // 单目调用逻辑略有不同 (argCount = 0)
+        ObjInstance* instance = AS_INSTANCE(a);
+        Value method;
+        if (tableGet(&instance->fields, OBJ_VAL(vm->opNegString), &method) ||
+            tableGet(&instance->klass->methods, OBJ_VAL(vm->opNegString), &method)) {
+            SYNC_VM();
+            if (!callValue(vm, method, 0)) RETURN_ERROR();
+            LOAD_FRAME();
+            SP = vm->stackTop;
+        } else {
+             SYNC_VM();
+             if (!runtimeError(vm, "Operand must be a number or implement __neg.")) RETURN_ERROR();
+             LOAD_FRAME();
+        }
+    } else {
+        SYNC_VM();
+        if (!runtimeError(vm, "Operand must be a number.")) RETURN_ERROR();
         LOAD_FRAME();
     }
     return true;
@@ -226,9 +282,11 @@ static INLINE bool op_greater(VM* vm, CallFrame** framePtr, Value** spPtr, u8** 
     if (LIKELY(IS_NUMBER(a) && IS_NUMBER(b))) {
         DROP(1);
         SP[-1] = BOOL_VAL(AS_NUMBER(a) > AS_NUMBER(b));
+    } else if (invoke_binary_op(vm, framePtr, spPtr, ipPtr, vm->opGtString)) {
+        return true;
     } else {
         SYNC_VM();
-        if (!runtimeError(vm, "Operands must be numbers.")) RETURN_ERROR();
+        if (!runtimeError(vm, "Operands must be numbers or implement __gt.")) RETURN_ERROR();
         LOAD_FRAME();
     }
     return true;
@@ -239,9 +297,11 @@ static INLINE bool op_less(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipP
     if (LIKELY(IS_NUMBER(a) && IS_NUMBER(b))) {
         DROP(1);
         SP[-1] = BOOL_VAL(AS_NUMBER(a) < AS_NUMBER(b));
+    } else if (invoke_binary_op(vm, framePtr, spPtr, ipPtr, vm->opLtString)) {
+        return true;
     } else {
         SYNC_VM();
-        if (!runtimeError(vm, "Operands must be numbers.")) RETURN_ERROR();
+        if (!runtimeError(vm, "Operands must be numbers or implement __lt.")) RETURN_ERROR();
         LOAD_FRAME();
     }
     return true;
@@ -252,9 +312,11 @@ static INLINE bool op_greater_equal(VM* vm, CallFrame** framePtr, Value** spPtr,
     if (LIKELY(IS_NUMBER(a) && IS_NUMBER(b))) {
         DROP(1);
         SP[-1] = BOOL_VAL(AS_NUMBER(a) >= AS_NUMBER(b));
+    } else if (invoke_binary_op(vm, framePtr, spPtr, ipPtr, vm->opGeString)) {
+        return true;
     } else {
         SYNC_VM();
-        if (!runtimeError(vm, "Operands must be numbers.")) RETURN_ERROR();
+        if (!runtimeError(vm, "Operands must be numbers or implement __ge.")) RETURN_ERROR();
         LOAD_FRAME();
     }
     return true;
@@ -265,9 +327,11 @@ static INLINE bool op_less_equal(VM* vm, CallFrame** framePtr, Value** spPtr, u8
     if (LIKELY(IS_NUMBER(a) && IS_NUMBER(b))) {
         DROP(1);
         SP[-1] = BOOL_VAL(AS_NUMBER(a) <= AS_NUMBER(b));
+    } else if (invoke_binary_op(vm, framePtr, spPtr, ipPtr, vm->opLeString)) {
+        return true;
     } else {
         SYNC_VM();
-        if (!runtimeError(vm, "Operands must be numbers.")) RETURN_ERROR();
+        if (!runtimeError(vm, "Operands must be numbers or implement __le.")) RETURN_ERROR();
         LOAD_FRAME();
     }
     return true;

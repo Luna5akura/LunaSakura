@@ -226,6 +226,8 @@ static void function(FunctionType type) {
 }
 
 static void method() {
+    // 如果不希望有 fun 关键字，可以注释掉这一行
+    consume(TOKEN_FUN, "Expect 'fun' keyword before method definition."); 
     consume(TOKEN_IDENTIFIER, "Expect method name.");
     u8 constant = identifierConstant(&parser.previous);
     FunctionType type = TYPE_METHOD;

@@ -36,6 +36,17 @@ struct VM {
     Table globals;
     Table strings;
     ObjString* initString;
+
+    ObjString* opAddString;
+    ObjString* opSubString;
+    ObjString* opMulString;
+    ObjString* opDivString;
+    ObjString* opNegString;
+    ObjString* opLtString;
+    ObjString* opGtString;
+    ObjString* opLeString;
+    ObjString* opGeString;
+
     ObjUpvalue* openUpvalues;
  
     // --- Garbage Collection ---
