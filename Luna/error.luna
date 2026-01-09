@@ -1,9 +1,34 @@
-var proj = Project(960, 540, 30)
+# 1. 创建项目
+var proj = Project(1920, 1080, 30)
+
+# 2. 创建时间线
 var tl = Timeline(1920, 1080, 30)
 proj.setTimeline(tl)
-var clip = Clip("test.mp4")  # 更正为Clip，原代码中Video可能为笔误或别名
+
+# 3. 加载并处理素材
+var clip = Clip("test.mp4")
+
+# 裁剪：从第0秒开始，取10秒
+clip.trim(0, 10)
+
+# 变换：缩小并移动
+clip.setScale(0.5)
+clip.setPos(100, 200)
+clip.setOpacity(0.8)
+
+# 4. 添加到时间线
+# 轨道0，从时间线第0秒开始播放
 tl.add(0, clip, 0)
-print "Clip added to track 0, timeline duration:"
-print tl.duration  # 使用tl.duration
+
+# 5. 添加第二个素材
+var clip2 = Clip("test.mp4")
+clip2.trim(5, 5) # 截取5秒
+clip2.setPos(500, 500)
+# 轨道1 (上层)，从时间线第2秒开始播放
+tl.add(1, clip2, 2)
+
+print "时间线总时长: "
+print tl.duration
+
+# 6. 启动预览
 proj.preview()
-print "Project preview registered"

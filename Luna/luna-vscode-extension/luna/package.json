@@ -3,9 +3,9 @@
   "publisher": "Luna5akura",
   "displayName": "LunaCode",
   "description": "Syntax Highlighter for luna language",
-  "version": "0.0.1",
+  "version": "0.0.5",
   "engines": {
-    "vscode": "^1.105.0"
+    "vscode": "^1.70.0"
   },
   "categories": [
     "Programming Languages"
@@ -20,7 +20,7 @@
     "grammars": [{
       "language": "luna",
       "scopeName": "source.luna",
-      "path": "./syntaxes/luna.tmLanguage.json"
+      "path": "./luna.tmLanguage.json"
     }]
   }
 }
