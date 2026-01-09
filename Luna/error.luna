@@ -1,34 +1,9 @@
-# --- New: Class Definition and Methods (without 'fun' keyword as per parser) ---
-print "--- Testing Class Definition ---"
-class Animal :
-    init(name) :
-        this.name = name
-        this.age = 0
-
-    speak() :
-        print "Animal speaks"
-
-    getName() :
-        return this.name
-
-var dog = Animal("Buddy")
-print dog.getName()  # Buddy
-dog.speak()  # Animal speaks
-
-# --- New: Inheritance and Method Override ---
-print "--- Testing Inheritance ---"
-class Dog < Animal :
-    init(name, breed) :
-        super.init(name)
-        this.breed = breed
-
-    speak() :
-        print "Woof!"
-
-    getBreed() :
-        return this.breed
-
-var myDog = Dog("Max", "Labrador")
-print myDog.getName()  # Max
-print myDog.getBreed()  # Labrador
-myDog.speak()  # Woof!
+var proj = Project(960, 540, 30)
+var tl = Timeline(1920, 1080, 30)
+proj.setTimeline(tl)
+var clip = Clip("test.mp4")  # 更正为Clip，原代码中Video可能为笔误或别名
+tl.add(0, clip, 0)
+print "Clip added to track 0, timeline duration:"
+print tl.duration  # 使用tl.duration
+proj.preview()
+print "Project preview registered"

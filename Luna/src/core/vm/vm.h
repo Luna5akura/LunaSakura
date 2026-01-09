@@ -47,7 +47,7 @@ struct VM {
     Obj** grayStack;
  
     // --- Engine State ---
-    Timeline* active_timeline;
+    Project* active_project;
  
     // --- Exception Handling ---
     Handler handlers[FRAMES_MAX];

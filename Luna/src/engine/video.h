@@ -13,7 +13,7 @@ typedef struct {
     bool success;
 } VideoMeta;
 // --- Engine Interface ---
-VideoMeta load_video_metadata(const char* filepath);
+VideoMeta load_video_metadata(struct VM* vm, const char* filepath);
 // Previews the clip in a separate window (Blocking).
 void play_video_clip(VM* vm, ObjClip* clip);
 // [已删除] play_timeline: Timeline preview is now handled by the host (main.c)

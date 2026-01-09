@@ -188,5 +188,3 @@ cleanup:
     if (fmt_ctx) avformat_close_input(&fmt_ctx);
     printf("[Preview] Clip Closed.\n");
 }
-// [已删除] play_timeline 函数
-// 该功能已移交至 main.c (Host) 处理，避免 GL Context 冲突。

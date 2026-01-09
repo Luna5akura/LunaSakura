@@ -3,6 +3,8 @@
 #pragma once
 #include "chunk.h"
 #include "table.h"
+#include "engine/timeline.h"
+
 // 前置声明
 typedef struct VM VM;
 typedef struct sObj Obj;
@@ -11,9 +13,10 @@ typedef struct sObjList ObjList;
 typedef struct sObjDict ObjDict;
 typedef struct sObjFunction ObjFunction;
 typedef struct sObjNative ObjNative;
+typedef struct sObjClass ObjClass;
 typedef struct sObjClip ObjClip;
 typedef struct sObjTimeline ObjTimeline;
-typedef struct sObjClass ObjClass;
+typedef struct sObjProject ObjProject;
 typedef struct sObjInstance ObjInstance;
 typedef struct sObjBoundMethod ObjBoundMethod;
 typedef struct sObjClosure ObjClosure;
@@ -25,9 +28,12 @@ typedef enum {
     OBJ_DICT,
     OBJ_FUNCTION,
     OBJ_NATIVE,
+    OBJ_CLASS,
+
     OBJ_CLIP,
     OBJ_TIMELINE,
-    OBJ_CLASS,
+    OBJ_PROJECT,
+
     OBJ_INSTANCE,
     OBJ_BOUND_METHOD,
     OBJ_CLOSURE,
@@ -108,12 +114,22 @@ struct sObjClip {
     u32 height;
     i32 layer;
 };
+
 // --- Timeline Object ---
 // Timeline 结构的具体定义在 engine/timeline.h 中
-struct Timeline;
 struct sObjTimeline {
     Obj obj;
     struct Timeline* timeline;
+};
+typedef struct {
+    u32 width;
+    u32 height;
+    double fps;
+    struct Timeline* timeline;  // 持有的Timeline
+} Project;
+struct sObjProject {
+    Obj obj;
+    Project* project;
 };
 // --- Class & Instance ---
 struct sObjClass {
@@ -147,6 +163,7 @@ struct sObjBoundMethod {
 #define IS_CLOSURE(value) isObjType(value, OBJ_CLOSURE)
 #define IS_UPVALUE(value) isObjType(value, OBJ_UPVALUE)
 #define IS_LIST_HOMOGENEOUS(value) (IS_LIST(value) && isListHomogeneous(AS_LIST(value)))
+#define IS_PROJECT(value) isObjType(value, OBJ_PROJECT)
 #define AS_STRING(value) ((ObjString*)AS_OBJ(value))
 #define AS_CSTRING(value) (((ObjString*)AS_OBJ(value))->chars)
 #define AS_LIST(value) ((ObjList*)AS_OBJ(value))
@@ -160,6 +177,7 @@ struct sObjBoundMethod {
 #define AS_CLASS(value) ((ObjClass*)AS_OBJ(value))
 #define AS_INSTANCE(value) ((ObjInstance*)AS_OBJ(value))
 #define AS_BOUND_METHOD(value) ((ObjBoundMethod*)AS_OBJ(value))
+#define AS_PROJECT(value) ((ObjProject*)AS_OBJ(value))
 // --- Inline Helpers ---
 static INLINE bool isObjType(Value value, ObjType type) {
     return IS_OBJ(value) && AS_OBJ(value)->type == type;
@@ -175,6 +193,7 @@ ObjClosure* newClosure(VM* vm, ObjFunction* function);
 ObjUpvalue* newUpvalue(VM* vm, Value* slot);
 ObjClip* newClip(VM* vm, ObjString* path);
 ObjTimeline* newTimeline(VM* vm, u32 width, u32 height, double fps);
+ObjProject* newProject(VM* vm, u32 width, u32 height, double fps);
 ObjClass* newClass(VM* vm, ObjString* name);
 ObjInstance* newInstance(VM* vm, ObjClass* klass);
 ObjBoundMethod* newBoundMethod(VM* vm, Value receiver, Value method);

@@ -163,3 +163,135 @@
 - **下一步**：从阶段0开始，设置Git仓库，并编写一个简单测试脚本验证每个阶段。
 
 如果需要更详细的任务分解、代码片段或调整优先级，请提供反馈！
+
+
+这是一个非常好的问题。你的代码架构分层非常清晰（Scanner -> Compiler -> Bytecode -> VM -> Memory/Object），这意味着修改通常会遵循特定的模式。
+
+以下针对**“添加列表切片功能”**和**“加入一个新的内置定义类（比如 Color 类）”**这两个具体场景，详细列举需要修改的文件和位置。
+
+---
+
+### 场景一：为列表加入切片功能 (List Slicing)
+**目标语法**：`list[start:end]`
+
+这涉及到**语法解析**（识别冒号）和**运行时执行**（创建新列表）。
+
+#### 1. 编译器前端 (Compiler)
+*   **文件**: `src/core/compiler/compiler_expr.c`
+*   **任务**: 修改下标访问的解析逻辑。
+    *   目前你的代码中 `TOKEN_LEFT_BRACKET` (`[`) 在 `rules` 中只有 `listLiteral` (前缀)。你需要添加 `infix` 处理函数来实现索引或切片。
+    *   **修改点**: 在 `rules` 数组中，为 `TOKEN_LEFT_BRACKET` 添加 `infix` 函数（例如命名为 `subscript`）。
+    *   **代码逻辑**:
+        ```c
+        static void subscript(bool canAssign) {
+            // 此时栈顶是 list 变量
+            expression(); // 解析 start 索引
+            
+            if (match(TOKEN_COLON)) { // 这是一个切片！
+                expression(); // 解析 end 索引
+                consume(TOKEN_RIGHT_BRACKET, "Expect ']' after slice.");
+                emitByte(OP_SLICE); // 发射切片指令
+            } else { // 这是普通索引
+                consume(TOKEN_RIGHT_BRACKET, "Expect ']' after index.");
+                if (canAssign && match(TOKEN_EQUAL)) {
+                    expression();
+                    emitByte(OP_SET_SUBSCRIPT); // 你可能还需要实现这个
+                } else {
+                    emitByte(OP_GET_SUBSCRIPT); // 你可能还需要实现这个
+                }
+            }
+        }
+        ```
+
+#### 2. 字节码定义 (Chunk)
+*   **文件**: `src/core/chunk.h`
+*   **任务**: 定义新的操作码。
+    *   在 `OpCode` 枚举中添加 `OP_SLICE`。如果还没有普通索引，可能还需要 `OP_GET_SUBSCRIPT`。
+
+#### 3. 虚拟机执行 (VM Handler)
+*   **文件**: `src/core/vm/vm_handler.h`
+*   **任务**: 实现指令逻辑。
+    *   **修改点**: 添加 `op_slice` 函数。
+    *   **逻辑**:
+        1.  弹出 `end` (Stack Top)。
+        2.  弹出 `start` (Stack Top - 1)。
+        3.  弹出 `list` (Stack Top - 2)。
+        4.  验证类型（必须是数字和列表）。
+        5.  处理负数索引（Python 风格）或越界检查。
+        6.  调用 `object.c` 中的辅助函数创建新列表。
+        7.  `PUSH` 新列表。
+*   **文件**: `src/core/vm/vm.c`
+*   **任务**: 在 `switch` 或跳转表中注册 `OP_SLICE`。
+
+#### 4. 对象操作 (Object)
+*   **文件**: `src/core/object.h` / `src/core/object.c`
+*   **任务**: 实现实际的内存拷贝逻辑。
+    *   **新增函数**: `ObjList* copyListRange(VM* vm, ObjList* list, int start, int end);`
+    *   **注意**: 必须使用 `ALLOCATE` 宏来确保 GC 能够追踪内存。
+
+---
+
+### 场景二：新加入一个内置类 (例如 `Color`)
+**目标**: 能够使用 `Color(255, 0, 0)`，并且对象类型为 `OBJ_COLOR`。
+
+这涉及到**类型系统**、**内存管理**和**原生函数绑定**。
+
+#### 1. 类型定义 (Type Definition)
+*   **文件**: `src/core/object.h`
+*   **任务**: 定义数据结构。
+    *   在 `ObjType` 枚举中添加 `OBJ_COLOR`。
+    *   定义结构体：
+        ```c
+        typedef struct {
+            Obj obj; // 头部必须是 Obj
+            u8 r, g, b, a;
+        } ObjColor;
+        ```
+    *   添加宏：`IS_COLOR`, `AS_COLOR`。
+*   **文件**: `src/core/value.h`
+*   **任务**: 如果使用了 NaN Boxing 且想做特定优化，可能需要在这里调整，但通常只需依赖 `OBJ_VAL` 即可。
+
+#### 2. 内存管理 (Memory Management)
+这是最容易被忽略但最导致 Crash 的地方。
+*   **文件**: `src/core/memory.c`
+*   **任务**: 告诉 GC 如何处理这个新对象。
+    *   **函数 `freeBody` (或 `freeObject`)**: 添加 `case OBJ_COLOR:`，执行 `FREE(vm, ObjColor, object)`。
+    *   **函数 `blackenObject`**: 如果 `Color` 里面包含其他对象引用（比如 `ObjString* name`），你需要在这里 `markObject`。如果是纯数字（r,g,b），则不需要修改此函数。
+
+#### 3. 对象构造与打印 (Object Implementation)
+*   **文件**: `src/core/object.c`
+*   **任务**:
+    *   **新增构造函数**: `ObjColor* newColor(VM* vm, u8 r, u8 g, u8 b);`
+    *   **修改 `printObject`**: 添加 `case OBJ_COLOR:`，输出 `"<Color 255, 0, 0>"`。
+
+#### 4. 虚拟机绑定 (Native Binding)
+*   **文件**: `src/core/vm/vm.c` (或单独的 `core/stdlib/std_color.c`)
+*   **任务**: 将 C 代码暴露给脚本。
+    *   你需要在 `initVM` 或专门的 `initNativeClasses` 中创建一个 `ObjClass`。
+    *   **构造函数**: 定义一个 `NativeFn` 类型的函数 `colorInit`，在其中调用 `newColor` 并返回实例。
+    *   **注册**:
+        ```c
+        ObjString* name = copyString(vm, "Color", 5);
+        ObjClass* colorClass = newClass(vm, name);
+        // ... 绑定 __init__ 方法 ...
+        tableSet(vm, &vm->globals, OBJ_VAL(name), OBJ_VAL(colorClass));
+        ```
+
+---
+
+### 汇总检查清单 (Checklist)
+
+当你修改代码时，请按以下顺序检查，防止遗漏：
+
+1.  **Header (`object.h`)**: 结构体定义了吗？枚举加了吗？
+2.  **Memory (`memory.c`)**: `freeObject` 处理释放了吗？`blackenObject` 处理引用遍历了吗？
+3.  **Alloc (`object.c`)**: 有对应的 `newXxx` 函数吗？初始化所有字段了吗（尤其是指针字段设为 NULL）？
+4.  **Print (`object.c`)**: `printObject` 能打印它吗？
+5.  **VM (`vm_handler.h` / `vm.c`)**:
+    *   如果是语法特性：OpCode 实现正确吗？栈平衡（Push/Pop 次数）对吗？
+    *   如果是新类型：原生方法绑定了吗？
+6.  **Compiler (`compiler_expr.c`)**: 只有涉及新语法（如切片符号）时才需要动这里。
+
+### 特别提醒
+
+在你的代码中，**`src/core/memory.c`** 是最关键的。如果你加了一个新对象类型（比如 `OBJ_COLOR`），但在 `freeObject` 中忘记加 `case`，VM 销毁时会**内存泄漏**。如果你在 `Color` 对象里放了一个 `ObjString*` 但忘记在 `blackenObject` 中标记它，GC 会在运行中**回收掉正在使用的字符串**，导致难以调试的 Crash。

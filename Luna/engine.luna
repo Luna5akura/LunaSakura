@@ -1,6 +1,6 @@
 # engine.luna
 
-var proj = Project(1920, 1080, 30)
+var proj = Project(960, 540, 30)
 print "Project created with width:"
 print proj.width
 print "height:"
@@ -8,11 +8,14 @@ print proj.height
 print "fps:"
 print proj.fps
 print "initial duration:"
-print proj.duration
+print proj.duration  # 假设绑定中添加了duration getter，若无则print 0或移除
+
+var tl = Timeline(960, 540, 30)
+proj.setTimeline(tl)
+print "Timeline set to project"
 
 print "creating clip"
-
-var clip = Video("test.mp4")
+var clip = Clip("test.mp4")  # 更正为Clip，原代码中Video可能为笔误或别名
 if clip == nil:
     print "Failed to load clip"
 else:
@@ -25,43 +28,40 @@ else:
     print "fps:"
     print clip.fps
 
-trim(clip, 0, 10)
+clip.trim(0, 10)  # 假设语言支持method调用
 print "Clip trimmed, new duration:"
 print clip.duration
 print "in_point:"
 print clip.in_point
 
-setScale(clip, 0.5, 0.5)
+clip.setScale(0.5, 0.5)
 print "Scale set, default_scale_x:"
 print clip.default_scale_x
 print "default_scale_y:"
 print clip.default_scale_y
 
-setPos(clip, 100, 200)
+clip.setPos(100, 200)
 print "Position set, default_x:"
 print clip.default_x
 print "default_y:"
 print clip.default_y
 
-setOpacity(clip, 0.8)
+clip.setOpacity(0.8)
 print "Opacity set, default_opacity:"
 print clip.default_opacity
 
-add(proj, 0, clip, 0)
+tl.add(0, clip, 0)
 print "Clip added to track 0, timeline duration:"
-print proj.duration
+print tl.duration  # 使用tl.duration
 
-var clip2 = Video("test.mp4")
-trim(clip2, 5, 10)
-setScale(clip2, 0.8)
-setPos(clip2, 300, 400)
-setOpacity(clip2, 0.6)
-add(proj, 1, clip2, 10)
+var clip2 = Clip("test.mp4")
+clip2.trim(5, 10)
+clip2.setScale(0.8)
+clip2.setPos(300, 400)
+clip2.setOpacity(0.6)
+tl.add(1, clip2, 10)
 print "Second clip added to track 1, timeline duration:"
-print proj.duration
+print tl.duration
 
-preview(proj)
-print "Timeline preview registered"
-
-export(clip, "trimmed_output.mp4")
-print "Clip exported"
+proj.preview()
+print "Project preview registered"

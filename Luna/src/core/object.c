@@ -155,6 +155,15 @@ ObjTimeline* newTimeline(VM* vm, u32 width, u32 height, double fps) {
     obj->timeline = timeline_create(vm, width, height, fps);
     return obj;
 }
+ObjProject* newProject(VM* vm, u32 width, u32 height, double fps) {
+    ObjProject* obj = (ObjProject*)allocateObject(vm, sizeof(ObjProject), OBJ_PROJECT);
+    obj->project = ALLOCATE(vm, Project, 1);
+    obj->project->width = width;
+    obj->project->height = height;
+    obj->project->fps = fps;
+    obj->project->timeline = NULL;  // 初始无Timeline
+    return obj;
+}
 ObjClass* newClass(VM* vm, ObjString* name) {
     ObjClass* klass = (ObjClass*)allocateObject(vm, sizeof(ObjClass), OBJ_CLASS);
     klass->name = name;

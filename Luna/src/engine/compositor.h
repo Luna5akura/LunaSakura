@@ -8,6 +8,7 @@
 #include <va/va.h>         // 新增: VA-API
 #include <va/va_glx.h>     // 新增: VA-GLX interop
 #include <libavformat/avformat.h>
+#include <libavcodec/avcodec.h>
 #include <drm/drm_fourcc.h> // 新增: DRM_FORMAT_NV12 等
 #include <SDL2/SDL_thread.h>  // 新增: SDL_Thread 和 SDL_mutex
 
@@ -24,28 +25,30 @@ extern VADisplay g_va_display;
 
 // --- ClipDecoder ---
 // [优化] 新增硬件解码支持
+
 typedef struct {
     ObjClip* clip_ref;
-
-    // FFmpeg
-    struct AVFormatContext* fmt_ctx;
-    struct AVCodecContext* dec_ctx;
-    struct AVFrame* raw_frame;
+    AVFormatContext* fmt_ctx;
+    AVCodecContext* dec_ctx;
     i32 video_stream_idx;
+    
+    // CPU Decoding
+    AVFrame* raw_frame;    // Native format (YUV)
+    AVFrame* rgb_frame;    // Converted RGB
+    u8* rgb_buffer;        // Raw buffer for RGB frame
+    struct SwsContext* sws_ctx;
+
+    // OpenGL
+    GLuint texture;        // Stores the RGB frame
+    
     double current_pts_sec;
-
-    // Hardware Acceleration
-    struct AVBufferRef* hw_device_ctx; // 新增: 硬件设备上下文
-    struct AVBufferRef* hw_frames_ctx; // 新增: 硬件帧池
-    bool hw_accel;               // 新增: 是否启用硬件
-
-    // OpenGL (改为单 NV12 纹理映射)
-    GLuint texture;              // 新增: 单 NV12 纹理（硬件映射）
-    VASurfaceID va_surface;      // 新增: VA-API 表面
-    EGLImage egl_image;          // 新增: EGL 图像桥接
-
-    i32 tex_w, tex_h;
     bool active_this_frame;
+    
+    // HW Accel (Deprecated/Removed for stability)
+    bool hw_accel;
+    AVBufferRef* hw_device_ctx;
+    AVBufferRef* hw_frames_ctx;
+    void* egl_image;       // EGLImageKHR
 } ClipDecoder;
 
 // --- Compositor ---

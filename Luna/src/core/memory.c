@@ -104,6 +104,14 @@ static inline void freeBody(VM* vm, Obj* object) {
         case OBJ_CLIP:
             FREE(vm, ObjClip, object);
             break;
+        case OBJ_PROJECT: {
+            ObjProject* obj = (ObjProject*)object;
+            if (obj->project) {
+                FREE(vm, Project, obj->project);
+            }
+            FREE(vm, ObjProject, object);
+            break;
+        }
         case OBJ_NATIVE:
             FREE(vm, ObjNative, object);
             break;
@@ -218,6 +226,13 @@ static void blackenObject(VM* vm, Obj* object) {
             }
             break;
         }
+        case OBJ_PROJECT: {
+            ObjProject* obj = (ObjProject*)object;
+            if (obj->project && obj->project->timeline) {
+                timeline_mark(vm, obj->project->timeline);  // 标记持有的Timeline及其内容
+            }
+            break;
+        }
         case OBJ_DICT: {
             ObjDict* dict = (ObjDict*)object;
             markTable(vm, &dict->items);
@@ -271,7 +286,9 @@ static void markRoots(VM* vm) {
         upvalue = next;
     }
     markTable(vm, &vm->globals);
-    if (vm->active_timeline) timeline_mark(vm, vm->active_timeline);
+    if (vm->active_project && vm->active_project->timeline) {
+        timeline_mark(vm, vm->active_project->timeline);
+    }
     if (vm->initString) markObject(vm, (Obj*)vm->initString);
     markCompilerRoots(vm);
 }

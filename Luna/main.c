@@ -17,8 +17,10 @@ void registerStdBindings(VM* vm);
 // [原有] 注册视频引擎绑定 (Video, Project, etc.)
 void registerVideoBindings(VM* vm);
 // --- 引擎接口声明 ---
-Timeline* get_active_timeline(VM* vm);
-void reset_active_timeline(VM* vm);
+Project* get_active_project(VM* vm);
+void reset_active_project(VM* vm);
+// Timeline* get_active_timeline(VM* vm);
+// void reset_active_timeline(VM* vm);
 // --- 辅助函数 ---
 time_t get_file_mtime(const char* path) {
     struct stat attr;
@@ -102,7 +104,7 @@ int main(int argc, char* argv[]) {
     time_t last_mtime = 0;
   
     Compositor* comp = NULL;
-    Timeline* current_tl = NULL;
+    Project* current_pr = NULL;
     // 本地 VM 实例
     // 必须初始化为 0，防止在第一次加载前（如果文件不存在）调用 freeVM 导致崩溃
     VM vm;
@@ -125,7 +127,7 @@ int main(int argc, char* argv[]) {
             initVM(&vm);
             vm_initialized = true;
           
-            reset_active_timeline(&vm);
+            reset_active_project(&vm);
           
             // [新增] 注册标准库 (List, etc.)
             registerStdBindings(&vm);
@@ -150,19 +152,18 @@ int main(int argc, char* argv[]) {
                 UNUSED(unused);
             }
             if (script_loaded) {
-                current_tl = get_active_timeline(&vm);
-                if (current_tl) {
-                    printf("[Reload] Timeline: %dx%d\n", current_tl->width, current_tl->height);
-                  
-                    // 调整窗口大小以适应时间轴 (可选，这里保留)
-                    if (current_tl->width != (u32)win_w || current_tl->height != (u32)win_h) {
-                        win_w = current_tl->width;
-                        win_h = current_tl->height;
+                current_pr = get_active_project(&vm);
+                if (current_pr && current_pr->timeline) {  // 确保Timeline已设置
+                    printf("[Reload] Project: %dx%d @ %.2f fps\n", current_pr->width, current_pr->height, current_pr->fps);
+                    u32 target_w = current_pr->timeline ? current_pr->timeline->width : current_pr->width;
+                    u32 target_h = current_pr->timeline ? current_pr->timeline->height : current_pr->height;
+
+                    if (target_w != (u32)win_w || target_h != (u32)win_h) {
+                        win_w = target_w;
+                        win_h = target_h;
                         SDL_SetWindowSize(window, win_w, win_h);
                     }
-                  
-                    // 创建 GL 合成器
-                    comp = compositor_create(&vm, current_tl);
+                    comp = compositor_create(&vm, current_pr->timeline);  // 使用持有的Timeline
                 }
             }
             last_mtime = now_mtime;
@@ -190,19 +191,14 @@ int main(int argc, char* argv[]) {
         uint64_t now = SDL_GetPerformanceCounter();
         double dt = (double)((now - last_perf) * 1000 / SDL_GetPerformanceFrequency()) / 1000.0;
         last_perf = now;
-        if (script_loaded && comp && current_tl) {
+        if (script_loaded && comp && current_pr && current_pr->timeline) {
             if (!paused) {
                 current_time += dt;
-                if (current_time > current_tl->duration) current_time = 0.0;
+                if (current_time > current_pr->timeline->duration) current_time = 0.0;  // 使用timeline->duration
             }
             if (current_time < 0) current_time = 0.0;
-           
-            // 1. 核心渲染 (画到 FBO)
             compositor_render(comp, current_time);
-           
-            // 2. 上屏 (Blit FBO -> Screen)
             compositor_blit_to_screen(comp, win_w, win_h);
-          
         } else {
             // 空闲/错误状态：红色背景
             glClearColor(0.2f, 0.0f, 0.0f, 1.0f);

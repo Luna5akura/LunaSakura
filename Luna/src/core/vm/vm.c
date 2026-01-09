@@ -50,7 +50,7 @@ void initVM(VM* vm) {
     initTable(&vm->strings);
     vm->initString = NULL;
     vm->initString = copyString(vm, "init", 4);
-    vm->active_timeline = NULL;
+    vm->active_project = NULL;
     vm->handlerCount = 0;
 }
 void freeVM(VM* vm) {
@@ -62,9 +62,9 @@ void freeVM(VM* vm) {
         free(vm->grayStack);
         vm->grayStack = NULL;
     }
-    if (vm->active_timeline) {
-        timeline_free(vm, vm->active_timeline);
-        vm->active_timeline = NULL;
+    if (vm->active_project) {
+        // Project由GC释放，无需手动free
+        vm->active_project = NULL;
     }
 }
 void defineNative(VM* vm, const char* name, NativeFn function) {
