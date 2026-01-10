@@ -2,6 +2,7 @@
 
 #pragma once
 #include "core/object.h"
+#include "engine/object.h"
 // Forward declare VM
 typedef struct VM VM;
 // --- Video Metadata ---

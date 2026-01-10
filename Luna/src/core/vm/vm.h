@@ -7,6 +7,7 @@
 // --- Configuration ---
 #define STACK_MAX 2048
 #define FRAMES_MAX 64
+
 // --- Call Frame ---
 typedef struct {
     ObjClosure* closure;

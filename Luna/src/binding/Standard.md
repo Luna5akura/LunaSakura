@@ -431,9 +431,7 @@ print v3.y           # 输出 8
 
 if v1 < v2:          # 自动调用 v1.__lt(v2)
     print "v1 is smaller"
-```
 
-```python
 # 列表推导式示例
 var squares = [x * x for x in range(10)]
 print squares  # 输出 [0, 1, 4, 9, ..., 81]
@@ -442,4 +440,3 @@ print squares  # 输出 [0, 1, 4, 9, ..., 81]
 var codes = [c for c in "ABC"]
 print codes    # 输出 ["A", "B", "C"]
 ```
--

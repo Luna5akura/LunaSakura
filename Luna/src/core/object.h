@@ -3,7 +3,6 @@
 #pragma once
 #include "chunk.h"
 #include "table.h"
-#include "engine/timeline.h"
 
 // 前置声明
 typedef struct VM VM;
@@ -14,9 +13,6 @@ typedef struct sObjDict ObjDict;
 typedef struct sObjFunction ObjFunction;
 typedef struct sObjNative ObjNative;
 typedef struct sObjClass ObjClass;
-typedef struct sObjClip ObjClip;
-typedef struct sObjTimeline ObjTimeline;
-typedef struct sObjProject ObjProject;
 typedef struct sObjInstance ObjInstance;
 typedef struct sObjBoundMethod ObjBoundMethod;
 typedef struct sObjClosure ObjClosure;
@@ -29,15 +25,11 @@ typedef enum {
     OBJ_FUNCTION,
     OBJ_NATIVE,
     OBJ_CLASS,
-
-    OBJ_CLIP,
-    OBJ_TIMELINE,
-    OBJ_PROJECT,
-
     OBJ_INSTANCE,
     OBJ_BOUND_METHOD,
     OBJ_CLOSURE,
-    OBJ_UPVALUE
+    OBJ_UPVALUE,
+    OBJ_FOREIGN 
 } ObjType;
 // --- Base Object Header ---
 struct sObj {
@@ -96,55 +88,23 @@ struct sObjClosure {
     ObjUpvalue** upvalues;
     i32 upvalueCount;
 };
-// --- Clip Object ---
-struct sObjClip {
-    Obj obj;
-    struct sObjString* path;
-    double duration;
-    double start_time;
-    double in_point;
-    double out_point;
-    double fps;
 
-    bool has_video;
-    bool has_audio;
-    i32 audio_channels;
-    i32 audio_sample_rate;
-
-    double default_scale_x;
-    double default_scale_y;
-    double default_x;
-    double default_y;
-    double default_opacity;
-
-    double volume; 
-    u32 width;
-    u32 height;
-    i32 layer;
-};
-
-// --- Timeline Object ---
-// Timeline 结构的具体定义在 engine/timeline.h 中
-struct sObjTimeline {
-    Obj obj;
-    struct Timeline* timeline;
-};
+// [新增] 宿主对象行为接口（虚函数表）
 typedef struct {
-    u32 width;
-    u32 height;
-    double fps;
-    struct Timeline* timeline;
-    
-    // [新增] 预览范围控制
-    bool use_preview_range;
-    double preview_start;
-    double preview_end;
-} Project;
+    const char* typeName; // 用于打印，例如 "<clip>"
+    void (*allocate)(VM* vm, Obj* obj); // 可选：初始化逻辑
+    void (*free)(VM* vm, Obj* obj);     // 告诉 GC 如何释放内部资源
+    void (*mark)(VM* vm, Obj* obj);     // 告诉 GC 如何标记引用的对象
+} ForeignClassMethods;
 
-struct sObjProject {
+// [新增] 宿主对象基类
+// 所有的业务对象（Clip, Timeline）都必须把这个结构体放在内存首位
+typedef struct {
     Obj obj;
-    Project* project;
-};
+    const ForeignClassMethods* methods; 
+    // 后面紧跟具体业务数据的内存
+} ObjForeign;
+
 // --- Class & Instance ---
 struct sObjClass {
     Obj obj;
@@ -169,15 +129,14 @@ struct sObjBoundMethod {
 #define IS_DICT(value) isObjType(value, OBJ_DICT)
 #define IS_FUNCTION(value) isObjType(value, OBJ_FUNCTION)
 #define IS_NATIVE(value) isObjType(value, OBJ_NATIVE)
-#define IS_CLIP(value) isObjType(value, OBJ_CLIP)
-#define IS_TIMELINE(value) isObjType(value, OBJ_TIMELINE)
 #define IS_CLASS(value) isObjType(value, OBJ_CLASS)
 #define IS_INSTANCE(value) isObjType(value, OBJ_INSTANCE)
 #define IS_BOUND_METHOD(value) isObjType(value, OBJ_BOUND_METHOD)
 #define IS_CLOSURE(value) isObjType(value, OBJ_CLOSURE)
 #define IS_UPVALUE(value) isObjType(value, OBJ_UPVALUE)
 #define IS_LIST_HOMOGENEOUS(value) (IS_LIST(value) && isListHomogeneous(AS_LIST(value)))
-#define IS_PROJECT(value) isObjType(value, OBJ_PROJECT)
+#define IS_FOREIGN(value) isObjType(value, OBJ_FOREIGN)
+#define AS_FOREIGN(value) ((ObjForeign*)AS_OBJ(value))
 #define AS_STRING(value) ((ObjString*)AS_OBJ(value))
 #define AS_CSTRING(value) (((ObjString*)AS_OBJ(value))->chars)
 #define AS_LIST(value) ((ObjList*)AS_OBJ(value))
@@ -186,12 +145,9 @@ struct sObjBoundMethod {
 #define AS_NATIVE(value) (((ObjNative*)AS_OBJ(value))->function)
 #define AS_CLOSURE(value) ((ObjClosure*)AS_OBJ(value))
 #define AS_UPVALUE(value) ((ObjUpvalue*)AS_OBJ(value))
-#define AS_CLIP(value) ((ObjClip*)AS_OBJ(value))
-#define AS_TIMELINE(value) ((ObjTimeline*)AS_OBJ(value))
 #define AS_CLASS(value) ((ObjClass*)AS_OBJ(value))
 #define AS_INSTANCE(value) ((ObjInstance*)AS_OBJ(value))
 #define AS_BOUND_METHOD(value) ((ObjBoundMethod*)AS_OBJ(value))
-#define AS_PROJECT(value) ((ObjProject*)AS_OBJ(value))
 // --- Inline Helpers ---
 static INLINE bool isObjType(Value value, ObjType type) {
     return IS_OBJ(value) && AS_OBJ(value)->type == type;
@@ -205,9 +161,7 @@ ObjFunction* newFunction(VM* vm);
 ObjNative* newNative(VM* vm, NativeFn function);
 ObjClosure* newClosure(VM* vm, ObjFunction* function);
 ObjUpvalue* newUpvalue(VM* vm, Value* slot);
-ObjClip* newClip(VM* vm, ObjString* path);
-ObjTimeline* newTimeline(VM* vm, u32 width, u32 height, double fps);
-ObjProject* newProject(VM* vm, u32 width, u32 height, double fps);
+ObjForeign* newForeign(VM* vm, size_t size, const ForeignClassMethods* methods);
 ObjClass* newClass(VM* vm, ObjString* name);
 ObjInstance* newInstance(VM* vm, ObjClass* klass);
 ObjBoundMethod* newBoundMethod(VM* vm, Value receiver, Value method);

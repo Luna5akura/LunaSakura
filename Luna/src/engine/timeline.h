@@ -2,6 +2,7 @@
 
 #pragma once // 1. 编译优化
 #include "core/object.h"
+#include "engine/object.h"
 // Forward declare VM to avoid including vm.h
 typedef struct VM VM;
 // === 基础组件 ===

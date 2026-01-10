@@ -6,6 +6,7 @@
 #include "core/vm/vm.h"
 #include "engine/video.h"
 #include "engine/timeline.h"
+#include "engine/object.h" // 必须包含，为了使用 ClipMethods 等
 
 // --- 宏定义：简化操作 ---
 
@@ -24,6 +25,8 @@
 
 // 供 main.c 调用
 Project* get_active_project(VM* vm) {
+    // 这里假设 active_project 是直接存储 C 指针，还是存储的 ObjProject* ?
+    // 如果 vm->active_project 是 C 结构体指针 (Project*)，则直接返回
     return vm->active_project;
 }
 void reset_active_project(VM* vm) {
@@ -32,15 +35,15 @@ void reset_active_project(VM* vm) {
 
 // --- 内部辅助函数 ---
 
-// [修复] 移除 static ObjString* str_handle，防止 GC 悬空指针
-
-static Obj* getHandle(VM* vm, Value instanceVal, ObjType expectedType) {
+// [修改] 参数从 ObjType 改为 const ForeignClassMethods*
+// 这样我们可以精确区分 Clip, Timeline, Project
+static Obj* getHandle(VM* vm, Value instanceVal, const ForeignClassMethods* expectedMethods) {
     if (!IS_INSTANCE(instanceVal)) return NULL;
     ObjInstance* instance = AS_INSTANCE(instanceVal);
 
     // [修复] 每次调用时获取字符串，确保对象有效
     ObjString* handleKey = copyString(vm, "_handle", 7);
-    push(vm, OBJ_VAL(handleKey)); // 压栈保护，防止下一次分配触发 GC 回收它
+    push(vm, OBJ_VAL(handleKey)); // 压栈保护
 
     Value handleVal;
     bool found = tableGet(&instance->fields, OBJ_VAL(handleKey), &handleVal);
@@ -48,15 +51,21 @@ static Obj* getHandle(VM* vm, Value instanceVal, ObjType expectedType) {
     pop(vm); // 使用完毕弹出
 
     if (!found) return NULL;
+    
+    // 1. 必须是对象
     if (!IS_OBJ(handleVal)) return NULL;
     
-    Obj* obj = AS_OBJ(handleVal);
-    if (obj->type != expectedType) return NULL;
-    return obj;
+    // 2. 必须是宿主对象 (OBJ_FOREIGN)
+    if (!IS_FOREIGN(handleVal)) return NULL;
+
+    // 3. 必须匹配具体的方法表指针 (Is instance of Clip/Timeline/...)
+    ObjForeign* foreign = AS_FOREIGN(handleVal);
+    if (foreign->methods != expectedMethods) return NULL;
+    
+    return (Obj*)foreign;
 }
 
 static void setHandle(VM* vm, ObjInstance* instance, Obj* internalObj) {
-    // [修复] 每次调用时获取字符串
     ObjString* handleKey = copyString(vm, "_handle", 7);
     push(vm, OBJ_VAL(handleKey)); // 压栈保护
 
@@ -69,9 +78,7 @@ static void setHandle(VM* vm, ObjInstance* instance, Obj* internalObj) {
 // --- Clip 类实现 ---
 
 // 构造函数: Clip(path)
-// VM 传递 argCount = 1 (path)
 Value clipInit(VM* vm, i32 argCount, Value* args) {
-    // 检查参数数量
     if (argCount != 1 || !IS_STRING(args[0])) {
         fprintf(stderr, "Usage: Clip(path: String)\n");
         return NIL_VAL;
@@ -94,14 +101,11 @@ Value clipInit(VM* vm, i32 argCount, Value* args) {
     clip->height = meta.height;
     clip->fps = meta.fps;
     
-    // [修复] 设置默认变换属性
     clip->default_scale_x = 1.0;
     clip->default_scale_y = 1.0;
     clip->default_opacity = 1.0;
     clip->volume = 1.0;
     
-    // [关键修复] 将默认坐标设为 0，让视频从左上角开始绘制
-    // 之前的 meta.width / 2.0 会导致视频向右偏移一半宽度，甚至移出屏幕
     clip->default_x = 0.0; 
     clip->default_y = 0.0;
     
@@ -117,7 +121,6 @@ Value clipInit(VM* vm, i32 argCount, Value* args) {
     SET_PROP(thisObj, "has_audio", clip->has_audio ? 1 : 0);
     SET_PROP(thisObj, "has_video", clip->has_video ? 1 : 0);
    
-    // 初始化其他可读属性
     SET_PROP(thisObj, "in_point", clip->in_point);
     SET_PROP(thisObj, "default_scale_x", clip->default_scale_x);
     SET_PROP(thisObj, "default_scale_y", clip->default_scale_y);
@@ -130,26 +133,22 @@ Value clipInit(VM* vm, i32 argCount, Value* args) {
 
 Value clipSetVolume(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
-    // 获取底层 ObjClip 对象
-    ObjClip* clip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), OBJ_CLIP);
+    // [修改] 传入 &ClipMethods
+    ObjClip* clip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
     if (!clip || argCount != 1) return NIL_VAL;
     
     double val = AS_NUMBER(args[0]);
     if (val < 0.0) val = 0.0;
     
-    // 直接修改 ObjClip 的属性
     clip->volume = val;
-
-    // 同步到 Luna 实例属性 (可选，便于 print 查看)
     SET_PROP(thisObj, "volume", val);
-
     return NIL_VAL;
 }
 
-// trim(start, duration)
 Value clipTrim(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
-    ObjClip* clip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), OBJ_CLIP);
+    // [修改] 传入 &ClipMethods
+    ObjClip* clip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
     if (!clip || argCount != 2) return NIL_VAL;
 
     double start = AS_NUMBER(args[0]);
@@ -159,7 +158,6 @@ Value clipTrim(VM* vm, i32 argCount, Value* args) {
     clip->in_point = start;
     clip->duration = duration;
 
-    // 同步更新属性
     SET_PROP(thisObj, "in_point", start);
     SET_PROP(thisObj, "duration", duration);
     
@@ -168,7 +166,7 @@ Value clipTrim(VM* vm, i32 argCount, Value* args) {
 
 Value clipExport(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
-    ObjClip* clip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), OBJ_CLIP);
+    ObjClip* clip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
     if (!clip || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
     
     ObjString* filename = AS_STRING(args[0]);
@@ -178,7 +176,7 @@ Value clipExport(VM* vm, i32 argCount, Value* args) {
 
 Value clipSetScale(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
-    ObjClip* clip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), OBJ_CLIP);
+    ObjClip* clip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
     if (!clip || argCount < 1) return NIL_VAL;
     
     double sx = AS_NUMBER(args[0]);
@@ -187,7 +185,6 @@ Value clipSetScale(VM* vm, i32 argCount, Value* args) {
     clip->default_scale_x = sx;
     clip->default_scale_y = sy;
 
-    // 同步更新属性
     SET_PROP(thisObj, "default_scale_x", sx);
     SET_PROP(thisObj, "default_scale_y", sy);
 
@@ -196,13 +193,12 @@ Value clipSetScale(VM* vm, i32 argCount, Value* args) {
 
 Value clipSetPos(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
-    ObjClip* clip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), OBJ_CLIP);
+    ObjClip* clip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
     if (!clip || argCount != 2) return NIL_VAL;
     
     clip->default_x = AS_NUMBER(args[0]);
     clip->default_y = AS_NUMBER(args[1]);
 
-    // 同步更新属性
     SET_PROP(thisObj, "default_x", clip->default_x);
     SET_PROP(thisObj, "default_y", clip->default_y);
 
@@ -211,14 +207,14 @@ Value clipSetPos(VM* vm, i32 argCount, Value* args) {
 
 Value clipSetOpacity(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
-    ObjClip* clip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), OBJ_CLIP);
+    ObjClip* clip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
     if (!clip || argCount != 1) return NIL_VAL;
     
     double val = AS_NUMBER(args[0]);
-    if (val < 0.0) val = 0.0; if (val > 1.0) val = 1.0;
+    if (val < 0.0) val = 0.0; 
+    if (val > 1.0) val = 1.0;
     clip->default_opacity = val;
 
-    // 同步更新属性
     SET_PROP(thisObj, "default_opacity", val);
 
     return NIL_VAL;
@@ -249,14 +245,16 @@ Value timelineInit(VM* vm, i32 argCount, Value* args) {
 // add(trackId, clipInstance, start)
 Value timelineAdd(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
-    ObjTimeline* tlObj = (ObjTimeline*)getHandle(vm, OBJ_VAL(thisObj), OBJ_TIMELINE);
+    // [修改] 传入 &TimelineMethods
+    ObjTimeline* tlObj = (ObjTimeline*)getHandle(vm, OBJ_VAL(thisObj), &TimelineMethods);
     if (!tlObj || argCount != 3) return NIL_VAL;
     
     i32 trackIdx = (i32)AS_NUMBER(args[0]);
     Value clipVal = args[1];
     double start = AS_NUMBER(args[2]);
     
-    ObjClip* clip = (ObjClip*)getHandle(vm, clipVal, OBJ_CLIP);
+    // [修改] 传入 &ClipMethods
+    ObjClip* clip = (ObjClip*)getHandle(vm, clipVal, &ClipMethods);
     if (clip == NULL) {
         fprintf(stderr, "Runtime Error: Timeline.add argument 2 must be a Clip instance.\n");
         return NIL_VAL;
@@ -268,7 +266,6 @@ Value timelineAdd(VM* vm, i32 argCount, Value* args) {
     
     timeline_add_clip(vm, tlObj->timeline, trackIdx, clip, start);
 
-    // 更新 timeline 的 duration
     SET_PROP(thisObj, "duration", tlObj->timeline->duration);
 
     return NIL_VAL;
@@ -291,7 +288,6 @@ Value projectInit(VM* vm, i32 argCount, Value* args) {
     ObjProject* proj = newProject(vm, (u32)w, (u32)h, fps);
     setHandle(vm, thisObj, (Obj*)proj);
 
-    // 同步属性
     SET_PROP(thisObj, "width", w);
     SET_PROP(thisObj, "height", h);
     SET_PROP(thisObj, "fps", fps);
@@ -303,11 +299,13 @@ Value projectInit(VM* vm, i32 argCount, Value* args) {
 // setTimeline(tl)
 Value projectSetTimeline(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
-    ObjProject* proj = (ObjProject*)getHandle(vm, OBJ_VAL(thisObj), OBJ_PROJECT);
+    // [修改] 传入 &ProjectMethods
+    ObjProject* proj = (ObjProject*)getHandle(vm, OBJ_VAL(thisObj), &ProjectMethods);
     if (!proj || argCount != 1) return NIL_VAL;
    
     Value tlVal = args[0];
-    ObjTimeline* tlObj = (ObjTimeline*)getHandle(vm, tlVal, OBJ_TIMELINE);
+    // [修改] 传入 &TimelineMethods
+    ObjTimeline* tlObj = (ObjTimeline*)getHandle(vm, tlVal, &TimelineMethods);
     if (!tlObj) {
         fprintf(stderr, "Runtime Error: Project.setTimeline argument must be a Timeline instance.\n");
         return NIL_VAL;
@@ -319,14 +317,13 @@ Value projectSetTimeline(VM* vm, i32 argCount, Value* args) {
 
 Value projectPreview(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
-    ObjProject* proj = (ObjProject*)getHandle(vm, OBJ_VAL(thisObj), OBJ_PROJECT);
+    // [修改] 传入 &ProjectMethods
+    ObjProject* proj = (ObjProject*)getHandle(vm, OBJ_VAL(thisObj), &ProjectMethods);
     
     if (!proj) return NIL_VAL;
 
-    // 默认关闭范围预览
     proj->project->use_preview_range = false;
 
-    // 解析参数
     if (argCount == 2) {
         if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
              fprintf(stderr, "Usage: Project.preview(start: Number, end: Number)\n");
@@ -344,7 +341,6 @@ Value projectPreview(VM* vm, i32 argCount, Value* args) {
     }
 
     vm->active_project = proj->project;
-    // printf("[Binding] Project registered for preview.\n"); // 可选：减少日志噪音
     return NIL_VAL;
 }
 
@@ -393,7 +389,6 @@ static void registerProjectMethods(VM* vm, ObjClass* klass) {
 }
 
 void registerVideoBindings(VM* vm) {
-    // 移除了 static 字符串预分配，避免 GC 悬空指针
     defineClass(vm, "Clip", clipInit, registerClipMethods);
     defineClass(vm, "Timeline", timelineInit, registerTimelineMethods);
     defineClass(vm, "Project", projectInit, registerProjectMethods);

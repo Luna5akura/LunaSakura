@@ -128,47 +128,6 @@ ObjUpvalue* newUpvalue(VM* vm, Value* slot) {
     upvalue->next = NULL;
     return upvalue;
 }
-ObjClip* newClip(VM* vm, ObjString* path) {
-    ObjClip* clip = (ObjClip*)allocateObject(vm, sizeof(ObjClip), OBJ_CLIP);
-    clip->path = path;
-   
-    // 初始化默认值
-    clip->duration = 0;
-    clip->start_time = 0;
-    clip->in_point = 0;
-    clip->out_point = 0;
-    clip->fps = 0;
-    clip->volume = 1.0; 
-    clip->width = 0;
-    clip->height = 0;
-    clip->layer = 0;
-    clip->default_scale_x = 1.0;
-    clip->default_scale_y = 1.0;
-    clip->default_x = 0;
-    clip->default_y = 0;
-    clip->default_opacity = 1.0;
-   
-    return clip;
-}
-ObjTimeline* newTimeline(VM* vm, u32 width, u32 height, double fps) {
-    ObjTimeline* obj = (ObjTimeline*)allocateObject(vm, sizeof(ObjTimeline), OBJ_TIMELINE);
-    // engine 层的创建逻辑
-    obj->timeline = timeline_create(vm, width, height, fps);
-    return obj;
-}
-ObjProject* newProject(VM* vm, u32 width, u32 height, double fps) {
-    ObjProject* obj = (ObjProject*)allocateObject(vm, sizeof(ObjProject), OBJ_PROJECT);
-    obj->project = ALLOCATE(vm, Project, 1);
-    obj->project->width = width;
-    obj->project->height = height;
-    obj->project->fps = fps;
-    obj->project->timeline = NULL;
-    obj->project->use_preview_range = false;
-    obj->project->preview_start = 0.0;
-    obj->project->preview_end = 0.0;
-    
-    return obj;
-}
 ObjClass* newClass(VM* vm, ObjString* name) {
     ObjClass* klass = (ObjClass*)allocateObject(vm, sizeof(ObjClass), OBJ_CLASS);
     klass->name = name;
@@ -187,6 +146,13 @@ ObjBoundMethod* newBoundMethod(VM* vm, Value receiver, Value method) {
     bound->receiver = receiver;
     bound->method = method;
     return bound;
+}
+ObjForeign* newForeign(VM* vm, size_t size, const ForeignClassMethods* methods) {
+    // 分配具体业务结构体的大小 (例如 sizeof(ObjClip))
+    // 强制转换为 ObjForeign* 是安全的，因为 ObjForeign 是它们的第一个成员
+    ObjForeign* object = (ObjForeign*)allocateObject(vm, size, OBJ_FOREIGN);
+    object->methods = methods;
+    return object;
 }
 // === Print ===
 void printObject(Value value) {
@@ -250,16 +216,12 @@ void printObject(Value value) {
             printf("}");
             break;
         }
-        case OBJ_CLIP:
-            if (AS_CLIP(value)->path != NULL) {
-                printf("<clip \"%s\">", AS_CLIP(value)->path->chars);
-            } else {
-                printf("<clip>");
-            }
+        case OBJ_FOREIGN: {
+            ObjForeign* foreign = AS_FOREIGN(value);
+            // 使用注册的类型名，例如 <clip>, <timeline>
+            printf("<%s>", foreign->methods->typeName);
             break;
-        case OBJ_TIMELINE:
-            printf("<timeline>");
-            break;
+        }
     }
 }
 // === Type Checking ===

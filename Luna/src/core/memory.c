@@ -93,23 +93,17 @@ static inline void freeBody(VM* vm, Obj* object) {
         case OBJ_UPVALUE:
             FREE(vm, ObjUpvalue, object);
             break;
-        case OBJ_TIMELINE: {
-            ObjTimeline* obj = (ObjTimeline*)object;
-            if (obj->timeline) {
-                timeline_free(vm, obj->timeline);
+        case OBJ_FOREIGN: {
+            ObjForeign* foreign = (ObjForeign*)object;
+            // 1. 先清理该对象持有的外部资源（如 Timeline* 指针）
+            if (foreign->methods->free) {
+                foreign->methods->free(vm, object);
             }
-            FREE(vm, ObjTimeline, object);
-            break;
-        }
-        case OBJ_CLIP:
-            FREE(vm, ObjClip, object);
-            break;
-        case OBJ_PROJECT: {
-            ObjProject* obj = (ObjProject*)object;
-            if (obj->project) {
-                FREE(vm, Project, obj->project);
-            }
-            FREE(vm, ObjProject, object);
+            // 2. 释放对象本身的内存（由 VM 分配的）
+            // 注意：这里我们不需要知道具体大小，reallocate(..., 0) 会直接 free 指针
+            // 如果你的内存统计需要精确大小，你可能需要在 ObjForeign 里存 size，
+            // 或者在 methods->free 里返回 size，但简单 free 通常足够。
+            reallocate(vm, object, 0, 0); 
             break;
         }
         case OBJ_NATIVE:
@@ -211,25 +205,12 @@ static void blackenObject(VM* vm, Obj* object) {
             if (klass->superclass) MARK_OBJ(klass->superclass);
             break;
         }
-        case OBJ_TIMELINE: {
-            ObjTimeline* objTl = (ObjTimeline*)object;
-            Timeline* tl = objTl->timeline;
-            if (tl == NULL) break;
-            for (u32 i = 0; i < tl->track_count; i++) {
-                Track* track = &tl->tracks[i];
-                for (u32 j = 0; j < track->clip_count; j++) {
-                    TimelineClip* clip = &track->clips[j];
-                    if (clip->media) {
-                        MARK_OBJ(clip->media);
-                    }
-                }
-            }
-            break;
-        }
-        case OBJ_PROJECT: {
-            ObjProject* obj = (ObjProject*)object;
-            if (obj->project && obj->project->timeline) {
-                timeline_mark(vm, obj->project->timeline);  // 标记持有的Timeline及其内容
+        
+        case OBJ_FOREIGN: {
+            ObjForeign* foreign = (ObjForeign*)object;
+            // 如果该类型定义了标记函数，则调用它
+            if (foreign->methods->mark) {
+                foreign->methods->mark(vm, object);
             }
             break;
         }
@@ -248,11 +229,7 @@ static void blackenObject(VM* vm, Obj* object) {
             MARK_VAL(((ObjUpvalue*)object)->closed);
             break;
         }
-        case OBJ_CLIP: {
-            ObjClip* clip = (ObjClip*)object;
-            if (clip->path) MARK_OBJ(clip->path);
-            break;
-        }
+
         case OBJ_NATIVE:
         case OBJ_STRING:
             break;
