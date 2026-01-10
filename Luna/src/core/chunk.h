@@ -36,6 +36,8 @@ typedef enum {
     OP_CALL,
     OP_CALL_KW,
     OP_CHECK_DEFAULT,// [新增] 检查参数是否为 UNDEFINED (slot, jump_offset)
+    OP_ITER_INIT, // 初始化迭代器: [iterable] -> [iterable, iterator_index]
+    OP_ITER_NEXT, // 迭代步进: [iterable, iterator_index] -> [iterable, new_index, item] (如果结束则跳转)
     OP_BUILD_LIST,
     OP_BUILD_DICT,
     OP_CLOSURE,

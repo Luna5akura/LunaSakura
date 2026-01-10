@@ -557,6 +557,77 @@ static INLINE bool op_super_invoke_kw(VM* vm, CallFrame** framePtr, Value** spPt
     }
     return true;
 }
+static bool op_iter_init(VM* vm, CallFrame** frame, Value** sp, u8** ip) {
+    Value iterable = *(*sp - 1);
+    
+    if (IS_LIST(iterable) || IS_STRING(iterable)) {
+        *(*sp)++ = NUMBER_VAL(0); // 列表和字符串从索引 0 开始
+        return true;
+    } 
+    else if (IS_DICT(iterable)) {
+        *(*sp)++ = NUMBER_VAL(0); // 字典从 bucket 0 开始扫描
+        return true;
+    }
+    
+    runtimeError(vm, "Type '%s' is not iterable.", IS_OBJ(iterable) ? "Object" : "Value");
+    return false;
+}
+
+static bool op_iter_next(VM* vm, CallFrame** frame, Value** sp, u8** ip) {
+    // 指令结构: [OP_ITER_NEXT] [JumpOffsetHigh] [JumpOffsetLow]
+    // 栈结构: [ ... , iterable, iterator_index ]
+    
+    Value* iteratorSlot = *sp - 1;
+    Value iterator = *iteratorSlot;
+    Value iterable = *(*sp - 2);
+    
+    // 读取跳转偏移量
+    u16 offset = (u16)(((*ip)[0] << 8) | (*ip)[1]);
+    *ip += 2; // 跳过偏移量参数
+
+    if (IS_LIST(iterable)) {
+        ObjList* list = AS_LIST(iterable);
+        double index = AS_NUMBER(iterator);
+        
+        if (index < list->count) {
+            // 有下一个元素：更新迭代器，压入元素
+            *iteratorSlot = NUMBER_VAL(index + 1);
+            *(*sp)++ = list->items[(int)index];
+            return true;
+        }
+    } 
+    else if (IS_STRING(iterable)) {
+        ObjString* string = AS_STRING(iterable);
+        double index = AS_NUMBER(iterator);
+        
+        if (index < string->length) {
+            *iteratorSlot = NUMBER_VAL(index + 1);
+            // 创建单字符字符串
+            *(*sp)++ = OBJ_VAL(copyString(vm, string->chars + (int)index, 1));
+            return true;
+        }
+    } 
+    else if (IS_DICT(iterable)) {
+        ObjDict* dict = AS_DICT(iterable);
+        u32 index = (u32)AS_NUMBER(iterator);
+        u32 capacity = dict->items.capacity;
+        Entry* entries = dict->items.entries;
+
+        // 线性扫描下一个非空 bucket
+        for (; index < capacity; index++) {
+            if (!IS_NIL(entries[index].key)) {
+                // 找到条目
+                *iteratorSlot = NUMBER_VAL((double)(index + 1));
+                *(*sp)++ = entries[index].key; // 压入键 (Key)
+                return true;
+            }
+        }
+    }
+
+    // 迭代结束：执行跳转
+    *ip += offset;
+    return true;
+}
 static INLINE bool op_build_list(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
     u8 itemCount = READ_BYTE();
     SYNC_VM();

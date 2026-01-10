@@ -76,6 +76,7 @@ typedef struct Loop {
     i32 start;
     i32 bodyJump;
     i32 scopeDepth;
+    i32 localCount; // [新增] 记录进入循环时的局部变量数量
     i32 breakJumps[U8_COUNT];
     i32 breakCount;
     i32 continueJumps[U8_COUNT];

@@ -70,6 +70,7 @@ static void beginLoop(Loop* loop) {
     loop->enclosing = currentLoop;
     loop->start = getChunkCount(currentChunk());
     loop->scopeDepth = current->scopeDepth;
+    loop->localCount = current->localCount; // [新增] 记录当前的局部变量数
     loop->breakCount = 0;
     loop->continueCount = 0;
     currentLoop = loop;
@@ -105,52 +106,86 @@ static void whileStatement() {
 }
 
 static void forStatement() {
-    consume(TOKEN_IDENTIFIER, "Expect var name.");
+    // 语法: for var_name in iterable:
+    beginScope(); // 这一层 Scope 用于包裹循环内部的隐藏变量 (iterator, iterable)
+
+    consume(TOKEN_IDENTIFIER, "Expect variable name.");
     Token varName = parser.previous;
-    consume(TOKEN_IN, "Expect 'in'.");
-    expression(); // Start
-    consume(TOKEN_DOT, "Expect '..'.");
-    consume(TOKEN_DOT, "Expect '..'.");
-    expression(); // End
-    consume(TOKEN_COLON, "Expect ':'.");
-    consume(TOKEN_NEWLINE, "Expect newline.");
-  
-    beginScope();
-    addLocal(varName); defineVariable(0);
-    addLocal(syntheticToken("<limit>")); defineVariable(0);
-  
+    
+    consume(TOKEN_IN, "Expect 'in' after variable name.");
+    
+    expression(); // 编译 iterable 表达式，结果留在栈顶 (Slot N)
+    
+    // [修复关键点 1] 注册 iterable 为隐藏局部变量，占用一个栈槽位
+    addLocal(syntheticToken("(iterable)"));
+    defineVariable(0);
+
+    // 1. 初始化迭代器
+    // 栈: [iterable, iterator_index]
+    emitByte(OP_ITER_INIT); // 结果压入栈顶 (Slot N+1)
+    
+    // [修复关键点 2] 注册 iterator_index 为隐藏局部变量，占用一个栈槽位
+    addLocal(syntheticToken("(iterator)"));
+    defineVariable(0);
+
     Loop loop;
     beginLoop(&loop);
-  
-    emitBytes(OP_GET_LOCAL, (u8)(current->localCount - 2));
-    emitBytes(OP_GET_LOCAL, (u8)(current->localCount - 1));
-    emitByte(OP_LESS_EQUAL);
-  
-    i32 exitJump = emitJump(OP_JUMP_IF_FALSE);
-    emitByte(OP_POP);
-    block();
-  
-    emitBytes(OP_GET_LOCAL, (u8)(current->localCount - 2));
-    emitConstant(NUMBER_VAL(1));
-    emitByte(OP_ADD);
-    emitBytes(OP_SET_LOCAL, (u8)(current->localCount - 2));
-    emitByte(OP_POP);
-  
+    
+    // 2. 迭代步进检测
+    // 如果还有元素，跳转忽略；如果没有元素，跳转到 exitJump
+    // 栈变化 (如果有效): [iterable, iterator_index, item_value]
+    int exitJump = emitJump(OP_ITER_NEXT);
+    
+    // 3. 将栈顶的 item_value 绑定到用户定义的变量 varName
+    beginScope(); // 循环体的 Scope
+    
+    // 注意：OP_ITER_NEXT 已经把 item 压栈了，现在我们把它声明为局部变量
+    // 由于之前注册了两个隐藏变量，localCount 已经增加了 2，
+    // varName 现在会被正确分配到 Slot N+2
+    addLocal(varName);
+    defineVariable(0); 
+    
+    consume(TOKEN_COLON, "Expect ':' after for clause.");
+    consume(TOKEN_NEWLINE, "Expect newline after ':'.");
+    
+    block(); // 编译循环体
+    
+    endScope(); // 弹出 varName (即 item_value)
+
+    // 4. 跳回开始，继续下一次迭代
     emitLoop(loop.start);
+    
+    // 5. 结束处理
     patchJump(exitJump);
-    emitByte(OP_POP);
-    endScope();
     endLoop();
+
+    // 弹出 iterator_index 和 iterable
+    emitByte(OP_POP);
+    emitByte(OP_POP);
+    
+    endScope(); // 结束最外层 Scope
 }
 
 static void breakStatement() {
     if (currentLoop == NULL) { error("Break outside loop."); return; }
+
+    // [新增] 弹出循环体内的局部变量
+    for (i32 i = current->localCount; i > currentLoop->localCount; i--) {
+        emitByte(OP_POP);
+    }
+    
     currentLoop->breakJumps[currentLoop->breakCount++] = emitJump(OP_JUMP);
     consumeLineEnd();
 }
 
 static void continueStatement() {
     if (currentLoop == NULL) { error("Continue outside loop."); return; }
+
+    // [新增] 弹出循环体内的局部变量
+    for (i32 i = current->localCount; i > currentLoop->localCount; i--) {
+        emitByte(OP_POP);
+    }
+
     currentLoop->continueJumps[currentLoop->continueCount++] = emitJump(OP_LOOP);
     consumeLineEnd();
 }
