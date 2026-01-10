@@ -71,52 +71,60 @@ static void setHandle(VM* vm, ObjInstance* instance, Obj* internalObj) {
 // 构造函数: Clip(path)
 // VM 传递 argCount = 1 (path)
 Value clipInit(VM* vm, i32 argCount, Value* args) {
-    // 检查参数数量 (期望 1 个显式参数)
+    // 检查参数数量
     if (argCount != 1 || !IS_STRING(args[0])) {
         fprintf(stderr, "Usage: Clip(path: String)\n");
         return NIL_VAL;
     }
-    
-    ObjInstance* thisObj = GET_SELF; 
+   
+    ObjInstance* thisObj = GET_SELF;
     ObjString* path = AS_STRING(args[0]);
-
+    
     // 加载元数据
     VideoMeta meta = load_video_metadata(vm, path->chars);
     if (!meta.success) {
         fprintf(stderr, "Runtime Error: Could not load video metadata from '%s'\n", path->chars);
-        // 初始化失败返回自身，但 handle 为空，后续调用会报错，或者可以在此返回 NIL
         return OBJ_VAL(thisObj);
     }
-
+    
     // 创建底层对象
     ObjClip* clip = newClip(vm, path);
     clip->duration = meta.duration;
     clip->width = meta.width;
     clip->height = meta.height;
     clip->fps = meta.fps;
-
+    
+    // [修复] 设置默认变换属性
+    clip->default_scale_x = 1.0;
+    clip->default_scale_y = 1.0;
+    clip->default_opacity = 1.0;
+    clip->volume = 1.0;
+    
+    // [关键修复] 将默认坐标设为 0，让视频从左上角开始绘制
+    // 之前的 meta.width / 2.0 会导致视频向右偏移一半宽度，甚至移出屏幕
+    clip->default_x = 0.0; 
+    clip->default_y = 0.0;
+    
     // 绑定 Handle
     setHandle(vm, thisObj, (Obj*)clip);
-
-    // [关键修复] 同步属性到 Luna 实例，以便 print clip.width 能工作
+    
+    // 同步属性到 Luna 实例
     SET_PROP(thisObj, "width", clip->width);
     SET_PROP(thisObj, "height", clip->height);
     SET_PROP(thisObj, "volume", clip->volume);
     SET_PROP(thisObj, "fps", clip->fps);
     SET_PROP(thisObj, "duration", clip->duration);
-
     SET_PROP(thisObj, "has_audio", clip->has_audio ? 1 : 0);
     SET_PROP(thisObj, "has_video", clip->has_video ? 1 : 0);
-    
-    // 初始化其他可读属性，防止访问时报错
+   
+    // 初始化其他可读属性
     SET_PROP(thisObj, "in_point", clip->in_point);
     SET_PROP(thisObj, "default_scale_x", clip->default_scale_x);
     SET_PROP(thisObj, "default_scale_y", clip->default_scale_y);
     SET_PROP(thisObj, "default_x", clip->default_x);
     SET_PROP(thisObj, "default_y", clip->default_y);
     SET_PROP(thisObj, "default_opacity", clip->default_opacity);
-
-    // 返回实例本身
+    
     return OBJ_VAL(thisObj);
 }
 

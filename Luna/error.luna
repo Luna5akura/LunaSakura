@@ -1,6 +1,6 @@
 var proj = Project(960, 540, 30)
 var tl = Timeline(960, 540, 30)
 proj.setTimeline(tl)
-var clip = Clip("test.mp4")
+var clip = Clip("test2.mp4")
 tl.add(0, clip, 0)
 proj.preview()

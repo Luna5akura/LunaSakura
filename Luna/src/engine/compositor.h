@@ -1,83 +1,89 @@
 // src/engine/compositor.h
 
 #pragma once
+#include <sys/stat.h>
+#include <time.h>
+#include <SDL2/SDL.h>
+#include <va/va_glx.h>
+#include "core/memory.h"
+#include "core/compiler/compiler.h"
 #include "engine/timeline.h"
-#include <glad/glad.h>
-#include <EGL/egl.h>       // 新增: EGL for interop
-#include <EGL/eglext.h>    // 新增: EGL 扩展（如 EGL_LINUX_DMA_BUF_EXT）
-#include <va/va.h>         // 新增: VA-API
-#include <va/va_glx.h>     // 新增: VA-GLX interop
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
-#include <drm/drm_fourcc.h> // 新增: DRM_FORMAT_NV12 等
-#include <SDL2/SDL_audio.h>  // 新增: SDL_Thread 和 SDL_mutex
-#include <SDL2/SDL_thread.h>  // 新增: SDL_Thread 和 SDL_mutex
-
 // Forward declare VM
 typedef struct VM VM;
 // 前向声明
 struct AVFormatContext;
 struct AVCodecContext;
 struct AVFrame;
-struct AVBufferRef;  // 显式前向声明
-
-// 全局 VA 显示（在 main.c 初始化）
-extern VADisplay g_va_display;
-
+struct SwrContext;
+// [新增] 线程安全的帧队列节点
+typedef struct DecodedFrame {
+    struct AVFrame* frame;
+    double pts;
+    struct DecodedFrame* next;
+} DecodedFrame;
+// [新增] 帧队列管理
+typedef struct {
+    DecodedFrame* head;
+    DecodedFrame* tail;
+    int count;
+    int capacity; // 限制缓冲帧数，防止内存爆炸
+} FrameQueue;
 // --- ClipDecoder ---
-// [优化] 新增硬件解码支持
-
 typedef struct {
+    // --- 标识与资源 ---
+    // 注意：clip_ref 仅供主线程比较使用，解码线程不可访问
     ObjClip* clip_ref;
-    AVFormatContext* fmt_ctx;
-    AVCodecContext* dec_ctx;
-    i32 video_stream_idx;
-    
-    // CPU Decoding
-    AVFrame* raw_frame;
-    AVFrame* rgb_frame;
-    u8* rgb_buffer;
-    struct SwsContext* sws_ctx;
-
-    // OpenGL
-    GLuint texture;
-    
-    double current_pts_sec;
+   
+    // 线程专用的文件路径副本 (使用标准 malloc 分配)
+    char* file_path_copy;
+    // --- Threading ---
+    SDL_Thread* thread;
+    SDL_mutex* mutex; // 保护队列和状态
+    SDL_cond* cond_can_produce; // 队列不满时唤醒解码线程
+    bool thread_running;
+    bool seek_requested;
+    double seek_target_time;
+    // --- Queues (Protected by mutex) ---
+    FrameQueue video_queue;
+   
+    // --- Audio Buffer (Protected by mutex) ---
+    // 环形缓冲区 (Stereo Interleaved Float)
+    float* audio_ring_buffer; // 标准 malloc
+    i32 rb_capacity;
+    i32 rb_head; // Write
+    i32 rb_tail; // Read
+    i32 rb_count;
+    // --- Video State (Main Thread Only) ---
+    // OpenGL Textures (Y, U, V)
+    GLuint tex_y, tex_u, tex_v;
+    double current_pts;
+    bool texture_ready; // 是否有有效画面
+    // --- Properties ---
+    float current_volume;
     bool active_this_frame;
-    
-    // Audio Context
-    AVFormatContext* fmt_ctx_audio; 
-    AVCodecContext* dec_ctx_audio;
-    i32 audio_stream_idx;
-    struct SwrContext* swr_ctx;
-
-    // [修改] 环形缓冲区 (Ring Buffer)
-    // 使用 float 数组，直接存储解包后的采样数据 (Stereo Interleaved: L, R, L, R...)
-    float* audio_ring_buffer;
-    i32 rb_capacity;  // 总容量 (以 float 元素个数为单位，不是字节)
-    i32 rb_head;      // 写入位置 (Write Cursor)
-    i32 rb_tail;      // 读取位置 (Read Cursor)
-    i32 rb_count;     // 当前有效数据量
-
-    // [新增] 用于检测 Seek
     double last_render_time;
-
-    // [新增] 当前音量 (由 TimelineClip 同步)
-    float current_volume; 
-
+    int64_t start_pts; // 第一帧的原始 PTS
+    bool has_start_pts; // 是否已捕获第一帧
+    // --- Internal FFmpeg Contexts (Thread Local mostly) ---
+    // 这些指针主要由解码线程管理，主线程只在销毁时触碰
+    struct AVFormatContext* fmt_ctx;
+    struct AVCodecContext* vid_ctx;
+    struct AVCodecContext* aud_ctx;
+    struct SwrContext* swr_ctx;
+    i32 video_stream_idx;
+    i32 audio_stream_idx;
 } ClipDecoder;
-
 // --- Compositor ---
-// [优化] 新增全局帧池和线程支持
 typedef struct {
-    VM* vm; // Added for allocations
+    VM* vm;
     Timeline* timeline;
     // GL Resources
     GLuint shader_program;
     GLuint vao, vbo;
     GLuint fbo;
-    GLuint output_texture;
-
+    GLuint output_texture; // 渲染结果
     // CPU Readback
     u8* cpu_output_buffer;
     bool cpu_buffer_stale;
@@ -85,34 +91,13 @@ typedef struct {
     ClipDecoder** decoders;
     i32 decoder_count;
     i32 decoder_capacity;
-
-    i64 frame_counter;
-
-    // 新增: 全局帧缓存池（避免 per-clip 碎片）
-    AVFrame** frame_pool;
-    i32 pool_size;
-    i32 pool_used;
-
-    // 新增: 预取线程
-    SDL_Thread* prefetch_thread;
-    SDL_mutex* decoder_mutex; // 新增: 线程锁
-    bool running;
-
-
-    // Audio State [新增]
+    // Audio
     SDL_AudioDeviceID audio_device;
-    bool audio_enabled;
-    // 混音时的全局时间 (由 audio callback 更新，用于同步)
-    double audio_time; 
+    SDL_mutex* mix_mutex; // 专门保护混音的锁
 } Compositor;
-
-// --- API ---
-// 注意：创建 Compositor 前必须先创建 OpenGL Context (在 main.c 中完成)
+// API
 Compositor* compositor_create(VM* vm, Timeline* timeline);
 void compositor_free(VM* vm, Compositor* comp);
-// 核心渲染：绘制到内部 FBO
 void compositor_render(Compositor* comp, double time);
-// 辅助函数：将内部 FBO 的内容绘制到默认帧缓冲区（即屏幕窗口）
 void compositor_blit_to_screen(Compositor* comp, i32 window_width, i32 window_height);
-// 获取 CPU 缓冲区 (用于导出，包含 glReadPixels 和垂直翻转处理)
 u8* compositor_get_cpu_buffer(Compositor* comp);

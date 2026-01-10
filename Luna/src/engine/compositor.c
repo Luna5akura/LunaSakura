@@ -3,34 +3,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include <glad/glad.h>
 #include <SDL2/SDL.h>
+#include <glad/glad.h>
 #include <libavutil/imgutils.h>
-#include <libavutil/buffer.h>
-#include <libavutil/frame.h>
-#include <libavutil/opt.h>      // av_opt_set_... 需要这个
-#include <libavutil/channel_layout.h> // AV_CHANNEL_LAYOUT_STEREO 需要这个
-#include <libswscale/swscale.h> // 需要 swscale 进行格式转换
+#include <libavutil/time.h>
+#include <libswresample/swresample.h>
 #include "compositor.h"
 #include "core/memory.h"
 #include "core/vm/vm.h"
 
-
-#define RING_BUFFER_SIZE 131072 // 128k samples (~1.5s stereo @ 44.1k)
+#define MAX_QUEUE_SIZE 8
+#define AUDIO_RB_SIZE 131072
 #define MIX_SAMPLE_RATE 44100
-#define MIX_CHANNELS 2
-#define MIX_FORMAT AV_SAMPLE_FMT_FLT
-#define SDL_MIX_FORMAT AUDIO_F32
-
-// --- Forward Declarations ---
-static ClipDecoder* create_decoder(VM* vm, ObjClip* clip);
-static void draw_clip_rect(Compositor* comp, ClipDecoder* dec, TimelineClip* tc);
-static void free_decoder(VM* vm, ClipDecoder* dec);
-
-// 全局着色器
-static GLuint global_shader_program = 0;
 
 // --- Shader Sources ---
+
 const char* VS_SOURCE =
 "#version 330 core\n"
 "layout (location = 0) in vec2 aPos;\n"
@@ -43,16 +30,23 @@ const char* VS_SOURCE =
 " TexCoord = aTexCoord;\n"
 "}\n";
 
-// [修改] 使用简单的 RGB 采样器，因为我们在 CPU 端做 YUV->RGB 转换
-const char* FS_SOURCE_RGB =
+// [Fix] 正确的 YUV 转 RGB Shader
+const char* FS_SOURCE_YUV =
 "#version 330 core\n"
 "out vec4 FragColor;\n"
 "in vec2 TexCoord;\n"
-"uniform sampler2D tex_rgb;\n"
+"uniform sampler2D tex_y;\n"
+"uniform sampler2D tex_u;\n"
+"uniform sampler2D tex_v;\n"
 "uniform float u_opacity;\n"
 "void main() {\n"
-" vec4 col = texture(tex_rgb, TexCoord);\n"
-" FragColor = vec4(col.rgb, col.a * u_opacity);\n"
+" float y = texture(tex_y, TexCoord).r;\n"
+" float u = texture(tex_u, TexCoord).r - 0.5;\n"
+" float v = texture(tex_v, TexCoord).r - 0.5;\n"
+" float r = y + 1.402 * v;\n"
+" float g = y - 0.344136 * u - 0.714136 * v;\n"
+" float b = y + 1.772 * u;\n"
+" FragColor = vec4(r, g, b, u_opacity);\n"
 "}\n";
 
 const char* VS_SCREEN =
@@ -76,6 +70,7 @@ const char* FS_SCREEN =
 
 // --- Math Helpers ---
 typedef struct { float m[16]; } mat4;
+
 static mat4 mat4_ortho(float left, float right, float bottom, float top, float near, float far) {
     mat4 res = {0};
     res.m[0] = 2.0f / (right - left);
@@ -87,575 +82,519 @@ static mat4 mat4_ortho(float left, float right, float bottom, float top, float n
     res.m[15] = 1.0f;
     return res;
 }
-static mat4 mat4_identity() {
-    mat4 res = {0};
-    res.m[0] = res.m[5] = res.m[10] = res.m[15] = 1.0f;
-    return res;
-}
+
 static mat4 mat4_translate_scale(float x, float y, float sx, float sy) {
-    mat4 res = mat4_identity();
-    res.m[0] = sx;
-    res.m[5] = sy;
-    res.m[12] = x;
-    res.m[13] = y;
+    mat4 res = {0};
+    res.m[0] = sx; res.m[5] = sy; res.m[10] = 1.0f; res.m[15] = 1.0f;
+    res.m[12] = x; res.m[13] = y;
     return res;
 }
 
-// --- GL Helpers ---
 static GLuint compile_shader(const char* src, GLenum type) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &src, NULL);
     glCompileShader(shader);
-    i32 success;
+    i32 success; char infoLog[512];
     glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        char infoLog[512];
-        glGetShaderInfoLog(shader, 512, NULL, infoLog);
-        fprintf(stderr, "Shader Compile Error: %s\n", infoLog);
-    }
+    if (!success) { glGetShaderInfoLog(shader, 512, NULL, infoLog); fprintf(stderr, "Shader Err: %s\n", infoLog); }
     return shader;
 }
 
-static void init_gl_resources(Compositor* comp) {
-    if (global_shader_program == 0) {
-        GLuint vs = compile_shader(VS_SOURCE, GL_VERTEX_SHADER);
-        GLuint fs = compile_shader(FS_SOURCE_RGB, GL_FRAGMENT_SHADER);
-        global_shader_program = glCreateProgram();
-        glAttachShader(global_shader_program, vs);
-        glAttachShader(global_shader_program, fs);
-        glLinkProgram(global_shader_program);
-        glDeleteShader(vs);
-        glDeleteShader(fs);
+// --- Frame Queue Helpers ---
+
+static void fq_push(FrameQueue* q, AVFrame* frame, double pts) {
+    DecodedFrame* node = (DecodedFrame*)malloc(sizeof(DecodedFrame));
+    node->frame = frame;
+    node->pts = pts;
+    node->next = NULL;
+    if (q->tail) q->tail->next = node;
+    else q->head = node;
+    q->tail = node;
+    q->count++;
+}
+
+static AVFrame* fq_pop(FrameQueue* q, double* out_pts) {
+    if (!q->head) return NULL;
+    DecodedFrame* node = q->head;
+    AVFrame* frame = node->frame;
+    if (out_pts) *out_pts = node->pts;
+    q->head = node->next;
+    if (!q->head) q->tail = NULL;
+    q->count--;
+    free(node);
+    return frame;
+}
+
+static void fq_clear(FrameQueue* q) {
+    while (q->head) {
+        AVFrame* f = fq_pop(q, NULL);
+        av_frame_free(&f);
     }
-    comp->shader_program = global_shader_program;
-    float quad[] = {
-        0.0f, 0.0f, 0.0f, 0.0f,
-        1.0f, 0.0f, 1.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 1.0f,
-        0.0f, 1.0f, 0.0f, 1.0f,
-        1.0f, 0.0f, 1.0f, 0.0f,
-        1.0f, 1.0f, 1.0f, 1.0f
-    };
-    glGenVertexArrays(1, &comp->vao);
-    glGenBuffers(1, &comp->vbo);
-    glBindVertexArray(comp->vao);
-    glBindBuffer(GL_ARRAY_BUFFER, comp->vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
-    glBindVertexArray(0);
-    glGenFramebuffers(1, &comp->fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, comp->fbo);
- 
-    glGenTextures(1, &comp->output_texture);
-    glBindTexture(GL_TEXTURE_2D, comp->output_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, comp->timeline->width, comp->timeline->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, comp->output_texture, 0);
- 
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        fprintf(stderr, "Framebuffer Error!\n");
-     
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+// --- Decoder Thread ---
 
-static void rb_clear(ClipDecoder* dec) {
-    dec->rb_head = 0;
-    dec->rb_tail = 0;
-    dec->rb_count = 0;
-}
-
-// 写入数据 (生产者)
-static void rb_write(ClipDecoder* dec, float* data, i32 count) {
-    for (i32 i = 0; i < count; i++) {
-        dec->audio_ring_buffer[dec->rb_head] = data[i];
-        dec->rb_head = (dec->rb_head + 1) % dec->rb_capacity;
-    }
-    dec->rb_count += count;
-    if (dec->rb_count > dec->rb_capacity) dec->rb_count = dec->rb_capacity; // Should not happen if checked
-}
-
-// 读取数据 (消费者)
-static void rb_read_mix(ClipDecoder* dec, float* out_buffer, i32 count, float volume) {
-    for (i32 i = 0; i < count; i++) {
-        float sample = dec->audio_ring_buffer[dec->rb_tail];
-        dec->rb_tail = (dec->rb_tail + 1) % dec->rb_capacity;
-        
-        // [混音核心]：叠加 (+=) 并应用音量 (* volume)
-        out_buffer[i] += sample * volume;
-    }
-    dec->rb_count -= count;
-}
-
-
-
-// --- SDL Audio Callback ---
-// 混音核心逻辑
-static void audio_callback(void* userdata, Uint8* stream, int len) {
-    Compositor* comp = (Compositor*)userdata;
-    // 1. 初始化静音 (这是必须的，因为我们要用 += 进行叠加)
-    memset(stream, 0, len);
+static int decoder_thread_func(void* data) {
+    ClipDecoder* dec = (ClipDecoder*)data;
     
-    if (!comp->running || !comp->timeline) return;
+    dec->fmt_ctx = avformat_alloc_context();
+    if (avformat_open_input(&dec->fmt_ctx, dec->file_path_copy, NULL, NULL) < 0) return -1;
+    avformat_find_stream_info(dec->fmt_ctx, NULL);
 
-    // 锁定数据，防止主线程同时写入 Ring Buffer
-    if (SDL_TryLockMutex(comp->decoder_mutex) == 0) {
-        float* out_buffer = (float*)stream;
-        int total_floats_needed = len / sizeof(float);
-        
-        for (i32 i = 0; i < comp->decoder_count; i++) {
-            ClipDecoder* dec = comp->decoders[i];
-            
-            // 只有活跃的 Decoder 参与混音
-            if (!dec->active_this_frame || dec->audio_stream_idx < 0) continue;
-
-            int available = dec->rb_count;
-            if (available <= 0) continue; // 无数据，跳过
-
-            // 计算实际能读取多少
-            int to_read = (available > total_floats_needed) ? total_floats_needed : available;
-
-            // 获取音量：这里我们使用传进来的 snapshot volume
-            float vol = dec->current_volume;
-
-            // 从 Ring Buffer 读取并叠加到 SDL 流
-            rb_read_mix(dec, out_buffer, to_read, vol);
-        }
-        
-        SDL_UnlockMutex(comp->decoder_mutex);
+    dec->video_stream_idx = av_find_best_stream(dec->fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+    if (dec->video_stream_idx >= 0) {
+        AVStream* st = dec->fmt_ctx->streams[dec->video_stream_idx];
+        const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
+        dec->vid_ctx = avcodec_alloc_context3(codec);
+        avcodec_parameters_to_context(dec->vid_ctx, st->codecpar);
+        if (avcodec_open2(dec->vid_ctx, codec, NULL) < 0) dec->vid_ctx = NULL;
     }
+
+    dec->audio_stream_idx = av_find_best_stream(dec->fmt_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
+    if (dec->audio_stream_idx >= 0) {
+        AVStream* st = dec->fmt_ctx->streams[dec->audio_stream_idx];
+        const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
+        dec->aud_ctx = avcodec_alloc_context3(codec);
+        avcodec_parameters_to_context(dec->aud_ctx, st->codecpar);
+        if (avcodec_open2(dec->aud_ctx, codec, NULL) == 0) {
+            AVChannelLayout out_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
+            swr_alloc_set_opts2(&dec->swr_ctx, &out_layout, AV_SAMPLE_FMT_FLT, MIX_SAMPLE_RATE,
+                &st->codecpar->ch_layout, st->codecpar->format, st->codecpar->sample_rate, 0, NULL);
+            swr_init(dec->swr_ctx);
+        } else {
+            dec->aud_ctx = NULL; // Failed
+        }
+    }
+
+    AVPacket* pkt = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+
+    while (dec->thread_running) {
+        bool seeking = false;
+        double seek_tgt = 0;
+        
+        SDL_LockMutex(dec->mutex);
+        if (dec->seek_requested) {
+            seeking = true;
+            seek_tgt = dec->seek_target_time;
+            dec->seek_requested = false;
+            fq_clear(&dec->video_queue);
+            dec->rb_head = dec->rb_tail = dec->rb_count = 0;
+        }
+        SDL_UnlockMutex(dec->mutex);
+
+        if (seeking) {
+            int64_t ts = (int64_t)(seek_tgt * AV_TIME_BASE);
+            av_seek_frame(dec->fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
+            if (dec->vid_ctx) avcodec_flush_buffers(dec->vid_ctx);
+            if (dec->aud_ctx) avcodec_flush_buffers(dec->aud_ctx);
+        }
+
+        SDL_LockMutex(dec->mutex);
+        bool queue_full = (dec->video_queue.count >= MAX_QUEUE_SIZE);
+        SDL_UnlockMutex(dec->mutex);
+
+        if (queue_full) {
+            SDL_LockMutex(dec->mutex);
+            SDL_CondWaitTimeout(dec->cond_can_produce, dec->mutex, 20);
+            SDL_UnlockMutex(dec->mutex);
+            continue;
+        }
+
+        int ret = av_read_frame(dec->fmt_ctx, pkt);
+        if (ret < 0) {
+            SDL_Delay(10); 
+            continue;
+        }
+
+        if (pkt->stream_index == dec->video_stream_idx && dec->vid_ctx) {
+            if (avcodec_send_packet(dec->vid_ctx, pkt) == 0) {
+                while (avcodec_receive_frame(dec->vid_ctx, frame) == 0) {
+                    AVFrame* cloned = av_frame_alloc();
+                    av_frame_ref(cloned, frame);
+                    
+                    int64_t pts_val = frame->best_effort_timestamp;
+                    if (pts_val == AV_NOPTS_VALUE) pts_val = frame->pts;
+                    if (pts_val == AV_NOPTS_VALUE) pts_val = frame->pkt_dts;
+                    
+                    // [Fix] 捕获起始 PTS
+                    SDL_LockMutex(dec->mutex);
+                    if (!dec->has_start_pts && pts_val != AV_NOPTS_VALUE) {
+                        dec->start_pts = pts_val;
+                        dec->has_start_pts = true;
+                    }
+                    
+                    double pts = 0.0;
+                    if (pts_val != AV_NOPTS_VALUE && dec->has_start_pts) {
+                        pts = (pts_val - dec->start_pts) * av_q2d(dec->fmt_ctx->streams[dec->video_stream_idx]->time_base);
+                    } else if (dec->video_queue.tail) {
+                        pts = dec->video_queue.tail->pts + 0.033;
+                    }
+                    if (pts < 0) pts = 0;
+                    
+                    fq_push(&dec->video_queue, cloned, pts);
+                    SDL_UnlockMutex(dec->mutex);
+                }
+            }
+        }
+        else if (pkt->stream_index == dec->audio_stream_idx && dec->aud_ctx && dec->swr_ctx) {
+             if (avcodec_send_packet(dec->aud_ctx, pkt) == 0) {
+                 while (avcodec_receive_frame(dec->aud_ctx, frame) == 0) {
+                     uint8_t* out_data[2] = {0};
+                     int out_samples = av_rescale_rnd(swr_get_delay(dec->swr_ctx, dec->aud_ctx->sample_rate) + frame->nb_samples,
+                                                      MIX_SAMPLE_RATE, dec->aud_ctx->sample_rate, AV_ROUND_UP);
+                     av_samples_alloc(out_data, NULL, 2, out_samples, AV_SAMPLE_FMT_FLT, 0);
+                     int len = swr_convert(dec->swr_ctx, out_data, out_samples, (const uint8_t**)frame->data, frame->nb_samples);
+                     
+                     if (len > 0) {
+                         SDL_LockMutex(dec->mutex);
+                         int floats_to_write = len * 2;
+                         int available = dec->rb_capacity - dec->rb_count;
+                         if (available >= floats_to_write) {
+                             float* raw = (float*)out_data[0];
+                             for (int i=0; i<floats_to_write; i++) {
+                                 dec->audio_ring_buffer[dec->rb_head] = raw[i];
+                                 dec->rb_head = (dec->rb_head + 1) % dec->rb_capacity;
+                             }
+                             dec->rb_count += floats_to_write;
+                         }
+                         SDL_UnlockMutex(dec->mutex);
+                     }
+                     av_freep(&out_data[0]);
+                 }
+             }
+        }
+        av_packet_unref(pkt);
+    }
+    
+    av_frame_free(&frame);
+    av_packet_free(&pkt);
+    if (dec->vid_ctx) avcodec_free_context(&dec->vid_ctx);
+    if (dec->aud_ctx) avcodec_free_context(&dec->aud_ctx);
+    if (dec->swr_ctx) swr_free(&dec->swr_ctx);
+    avformat_close_input(&dec->fmt_ctx);
+    return 0;
 }
 
 // --- Decoder Management ---
 
-static ClipDecoder* get_decoder(Compositor* comp, ObjClip* clip) {
-    for (i32 i = 0; i < comp->decoder_count; i++) {
-        if (comp->decoders[i]->clip_ref == clip) {
-            comp->decoders[i]->active_this_frame = true;
-            return comp->decoders[i];
-        }
-    }
-    ClipDecoder* dec = create_decoder(comp->vm, clip);
-    if (!dec) return NULL;
-    if (comp->decoder_count >= comp->decoder_capacity) {
-        i32 new_cap = comp->decoder_capacity == 0 ? 4 : comp->decoder_capacity * 2;
-        comp->decoders = GROW_ARRAY(comp->vm, ClipDecoder*, comp->decoders, comp->decoder_capacity, new_cap);
-        comp->decoder_capacity = new_cap;
-    }
-    dec->active_this_frame = true;
-    comp->decoders[comp->decoder_count++] = dec;
-    return dec;
-}
-
 static ClipDecoder* create_decoder(VM* vm, ObjClip* clip) {
-    ClipDecoder* dec = ALLOCATE(vm, ClipDecoder, 1);
+    UNUSED(vm);
+    ClipDecoder* dec = (ClipDecoder*)malloc(sizeof(ClipDecoder));
     memset(dec, 0, sizeof(ClipDecoder));
+    dec->start_pts = 0;
+    dec->has_start_pts = false;
     dec->clip_ref = clip;
-    dec->current_volume = 1.0f;
-    dec->last_render_time = -100.0;
-
-    // --- Video Init (简化，保持原有逻辑) ---
-    if (avformat_open_input(&dec->fmt_ctx, clip->path->chars, NULL, NULL) < 0) { /* handle error */ }
-    avformat_find_stream_info(dec->fmt_ctx, NULL);
-    dec->video_stream_idx = av_find_best_stream(dec->fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
-    // ... (Video Codec Init) ...
-    AVStream* v_stream = dec->fmt_ctx->streams[dec->video_stream_idx];
-    const AVCodec* v_codec = avcodec_find_decoder(v_stream->codecpar->codec_id);
-    dec->dec_ctx = avcodec_alloc_context3(v_codec);
-    avcodec_parameters_to_context(dec->dec_ctx, v_stream->codecpar);
-    dec->dec_ctx->thread_count = 1; // 单线程以稳定
-    avcodec_open2(dec->dec_ctx, v_codec, NULL);
+    dec->file_path_copy = strdup(clip->path->chars);
+    dec->mutex = SDL_CreateMutex();
+    dec->cond_can_produce = SDL_CreateCond();
     
-    dec->raw_frame = av_frame_alloc();
-    dec->rgb_frame = av_frame_alloc();
-    int num_bytes = av_image_get_buffer_size(AV_PIX_FMT_RGBA, dec->dec_ctx->width, dec->dec_ctx->height, 1);
-    dec->rgb_buffer = (u8*)av_malloc(num_bytes);
-    av_image_fill_arrays(dec->rgb_frame->data, dec->rgb_frame->linesize, dec->rgb_buffer, AV_PIX_FMT_RGBA, dec->dec_ctx->width, dec->dec_ctx->height, 1);
+    dec->rb_capacity = AUDIO_RB_SIZE;
+    dec->audio_ring_buffer = (float*)malloc(sizeof(float) * dec->rb_capacity);
     
-    glGenTextures(1, &dec->texture);
-    glBindTexture(GL_TEXTURE_2D, dec->texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, dec->dec_ctx->width, dec->dec_ctx->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    // --- Audio Init (新逻辑) ---
-    dec->audio_stream_idx = -1;
-    // 打开独立的 Audio Format Context
-    if (avformat_open_input(&dec->fmt_ctx_audio, clip->path->chars, NULL, NULL) == 0) {
-        avformat_find_stream_info(dec->fmt_ctx_audio, NULL);
-        dec->audio_stream_idx = av_find_best_stream(dec->fmt_ctx_audio, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
-        
-        if (dec->audio_stream_idx >= 0) {
-            AVStream* stream = dec->fmt_ctx_audio->streams[dec->audio_stream_idx];
-            const AVCodec* codec = avcodec_find_decoder(stream->codecpar->codec_id);
-            if (codec) {
-                dec->dec_ctx_audio = avcodec_alloc_context3(codec);
-                avcodec_parameters_to_context(dec->dec_ctx_audio, stream->codecpar);
-                if (avcodec_open2(dec->dec_ctx_audio, codec, NULL) == 0) {
-                    
-                    // Init Resampler (To Stereo Float)
-                    AVChannelLayout out_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
-                    dec->swr_ctx = NULL; 
-                    swr_alloc_set_opts2(
-                        &dec->swr_ctx,
-                        &out_layout, AV_SAMPLE_FMT_FLT, MIX_SAMPLE_RATE,
-                        &stream->codecpar->ch_layout,
-                        stream->codecpar->format,
-                        stream->codecpar->sample_rate,
-                        0, NULL
-                    );
-                    swr_init(dec->swr_ctx);
-
-                    // Init Ring Buffer
-                    dec->rb_capacity = RING_BUFFER_SIZE;
-                    dec->audio_ring_buffer = ALLOCATE(vm, float, dec->rb_capacity);
-                    rb_clear(dec);
-                    
-                    clip->has_audio = true;
-                    clip->audio_channels = stream->codecpar->ch_layout.nb_channels;
-                    clip->audio_sample_rate = stream->codecpar->sample_rate;
-                }
-            }
-        }
+    glGenTextures(1, &dec->tex_y);
+    glGenTextures(1, &dec->tex_u);
+    glGenTextures(1, &dec->tex_v);
+    
+    GLenum params[] = {dec->tex_y, dec->tex_u, dec->tex_v};
+    for(int i=0; i<3; i++) {
+        glBindTexture(GL_TEXTURE_2D, params[i]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        // [Fix] 确保纹理上传对齐，防止倾斜
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     }
+
+    dec->thread_running = true;
+    dec->thread = SDL_CreateThread(decoder_thread_func, "DecoderThread", dec);
+    
     return dec;
 }
 
 static void free_decoder(VM* vm, ClipDecoder* dec) {
+    UNUSED(vm);
     if (!dec) return;
     
-    glDeleteTextures(1, &dec->texture);
+    dec->thread_running = false;
+    SDL_CondSignal(dec->cond_can_produce);
+    SDL_WaitThread(dec->thread, NULL);
     
-    if (dec->raw_frame) av_frame_free(&dec->raw_frame);
-    if (dec->rgb_frame) av_frame_free(&dec->rgb_frame);
-    if (dec->rgb_buffer) av_free(dec->rgb_buffer);
-    if (dec->sws_ctx) sws_freeContext(dec->sws_ctx);
+    SDL_DestroyMutex(dec->mutex);
+    SDL_DestroyCond(dec->cond_can_produce);
     
-    if (dec->dec_ctx) avcodec_free_context(&dec->dec_ctx);
-    if (dec->fmt_ctx) avformat_close_input(&dec->fmt_ctx);
-
-
-    if (dec->audio_ring_buffer) FREE_ARRAY(vm, float, dec->audio_ring_buffer, dec->rb_capacity);
-    if (dec->swr_ctx) swr_free(&dec->swr_ctx);
-    if (dec->dec_ctx_audio) avcodec_free_context(&dec->dec_ctx_audio);
-    if (dec->fmt_ctx_audio) avformat_close_input(&dec->fmt_ctx_audio);
+    glDeleteTextures(1, &dec->tex_y);
+    glDeleteTextures(1, &dec->tex_u);
+    glDeleteTextures(1, &dec->tex_v);
     
-    FREE(vm, ClipDecoder, dec);
+    fq_clear(&dec->video_queue);
+    free(dec->audio_ring_buffer);
+    free(dec->file_path_copy);
+    free(dec);
 }
 
-static void pump_audio_data(ClipDecoder* dec, double target_time, bool did_seek) {
-    if (dec->audio_stream_idx < 0) return;
+// --- Audio Callback ---
 
-    // 1. 如果发生 Seek，或者缓冲区时间偏差太大，需要清空并跳转 FFmpeg
-    // 注意：这里我们简单地利用 did_seek 标志
-    if (did_seek) {
-        rb_clear(dec);
+static void audio_callback(void* userdata, Uint8* stream, int len) {
+    Compositor* comp = (Compositor*)userdata;
+    memset(stream, 0, len); 
+    
+    if (!comp->timeline) return;
+    
+    if (SDL_TryLockMutex(comp->mix_mutex) == 0) {
+        float* out = (float*)stream;
+        int needed = len / sizeof(float);
         
-        AVStream* stream = dec->fmt_ctx_audio->streams[dec->audio_stream_idx];
-        i64 target_ts = (i64)(target_time / av_q2d(stream->time_base));
-        
-        // 向后 Seek 关键帧
-        av_seek_frame(dec->fmt_ctx_audio, dec->audio_stream_idx, target_ts, AVSEEK_FLAG_BACKWARD);
-        avcodec_flush_buffers(dec->dec_ctx_audio);
-    }
-
-    // 2. 填充缓冲区
-    // 我们希望缓冲区保持在 75% 左右的满度，留一点余量
-    // 每次 pump 最多读取几个包，防止阻塞 UI 线程太久
-    int max_reads = 5; 
-    
-    AVPacket* pkt = av_packet_alloc();
-    AVFrame* frame = av_frame_alloc();
-    
-    // 当缓冲区还有空间 (> 4096 floats) 且没读太多包时循环
-    while ((dec->rb_capacity - dec->rb_count) > 8192 && max_reads > 0) {
-        int ret = av_read_frame(dec->fmt_ctx_audio, pkt);
-        if (ret < 0) break; // 文件结束或错误
-
-        if (pkt->stream_index == dec->audio_stream_idx) {
-            if (avcodec_send_packet(dec->dec_ctx_audio, pkt) == 0) {
-                while (avcodec_receive_frame(dec->dec_ctx_audio, frame) == 0) {
-                    
-                    // 重采样计算
-                    int out_samples = (int)av_rescale_rnd(
-                        swr_get_delay(dec->swr_ctx, dec->dec_ctx_audio->sample_rate) + frame->nb_samples,
-                        MIX_SAMPLE_RATE, dec->dec_ctx_audio->sample_rate, AV_ROUND_UP);
-
-                    // 临时缓冲区 (Stereo Float)
-                    float* convert_buf = NULL;
-                    int linesize = 0;
-                    av_samples_alloc((uint8_t**)&convert_buf, &linesize, 2, out_samples, AV_SAMPLE_FMT_FLT, 0);
-
-                    // 执行转换
-                    int converted = swr_convert(dec->swr_ctx, 
-                                                (uint8_t**)&convert_buf, out_samples,
-                                                (const uint8_t**)frame->data, frame->nb_samples);
-                    
-                    if (converted > 0) {
-                        int total_floats = converted * 2; // L+R
-                        // 只有空间足够才写入
-                        if (dec->rb_capacity - dec->rb_count >= total_floats) {
-                            rb_write(dec, convert_buf, total_floats);
-                        }
-                    }
-                    
-                    if (convert_buf) av_freep(&convert_buf);
-                }
-            }
-            max_reads--; // 成功处理一个音频包
-        }
-        av_packet_unref(pkt);
-    }
-
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-}
-
-// 返回 0 表示解码成功，其他表示未就绪或结束
-static i32 decode_frame_at_time(ClipDecoder* dec, double target_time, Compositor* comp) {
-    UNUSED(comp);
-    AVStream* stream = dec->fmt_ctx->streams[dec->video_stream_idx];
-    double time_base = av_q2d(stream->time_base);
-    double diff = target_time - dec->current_pts_sec;
-
-    // Seek if needed
-    if (diff < 0 || diff > 1.0) { // 阈值放宽一点
-        i64 target_ts = (i64)(target_time / time_base);
-        av_seek_frame(dec->fmt_ctx, dec->video_stream_idx, target_ts, AVSEEK_FLAG_BACKWARD);
-        avcodec_flush_buffers(dec->dec_ctx);
-        dec->current_pts_sec = -1.0;
-    }
-
-    AVPacket* pkt = av_packet_alloc();
-    i32 ret = -1;
-
-    // 如果当前帧已经足够接近目标时间，就不解码新的了
-    if (dec->current_pts_sec >= 0 && (target_time - dec->current_pts_sec) >= 0 && (target_time - dec->current_pts_sec) < 0.05) {
-        av_packet_free(&pkt);
-        return 0; // Current frame is good
-    }
-
-    bool frame_decoded = false;
-    while (av_read_frame(dec->fmt_ctx, pkt) >= 0) {
-        if (pkt->stream_index == dec->video_stream_idx) {
-            if (avcodec_send_packet(dec->dec_ctx, pkt) == 0) {
-                while (avcodec_receive_frame(dec->dec_ctx, dec->raw_frame) == 0) {
-                    double pts = dec->raw_frame->pts * time_base;
-                    dec->current_pts_sec = pts;
-                    
-                    // Convert to RGB immediately
-                    if (!dec->sws_ctx) {
-                        dec->sws_ctx = sws_getContext(dec->dec_ctx->width, dec->dec_ctx->height, dec->dec_ctx->pix_fmt,
-                                                      dec->dec_ctx->width, dec->dec_ctx->height, AV_PIX_FMT_RGBA,
-                                                      SWS_BILINEAR, NULL, NULL, NULL);
-                    }
-                    sws_scale(dec->sws_ctx, (const u8* const*)dec->raw_frame->data, dec->raw_frame->linesize,
-                              0, dec->dec_ctx->height, dec->rgb_frame->data, dec->rgb_frame->linesize);
-
-                    if (pts >= target_time) {
-                        frame_decoded = true;
-                        goto done;
-                    }
-                }
-            }
-        }
-        av_packet_unref(pkt);
-    }
-
-done:
-    av_packet_free(&pkt);
-    return frame_decoded ? 0 : -1;
-}
-
-// 预取线程函数：只负责解码到 CPU 内存 (rgb_buffer)
-static int prefetch_thread_func(void* data) {
-    Compositor* comp = (Compositor*)data;
-    while (comp->running) {
-        SDL_LockMutex(comp->decoder_mutex);
-        for (i32 i = 0; i < comp->decoder_count; i++) {
+        for (int i=0; i<comp->decoder_count; i++) {
             ClipDecoder* dec = comp->decoders[i];
-            // 简单的预取逻辑：保持解码器活跃
-            if (dec->active_this_frame) {
-                // decode_frame_at_time 会将数据解码到 dec->rgb_buffer
-                // 注意：这里不涉及 OpenGL 调用
-                // decode_frame_at_time(dec, dec->current_pts_sec + 0.03, comp); 
-                // 暂时注释掉预取，依靠主线程按需解码更稳定，避免 seek 冲突
+            if (SDL_TryLockMutex(dec->mutex) == 0) {
+                if (dec->active_this_frame && dec->rb_count > 0) {
+                    int read_amt = (dec->rb_count > needed) ? needed : dec->rb_count;
+                    float vol = dec->current_volume;
+                    for (int k=0; k<read_amt; k++) {
+                        out[k] += dec->audio_ring_buffer[dec->rb_tail] * vol;
+                        dec->rb_tail = (dec->rb_tail + 1) % dec->rb_capacity;
+                    }
+                    dec->rb_count -= read_amt;
+                }
+                SDL_UnlockMutex(dec->mutex);
             }
         }
-        SDL_UnlockMutex(comp->decoder_mutex);
-        SDL_Delay(10);
+        SDL_UnlockMutex(comp->mix_mutex);
     }
-    return 0;
 }
 
-// --- Lifecycle ---
+// --- Render Logic ---
+
+static void update_decoder_video(ClipDecoder* dec, double timeline_time) {
+    SDL_LockMutex(dec->mutex);
+    
+    double diff = timeline_time - dec->current_pts;
+    if (diff < -0.1 || diff > 1.0) {
+        dec->seek_requested = true;
+        dec->seek_target_time = timeline_time;
+        dec->current_pts = timeline_time;
+        SDL_CondSignal(dec->cond_can_produce);
+        SDL_UnlockMutex(dec->mutex);
+        return;
+    }
+    
+    AVFrame* best_frame = NULL;
+    while (dec->video_queue.head) {
+        double f_pts = dec->video_queue.head->pts;
+        if (f_pts < timeline_time - 0.05) {
+            AVFrame* drop = fq_pop(&dec->video_queue, NULL);
+            av_frame_free(&drop);
+            SDL_CondSignal(dec->cond_can_produce);
+        } else if (f_pts <= timeline_time + 0.05) {
+            if (best_frame) av_frame_free(&best_frame);
+            best_frame = fq_pop(&dec->video_queue, &dec->current_pts);
+            SDL_CondSignal(dec->cond_can_produce);
+        } else {
+            break;
+        }
+    }
+    SDL_UnlockMutex(dec->mutex);
+
+    if (best_frame) {
+        if (dec->clip_ref->width == 0 || dec->clip_ref->height == 0) {
+            dec->clip_ref->width = best_frame->width;
+            dec->clip_ref->height = best_frame->height;
+        }
+
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, dec->tex_y);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, best_frame->linesize[0]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, best_frame->width, best_frame->height, 
+                     0, GL_RED, GL_UNSIGNED_BYTE, best_frame->data[0]);
+        
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, dec->tex_u);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, best_frame->linesize[1]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, best_frame->width/2, best_frame->height/2, 
+                     0, GL_RED, GL_UNSIGNED_BYTE, best_frame->data[1]);
+        
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, dec->tex_v);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, best_frame->linesize[2]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, best_frame->width/2, best_frame->height/2, 
+                     0, GL_RED, GL_UNSIGNED_BYTE, best_frame->data[2]);
+        
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4); 
+        
+        dec->texture_ready = true;
+        av_frame_free(&best_frame);
+    }
+}
+
+static void draw_clip_rect(Compositor* comp, ClipDecoder* dec, TimelineClip* tc) {
+    if (!dec->texture_ready) return;
+    
+    glUseProgram(comp->shader_program);
+    
+    glUniform1i(glGetUniformLocation(comp->shader_program, "tex_y"), 0);
+    glUniform1i(glGetUniformLocation(comp->shader_program, "tex_u"), 1);
+    glUniform1i(glGetUniformLocation(comp->shader_program, "tex_v"), 2);
+    
+    glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, dec->tex_y);
+    glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, dec->tex_u);
+    glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, dec->tex_v);
+    
+    // [Fix] 安全检查：防止未初始化或错误的 transform 数据
+    float scale_x = tc->transform.scale_x;
+    float scale_y = tc->transform.scale_y;
+    float opacity = tc->transform.opacity;
+
+    // 防止 Scale 为 0 (不可见)
+    if (fabsf(scale_x) < 0.001f) scale_x = 1.0f;
+    if (fabsf(scale_y) < 0.001f) scale_y = 1.0f;
+    // 允许透明度为0，但如果出现极小浮点误差则归一
+    if (opacity < 0.001f && opacity > -0.001f) opacity = 1.0f;
+
+    float w = (float)tc->media->width * scale_x;
+    float h = (float)tc->media->height * scale_y;
+    
+    if (w < 1.0f || h < 1.0f) return;
+
+    // 使用传入的真实坐标
+    mat4 model = mat4_translate_scale(tc->transform.x, tc->transform.y, w, h);
+    
+    glUniformMatrix4fv(glGetUniformLocation(comp->shader_program, "u_model"), 1, GL_FALSE, model.m);
+    glUniform1f(glGetUniformLocation(comp->shader_program, "u_opacity"), opacity);
+    
+    glBindVertexArray(comp->vao);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
+// --- Compositor Lifecycle ---
+
 Compositor* compositor_create(VM* vm, Timeline* timeline) {
     Compositor* comp = ALLOCATE(vm, Compositor, 1);
     memset(comp, 0, sizeof(Compositor));
     comp->vm = vm;
     comp->timeline = timeline;
-    init_gl_resources(comp);
- 
-    comp->decoder_mutex = SDL_CreateMutex();
-    comp->running = true;
+    comp->mix_mutex = SDL_CreateMutex();
     
-    // [修复] 暂时不启动预取线程，简化调试
-    // comp->prefetch_thread = SDL_CreateThread(prefetch_thread_func, "Prefetch", comp);
-    comp->prefetch_thread = NULL;
- 
-    if (SDL_Init(SDL_INIT_AUDIO) < 0) {
-        fprintf(stderr, "SDL Audio Init Failed: %s\n", SDL_GetError());
-    } else {
-        SDL_AudioSpec want, have;
-        memset(&want, 0, sizeof(want));
+    GLuint vs = compile_shader(VS_SOURCE, GL_VERTEX_SHADER);
+    GLuint fs = compile_shader(FS_SOURCE_YUV, GL_FRAGMENT_SHADER);
+    comp->shader_program = glCreateProgram();
+    glAttachShader(comp->shader_program, vs);
+    glAttachShader(comp->shader_program, fs);
+    glLinkProgram(comp->shader_program);
+    // 可选：检查 Link 错误，但移除 verbose 输出
+    glDeleteShader(vs); glDeleteShader(fs);
+    
+    float quad[] = { 0,0,0,0, 1,0,1,0, 0,1,0,1, 0,1,0,1, 1,0,1,0, 1,1,1,1 };
+    glGenVertexArrays(1, &comp->vao);
+    glGenBuffers(1, &comp->vbo);
+    glBindVertexArray(comp->vao);
+    glBindBuffer(GL_ARRAY_BUFFER, comp->vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0); glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*4, (void*)0);
+    glEnableVertexAttribArray(1); glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*4, (void*)8);
+    
+    glGenFramebuffers(1, &comp->fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, comp->fbo);
+    
+    glGenTextures(1, &comp->output_texture);
+    glBindTexture(GL_TEXTURE_2D, comp->output_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, timeline->width, timeline->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, comp->output_texture, 0);
+    
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(stderr, "Framebuffer Error!\n");
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    if (SDL_Init(SDL_INIT_AUDIO) == 0) {
+        SDL_AudioSpec want = {0}, have;
         want.freq = MIX_SAMPLE_RATE;
-        want.format = SDL_MIX_FORMAT;
-        want.channels = MIX_CHANNELS;
+        want.format = AUDIO_F32;
+        want.channels = 2;
         want.samples = 1024;
         want.callback = audio_callback;
         want.userdata = comp;
-
-        comp->audio_device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0); // 不允许 fallback
-        if (comp->audio_device == 0) {
-            fprintf(stderr, "Failed to open audio: %s\n", SDL_GetError());
-        } else {
-            SDL_PauseAudioDevice(comp->audio_device, 0); // Start playing (silence if no clips)
-            comp->audio_enabled = true;
-        }
+        comp->audio_device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+        if(comp->audio_device) SDL_PauseAudioDevice(comp->audio_device, 0);
     }
-    
     return comp;
 }
 
 void compositor_free(VM* vm, Compositor* comp) {
     if (!comp) return;
-    comp->running = false;
+    if (comp->audio_device) SDL_CloseAudioDevice(comp->audio_device);
     
-    if (comp->prefetch_thread) {
-        int ret;
-        SDL_WaitThread(comp->prefetch_thread, &ret);
-    }
-    SDL_DestroyMutex(comp->decoder_mutex);
-
+    for(int i=0; i<comp->decoder_count; i++) free_decoder(vm, comp->decoders[i]);
+    if(comp->decoders) FREE_ARRAY(vm, ClipDecoder*, comp->decoders, comp->decoder_capacity);
     
-    for (i32 i=0; i<comp->decoder_count; i++) free_decoder(vm, comp->decoders[i]);
-    if (comp->decoders) FREE_ARRAY(vm, ClipDecoder*, comp->decoders, comp->decoder_capacity);
-
-    if (comp->audio_device) {
-        SDL_CloseAudioDevice(comp->audio_device);
-    }
-    
-    glDeleteVertexArrays(1, &comp->vao);
-    glDeleteBuffers(1, &comp->vbo);
+    glDeleteProgram(comp->shader_program);
     glDeleteFramebuffers(1, &comp->fbo);
     glDeleteTextures(1, &comp->output_texture);
-    glDeleteProgram(comp->shader_program);
-    if (comp->cpu_output_buffer) reallocate(vm, comp->cpu_output_buffer, comp->timeline->width * comp->timeline->height * 4, 0);
+    glDeleteBuffers(1, &comp->vbo);
+    glDeleteVertexArrays(1, &comp->vao);
+    SDL_DestroyMutex(comp->mix_mutex);
     FREE(vm, Compositor, comp);
 }
 
-// --- 渲染函数 ---
+static ClipDecoder* get_decoder_safe(Compositor* comp, ObjClip* clip) {
+    for(int i=0; i<comp->decoder_count; i++) {
+        if (comp->decoders[i]->clip_ref == clip) return comp->decoders[i];
+    }
+    ClipDecoder* dec = create_decoder(comp->vm, clip);
+    if (comp->decoder_count >= comp->decoder_capacity) {
+        int old = comp->decoder_capacity;
+        comp->decoder_capacity = old < 8 ? 8 : old * 2;
+        comp->decoders = GROW_ARRAY(comp->vm, ClipDecoder*, comp->decoders, old, comp->decoder_capacity);
+    }
+    comp->decoders[comp->decoder_count++] = dec;
+    return dec;
+}
+
 void compositor_render(Compositor* comp, double time) {
     glBindFramebuffer(GL_FRAMEBUFFER, comp->fbo);
     glViewport(0, 0, comp->timeline->width, comp->timeline->height);
     
+    // [Fix] 恢复 Timeline 设定的背景色
     u8 r = comp->timeline->background_color.r;
     u8 g = comp->timeline->background_color.g;
     u8 b = comp->timeline->background_color.b;
-    glClearColor(r/255.0f, g/255.0f, b/255.0f, 1.0f);
+    glClearColor(r/255.f, g/255.f, b/255.f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+    
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    mat4 proj = mat4_ortho(0.0f, (float)comp->timeline->width, (float)comp->timeline->height, 0.0f, -1.0f, 1.0f);
+    
+    mat4 proj = mat4_ortho(0, comp->timeline->width, comp->timeline->height, 0, -1, 1);
     glUseProgram(comp->shader_program);
     glUniformMatrix4fv(glGetUniformLocation(comp->shader_program, "u_projection"), 1, GL_FALSE, proj.m);
-
-    // 锁定以保护 Ring Buffer 和 Decoder 状态
-    SDL_LockMutex(comp->decoder_mutex);
     
-    // 1. 重置所有解码器活跃状态
-    for (i32 i = 0; i < comp->decoder_count; i++) {
-        comp->decoders[i]->active_this_frame = false;
-    }
-
-    // 2. 获取当前时间点的 Clips
-    TimelineClip* clips[100]; 
-    i32 clip_count = 0;
-    for (i32 i = 0; i < (i32)comp->timeline->track_count; i++) {
+    SDL_LockMutex(comp->mix_mutex); 
+    
+    for(int i=0; i<comp->decoder_count; i++) comp->decoders[i]->active_this_frame = false;
+    
+    for(int i=0; i<comp->timeline->track_count; i++) {
         Track* track = &comp->timeline->tracks[i];
-        if ((track->flags & 1) == 0) continue;
         TimelineClip* tc = timeline_get_clip_at(track, time);
-        if (tc) clips[clip_count++] = tc;
+        if (!tc) continue;
+        
+        ClipDecoder* dec = get_decoder_safe(comp, tc->media);
+        dec->active_this_frame = true;
+        dec->current_volume = (float)tc->media->volume;
+        
+        double clip_time = (time - tc->timeline_start) + tc->source_in;
+        update_decoder_video(dec, clip_time);
+        draw_clip_rect(comp, dec, tc);
     }
     
-    // Z-Sort
-    for (i32 i = 0; i < clip_count - 1; i++) {
-        for (i32 j = i + 1; j < clip_count; j++) {
-            if (clips[i]->transform.z_index > clips[j]->transform.z_index) {
-                TimelineClip* temp = clips[i];
-                clips[i] = clips[j];
-                clips[j] = temp;
-            }
-        }
-    }
-    
-    // 3. 处理每个 Clip
-    for (i32 i = 0; i < clip_count; i++) {
-        TimelineClip* tc = clips[i];
-        ClipDecoder* dec = get_decoder(comp, tc->media);
-        if (dec) {
-            dec->active_this_frame = true;
-            
-            // [修复] 从 ObjClip (tc->media) 获取音量，而不是 transform
-            // 解码器结构体里的 current_volume 只是一个快照，用于传给音频线程
-            dec->current_volume = (float)tc->media->volume;
-
-            // 计算 Clip 内部时间
-            double clip_relative_time = (time - tc->timeline_start) + tc->source_in;
-            
-            // [Seek Detection]
-            // 如果时间跳变 > 0.2s 或倒流，视为 Seek
-            bool did_seek = false;
-            double time_delta = clip_relative_time - dec->last_render_time;
-            if (time_delta < 0 || time_delta > 0.2) {
-                did_seek = true;
-            }
-            dec->last_render_time = clip_relative_time;
-
-            // [Audio Pumping]
-            // 主线程负责解码音频并填入 Ring Buffer
-            if (tc->media->has_audio) {
-                pump_audio_data(dec, clip_relative_time, did_seek);
-            }
-
-            // [Video Decoding]
-            decode_frame_at_time(dec, clip_relative_time, comp);
-            
-            // [Draw]
-            if (dec->rgb_buffer) {
-                glBindTexture(GL_TEXTURE_2D, dec->texture);
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, dec->dec_ctx->width, dec->dec_ctx->height, GL_RGBA, GL_UNSIGNED_BYTE, dec->rgb_buffer);
-            }
-
-            int x = (int)tc->transform.x;
-            int y = (int)tc->transform.y;
-            int w = (int)(dec->dec_ctx->width * tc->transform.scale_x);
-            int h = (int)(dec->dec_ctx->height * tc->transform.scale_y);
-            int scissor_y = comp->timeline->height - (y + h);
-            
-            glScissor(x, scissor_y, w, h);
-            glEnable(GL_SCISSOR_TEST);
-            draw_clip_rect(comp, dec, tc);
-            glDisable(GL_SCISSOR_TEST);
-        }
-    }
-    
-    SDL_UnlockMutex(comp->decoder_mutex);
+    SDL_UnlockMutex(comp->mix_mutex);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     comp->cpu_buffer_stale = true;
 }
@@ -669,16 +608,19 @@ void compositor_blit_to_screen(Compositor* comp, i32 window_width, i32 window_he
         glAttachShader(blit_program, vs);
         glAttachShader(blit_program, fs);
         glLinkProgram(blit_program);
+        glDeleteShader(vs); glDeleteShader(fs);
     }
- 
+
     glViewport(0, 0, window_width, window_height);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // 屏幕外围显示黑色
     glClear(GL_COLOR_BUFFER_BIT);
- 
+
     glUseProgram(blit_program);
+    
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, comp->output_texture);
     glUniform1i(glGetUniformLocation(blit_program, "screenTexture"), 0);
- 
+
     glBindVertexArray(comp->vao);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
@@ -702,34 +644,11 @@ u8* compositor_get_cpu_buffer(Compositor* comp) {
         if (!comp->cpu_output_buffer) {
             comp->cpu_output_buffer = reallocate(comp->vm, NULL, 0, size);
         }
-     
         glBindFramebuffer(GL_FRAMEBUFFER, comp->fbo);
         glReadPixels(0, 0, comp->timeline->width, comp->timeline->height, GL_RGBA, GL_UNSIGNED_BYTE, comp->cpu_output_buffer);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
-     
         flip_buffer_vertical(comp->cpu_output_buffer, comp->timeline->width, comp->timeline->height);
-     
         comp->cpu_buffer_stale = false;
     }
     return comp->cpu_output_buffer;
-}
-
-static void draw_clip_rect(Compositor* comp, ClipDecoder* dec, TimelineClip* tc) {
-    float vw = (float)dec->dec_ctx->width;
-    float vh = (float)dec->dec_ctx->height;
-    float sx = tc->transform.scale_x * vw;
-    float sy = tc->transform.scale_y * vh;
-    
-    mat4 model = mat4_translate_scale(tc->transform.x, tc->transform.y, sx, sy);
-    glUseProgram(comp->shader_program);
-    glUniformMatrix4fv(glGetUniformLocation(comp->shader_program, "u_model"), 1, GL_FALSE, model.m);
-    glUniform1f(glGetUniformLocation(comp->shader_program, "u_opacity"), tc->transform.opacity);
-    
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, dec->texture);
-    // [修改] 采样器现在是 RGB
-    glUniform1i(glGetUniformLocation(comp->shader_program, "tex_rgb"), 0);
-    
-    glBindVertexArray(comp->vao);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
 }

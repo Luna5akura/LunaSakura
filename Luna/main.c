@@ -3,14 +3,12 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <SDL2/SDL.h>
-#include <SDL2/SDL_syswm.h> // 新增: 获取 XDisplay
+#include <glad/glad.h>
 #include "core/memory.h"
 #include "core/compiler/compiler.h"
 #include "engine/compositor.h"
-
 // 全局 VA 显示
-VADisplay g_va_display = NULL;
-
+// (Removed: VADisplay g_va_display = NULL;)
 // --- 外部绑定函数声明 ---
 // [新增] 注册标准库绑定 (List, etc.)
 void registerStdBindings(VM* vm);
@@ -65,34 +63,22 @@ int main(int argc, char* argv[]) {
                                           SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                           win_w, win_h,
                                           SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL);
-  
+ 
     // 创建 GL Context
     SDL_GLContext gl_context = SDL_GL_CreateContext(window);
     if (!gl_context) {
         fprintf(stderr, "GL Context Failed: %s\n", SDL_GetError());
         return 1;
     }
-  
+ 
     // 初始化 GLAD
     if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
         fprintf(stderr, "Failed to initialize GLAD\n");
         return 1;
     }
-  
-    // [新增] 获取 XDisplay 用于 VA-API (X11 特定)
-    SDL_SysWMinfo wmInfo;
-    SDL_VERSION(&wmInfo.version);
-    if (SDL_GetWindowWMInfo(window, &wmInfo) && wmInfo.subsystem == SDL_SYSWM_X11) {
-        Display* x_display = wmInfo.info.x11.display;
-        g_va_display = vaGetDisplayGLX(x_display);
-        int major, minor;
-        if (vaInitialize(g_va_display, &major, &minor) != VA_STATUS_SUCCESS) {
-            fprintf(stderr, "VA-API Init Failed\n");
-        }
-    } else {
-        fprintf(stderr, "Non-X11 system, VA-API not supported\n");
-    }
-  
+ 
+    // (Removed: VA-API initialization block)
+ 
     // 开启垂直同步
     SDL_GL_SetSwapInterval(1);
     // 2. 状态变量
@@ -102,7 +88,7 @@ int main(int argc, char* argv[]) {
     bool paused = false;
     uint64_t last_perf = SDL_GetPerformanceCounter();
     time_t last_mtime = 0;
-  
+ 
     Compositor* comp = NULL;
     Project* current_pr = NULL;
     // 本地 VM 实例
@@ -116,54 +102,53 @@ int main(int argc, char* argv[]) {
         time_t now_mtime = get_file_mtime(script_path);
         if (now_mtime > last_mtime) {
             printf("\n[Reload] Recompiling...\n");
-          
+         
             // 重要：在重置 VM 前，必须先释放旧的 Compositor (因为它持有 VM 分配的内存或资源)
             if (comp) { compositor_free(&vm, comp); comp = NULL; }
-          
+         
             // 释放旧 VM
             if (vm_initialized) { freeVM(&vm); }
-           
+          
             // 初始化新 VM
             initVM(&vm);
             vm_initialized = true;
-          
+         
             reset_active_project(&vm);
-          
+         
             // [新增] 注册标准库 (List, etc.)
             registerStdBindings(&vm);
-           
+          
             // 注册视频绑定
             registerVideoBindings(&vm);
-           
+          
             // 读取并编译运行脚本
             char* source = readFile(&vm, script_path);
             if (source) {
                 Chunk chunk;
                 initChunk(&chunk);
-               
+              
                 if (compile(&vm, source, &chunk)) {
                     if (interpret(&vm, &chunk) == INTERPRET_OK) {
                         script_loaded = true;
                     } else script_loaded = false;
                 } else script_loaded = false;
-              
+             
                 freeChunk(&vm, &chunk);
                 void* unused = reallocate(&vm, source, strlen(source) + 1, 0); // 捕获返回值
                 UNUSED(unused);
             }
             if (script_loaded) {
                 current_pr = get_active_project(&vm);
-                if (current_pr && current_pr->timeline) {  // 确保Timeline已设置
+                if (current_pr && current_pr->timeline) { // 确保Timeline已设置
                     printf("[Reload] Project: %dx%d @ %.2f fps\n", current_pr->width, current_pr->height, current_pr->fps);
                     u32 target_w = current_pr->timeline ? current_pr->timeline->width : current_pr->width;
                     u32 target_h = current_pr->timeline ? current_pr->timeline->height : current_pr->height;
-
                     if (target_w != (u32)win_w || target_h != (u32)win_h) {
                         win_w = target_w;
                         win_h = target_h;
                         SDL_SetWindowSize(window, win_w, win_h);
                     }
-                    comp = compositor_create(&vm, current_pr->timeline);  // 使用持有的Timeline
+                    comp = compositor_create(&vm, current_pr->timeline); // 使用持有的Timeline
                 }
             }
             last_mtime = now_mtime;
@@ -191,33 +176,28 @@ int main(int argc, char* argv[]) {
         uint64_t now = SDL_GetPerformanceCounter();
         double dt = (double)((now - last_perf) * 1000 / SDL_GetPerformanceFrequency()) / 1000.0;
         last_perf = now;
-
         if (script_loaded && comp && current_pr && current_pr->timeline) {
             if (!paused) {
                 current_time += dt;
-
                 // [修改] 循环逻辑
                 double loop_end = current_pr->timeline->duration;
                 double loop_start = 0.0;
-
                 // 如果启用了范围预览，且范围有效
                 if (current_pr->use_preview_range && current_pr->preview_end <= loop_end) {
                     loop_start = current_pr->preview_start;
                     loop_end = current_pr->preview_end;
                 }
-
                 // 处理循环
                 if (current_time >= loop_end) {
                     current_time = loop_start;
                 }
             }
-            
+           
             // [修改] 确保时间不低于起点 (处理热重载或手动seek导致的越界)
             double min_time = current_pr->use_preview_range ? current_pr->preview_start : 0.0;
             if (current_time < min_time) {
                 current_time = min_time;
             }
-
             compositor_render(comp, current_time);
             compositor_blit_to_screen(comp, win_w, win_h);
         } else {
@@ -229,12 +209,12 @@ int main(int argc, char* argv[]) {
     }
     // --- 清理 ---
     if (comp) compositor_free(&vm, comp);
-    vaTerminate(g_va_display);
+    // (Removed: vaTerminate(g_va_display);)
     SDL_GL_DeleteContext(gl_context);
     SDL_DestroyWindow(window);
-  
+ 
     if (vm_initialized) freeVM(&vm);
-  
+ 
     SDL_Quit();
     return 0;
 }
