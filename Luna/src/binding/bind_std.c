@@ -1,5 +1,6 @@
 // src/binding/bind_std.c
 
+#include <math.h> 
 #include "core/vm/vm.h"
 #include "core/memory.h"
 
@@ -40,6 +41,77 @@ Value nativePop(VM* vm, i32 argCount, Value* args) {
     if (list->count == 0) return NIL_VAL;
     list->count--;
     return list->items[list->count]; // 返回被弹出的值
+}
+Value nativeRange(VM* vm, i32 argCount, Value* args) {
+    if (argCount < 1 || argCount > 3) {
+        fprintf(stderr, "Usage: range(stop) or range(start, stop, [step])\n");
+        return NIL_VAL;
+    }
+
+    double start = 0;
+    double stop = 0;
+    double step = 1;
+
+    // 参数解析
+    if (argCount == 1) {
+        if (!IS_NUMBER(args[0])) {
+            fprintf(stderr, "Range argument must be a number.\n");
+            return NIL_VAL;
+        }
+        stop = AS_NUMBER(args[0]);
+    } else if (argCount >= 2) {
+        if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+            fprintf(stderr, "Range arguments must be numbers.\n");
+            return NIL_VAL;
+        }
+        start = AS_NUMBER(args[0]);
+        stop = AS_NUMBER(args[1]);
+        
+        if (argCount == 3) {
+            if (!IS_NUMBER(args[2])) {
+                fprintf(stderr, "Range step must be a number.\n");
+                return NIL_VAL;
+            }
+            step = AS_NUMBER(args[2]);
+        }
+    }
+
+    if (step == 0) {
+        fprintf(stderr, "Range step cannot be 0.\n");
+        return NIL_VAL;
+    }
+
+    // 计算列表长度
+    // 逻辑：max(0, ceil((stop - start) / step))
+    double diff = stop - start;
+    // 如果步长方向和区间方向不一致，则长度为0
+    if ((step > 0 && diff <= 0) || (step < 0 && diff >= 0)) {
+        return OBJ_VAL(newList(vm));
+    }
+
+    int count = (int)ceil(diff / step);
+    if (count < 0) count = 0;
+
+    // 创建列表并压栈保护 (GC Safety)
+    ObjList* list = newList(vm);
+    push(vm, OBJ_VAL(list));
+
+    if (count > 0) {
+        list->capacity = count;
+        // 使用与 nativeDictKeys 相同的内存分配方式
+        list->items = ALLOCATE(vm, Value, count);
+        list->count = count;
+
+        double current = start;
+        for (int i = 0; i < count; i++) {
+            list->items[i] = NUMBER_VAL(current);
+            current += step;
+        }
+    }
+
+    // 弹出栈顶的 list
+    pop(vm);
+    return OBJ_VAL(list);
 }
 // len(list or dict)
 Value nativeLen(VM* vm, i32 argCount, Value* args) {
@@ -207,6 +279,7 @@ void registerStdBindings(VM* vm) {
     defineNative(vm, "List", nativeList);
     defineNative(vm, "push", nativePush);
     defineNative(vm, "pop", nativePop);
+    defineNative(vm, "range", nativeRange); 
     defineNative(vm, "len", nativeLen);
     defineNative(vm, "get", nativeGet);
     defineNative(vm, "set", nativeSet);
