@@ -188,6 +188,7 @@ i32 disassembleInstruction(Chunk* chunk, i32 offset) {
         case OP_CALL:           return byteInstruction("OP_CALL", chunk, offset);
         case OP_ITER_INIT:      return simpleInstruction("OP_ITER_INIT", offset);
         case OP_ITER_NEXT:      return jumpInstruction("OP_ITER_NEXT", 1, chunk, offset);
+        case OP_LIST_APPEND:    return byteInstruction("OP_LIST_APPEND", chunk, offset);
         case OP_BUILD_LIST:     return byteInstruction("OP_BUILD_LIST", chunk, offset);
         case OP_BUILD_DICT:     return byteInstruction("OP_BUILD_DICT", chunk, offset);
         case OP_INVOKE:         return invokeInstruction("OP_INVOKE", chunk, offset);

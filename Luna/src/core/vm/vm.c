@@ -100,7 +100,7 @@ static InterpretResult run(VM* vm) {
         &&OP_NOT_EQUAL, &&OP_GREATER, &&OP_GREATER_EQUAL, &&OP_LESS, &&OP_LESS_EQUAL,
         &&OP_ADD, &&OP_SUBTRACT, &&OP_MULTIPLY, &&OP_DIVIDE, &&OP_NOT, &&OP_NEGATE,
         &&OP_PRINT, &&OP_JUMP, &&OP_JUMP_IF_FALSE, &&OP_LOOP, &&OP_CALL, &&OP_CALL_KW,
-        &&OP_CHECK_DEFAULT,&&OP_ITER_INIT, &&OP_ITER_NEXT,&&OP_BUILD_LIST, &&OP_BUILD_DICT, &&OP_CLOSURE,
+        &&OP_CHECK_DEFAULT,&&OP_ITER_INIT, &&OP_ITER_NEXT,&&OP_LIST_APPEND,&&OP_BUILD_LIST, &&OP_BUILD_DICT, &&OP_CLOSURE,
         &&OP_CLOSE_UPVALUE, &&OP_RETURN, &&OP_CLASS, &&OP_INHERIT, &&OP_METHOD,
         &&OP_GET_PROPERTY, &&OP_SET_PROPERTY, &&OP_GET_SUPER, &&OP_INVOKE,
         &&OP_INVOKE_KW, &&OP_SUPER_INVOKE, &&OP_SUPER_INVOKE_KW, &&OP_TRY,
@@ -171,6 +171,7 @@ static InterpretResult run(VM* vm) {
         OP_CHECK_DEFAULT: continue;
         OP_ITER_INIT: if (!op_iter_init(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_ITER_NEXT: if (!op_iter_next(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
+        OP_LIST_APPEND: if (!op_list_append(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_BUILD_LIST: if (!op_build_list(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_BUILD_DICT: op_build_dict(vm, &frame, &sp, &ip); continue;
         OP_CLOSURE: op_closure(vm, &frame, &sp, &ip); continue;

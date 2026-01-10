@@ -183,17 +183,142 @@ static void super_(bool canAssign) {
 
 static void listLiteral(bool canAssign) {
     UNUSED(canAssign);
-    u8 itemCount = 0;
-    if (!check(TOKEN_RIGHT_BRACKET)) {
-        do {
-            if (check(TOKEN_RIGHT_BRACKET)) break;
-            expression();
-            if (itemCount == 255) error("Can't have more than 255 items in list.");
-            itemCount++;
-        } while (match(TOKEN_COMMA));
+
+    // --- 1. 前瞻扫描 (Lookahead) ---
+    bool isComprehension = false;
+    Scanner initialScanner = scanner;
+    Token initialCurrent = parser.current;
+    
+    int nesting = 0;
+    Scanner probe = scanner; 
+    
+    if (parser.current.type != TOKEN_FOR) {
+        while (true) {
+            Token t = scanToken(&probe);
+            if (t.type == TOKEN_LEFT_BRACKET) nesting++;
+            else if (t.type == TOKEN_RIGHT_BRACKET) {
+                if (nesting == 0) break; 
+                nesting--;
+            }
+            else if (t.type == TOKEN_FOR && nesting == 0) {
+                isComprehension = true;
+                break;
+            }
+            else if (t.type == TOKEN_EOF) break;
+        }
     }
-    consume(TOKEN_RIGHT_BRACKET, "Expect ']' after list.");
-    emitBytes(OP_BUILD_LIST, itemCount);
+
+    // --- 2. 分支处理 ---
+    
+    if (isComprehension) {
+        // === 推导式编译逻辑 ===
+        
+        // 1. 创建结果列表
+        emitBytes(OP_BUILD_LIST, 0);
+
+        // [关键修正] 开启新的作用域，确保变量被视为局部变量，避免 OP_DEFINE_GLOBAL
+        beginScope();
+
+        // 将列表注册为临时局部变量
+        addLocal(syntheticToken("(list)"));
+        defineVariable(0);
+        u8 listSlot = (u8)(current->localCount - 1);
+        
+        // 2. 跳转 Scanner 到 'for' 之后
+        scanner = probe; 
+        advance(); // Current becomes 'var'
+        
+        Token varName = parser.current;
+        consume(TOKEN_IDENTIFIER, "Expect variable name after 'for'.");
+        consume(TOKEN_IN, "Expect 'in' after variable name.");
+        
+        // 3. 编译 iterable
+        expression(); 
+        
+        Scanner endScanner = scanner;
+        Token endCurrent = parser.current;
+        
+        // 4. 注册迭代器相关变量
+        addLocal(syntheticToken("(iterable)"));
+        defineVariable(0);
+        
+        emitByte(OP_ITER_INIT);
+        addLocal(syntheticToken("(iterator)"));
+        defineVariable(0);
+        
+        // 循环开始
+        Loop loop;
+        loop.enclosing = currentLoop;
+        loop.start = getChunkCount(currentChunk());
+        loop.scopeDepth = current->scopeDepth;
+        loop.localCount = current->localCount; 
+        currentLoop = &loop;
+        
+        int exitJump = emitJump(OP_ITER_NEXT);
+        
+        // 进入循环体 Scope (var 所在)
+        beginScope();
+        addLocal(varName); 
+        defineVariable(0);
+       
+
+        // 5. 回跳编译 expression
+        scanner = initialScanner;
+        parser.current = initialCurrent;
+        
+        expression(); 
+        consume(TOKEN_FOR, "Expect 'for' in comprehension."); 
+        
+        // 6. 追加结果
+        emitBytes(OP_LIST_APPEND, listSlot);
+        
+        // 7. 循环收尾
+        endScope(); // 弹出 var (循环变量)
+        
+        emitLoop(loop.start);
+        patchJump(exitJump);
+        currentLoop = loop.enclosing;
+        
+        // === 修复开始 ===
+        // 替换掉原有的手动 POP + endScope 逻辑
+        
+        // 1. 弹出 iterator (栈顶)
+        emitByte(OP_POP);
+        current->localCount--; // 从编译器记录中移除 (iterator)
+        
+        // 2. 弹出 iterable (次栈顶)
+        emitByte(OP_POP);
+        current->localCount--; // 从编译器记录中移除 (iterable)
+        
+        // 3. 处理结果列表 (list)
+        // 我们不生成 OP_POP，因为我们需要这个列表留在运行时栈上作为表达式的结果。
+        // 但是，我们必须从编译器的 locals 数组中移除它，否则后续的变量声明会计算出错误的 slot 索引。
+        current->localCount--; // 从编译器记录中移除 (list)
+
+        // 4. 手动结束作用域
+        // 我们已经手动清理了所有局部变量，现在只需调整作用域深度
+        current->scopeDepth--;
+        // === 修复结束 ===
+
+        // 8. 恢复 Scanner
+        scanner = endScanner;
+        parser.current = endCurrent;
+        
+        consume(TOKEN_RIGHT_BRACKET, "Expect ']' after comprehension.");
+    } else {
+        // === 普通列表编译逻辑 ===
+        u8 itemCount = 0;
+        if (!check(TOKEN_RIGHT_BRACKET)) {
+            do {
+                if (check(TOKEN_RIGHT_BRACKET)) break;
+                expression();
+                if (itemCount == 255) error("Can't have more than 255 items in list.");
+                itemCount++;
+            } while (match(TOKEN_COMMA));
+        }
+        consume(TOKEN_RIGHT_BRACKET, "Expect ']' after list.");
+        emitBytes(OP_BUILD_LIST, itemCount);
+    }
 }
 
 static void dictLiteral(bool canAssign) {

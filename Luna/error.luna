@@ -1,10 +1,42 @@
-var numbers = [1, 2, 3]
-for n in numbers:
-    print "loop"
-    print n
-    if n > 1:
-        print n
-    else:
-        continue
+# test_comprehension.luna
 
-print "end"
+print "--- 测试 1: 基础列表推导 ---"
+var source = [10, 20, 30]
+# 语法: [ 表达式 for 变量 in 可迭代对象 ]
+var doubled = [x * 2 for x in source]
+print doubled 
+# 预期输出: [20, 40, 60]
+
+print "--- 测试 2: 结合 range() 函数 ---"
+# 生成 0 到 4 的平方
+var squares = [i * i for i in range(5)]
+print squares 
+# 预期输出: [0, 1, 4, 9, 16]
+
+print "--- 测试 3: 字符串迭代 ---"
+var chars = [c for c in "Luna"]
+print chars 
+# 预期输出: ["L", "u", "n", "a"]
+
+print "--- 测试 4: 作用域隔离 ---"
+var n = 999
+print "外部变量 n 原值: "
+print n
+
+# 推导式内部也使用了变量名 n
+var list = [n for n in range(3)]
+
+print "生成的列表: "
+print list
+# 预期输出: [0, 1, 2]
+
+print "外部变量 n 现值 (应保持不变): "
+print n
+# 预期输出: 999 (如果输出 2 或其他值，说明作用域泄露了)
+
+print "--- 测试 5: 复杂表达式 ---"
+fun format(val):
+    return val
+
+var formatted = [format(x) for x in range(1, 4)]
+print formatted

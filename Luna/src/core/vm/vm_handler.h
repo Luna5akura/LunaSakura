@@ -98,20 +98,26 @@ static INLINE bool op_get_global(VM* vm, CallFrame** framePtr, Value** spPtr, u8
 }
 static INLINE bool op_define_global(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
     ObjString* name = READ_STRING();
+    SYNC_VM(); // 同步栈指针
     tableSet(vm, &vm->globals, OBJ_VAL(name), PEEK(0));
     DROP(1);
     return true;
 }
+
+// [修复] op_set_global: tableSet 可能触发 GC
 static INLINE bool op_set_global(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
     ObjString* name = READ_STRING();
+    SYNC_VM(); // 同步栈指针
     if (tableSet(vm, &vm->globals, OBJ_VAL(name), PEEK(0))) {
         tableDelete(&vm->globals, OBJ_VAL(name));
+        // runtimeError 会再次 SYNC，但也无妨
         SYNC_VM();
         if (!runtimeError(vm, "Undefined variable '%s'.", name->chars)) RETURN_ERROR();
         LOAD_FRAME();
     }
     return true;
 }
+
 static INLINE bool op_get_upvalue(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
     u8 slot = READ_BYTE();
     PUSH(*FRAME->closure->upvalues[slot]->location);
@@ -603,11 +609,14 @@ static bool op_iter_next(VM* vm, CallFrame** frame, Value** sp, u8** ip) {
         if (index < string->length) {
             *iteratorSlot = NUMBER_VAL(index + 1);
             // 创建单字符字符串
+            // [修复] copyString 可能触发 GC，必须先同步 stackTop
+            vm->stackTop = *sp; 
             *(*sp)++ = OBJ_VAL(copyString(vm, string->chars + (int)index, 1));
             return true;
         }
     } 
     else if (IS_DICT(iterable)) {
+        // ... (保持不变)
         ObjDict* dict = AS_DICT(iterable);
         u32 index = (u32)AS_NUMBER(iterator);
         u32 capacity = dict->items.capacity;
@@ -628,6 +637,36 @@ static bool op_iter_next(VM* vm, CallFrame** frame, Value** sp, u8** ip) {
     *ip += offset;
     return true;
 }
+
+static bool op_list_append(VM* vm, CallFrame** frame, Value** sp, u8** ip) {
+    u8 slot = *(*ip)++; // 参数：List 所在的栈槽位索引
+    Value listItem = (*frame)->slots[slot]; // 获取 List 对象
+    Value item = *(--(*sp)); // 弹出待追加的值
+    
+    // 理论上编译器保证 slot 处一定是 List，但为了安全可加检查
+    if (!IS_LIST(listItem)) {
+        return runtimeError(vm, "Internal error: Append to non-list.");
+    }
+    
+    ObjList* list = AS_LIST(listItem);
+    
+    // 扩容逻辑 (同 nativePush)
+    if (list->capacity < list->count + 1) {
+        u32 oldCapacity = list->capacity;
+        list->capacity = GROW_CAPACITY(oldCapacity);
+        
+        // [修复] 将 item 压回栈以保护它不被 GC，同时同步 stackTop
+        *(*sp)++ = item; 
+        vm->stackTop = *sp; 
+        
+        list->items = GROW_ARRAY(vm, Value, list->items, oldCapacity, list->capacity);
+        (*sp)--; // Pop again
+    }
+    
+    list->items[list->count++] = item;
+    return true;
+}
+
 static INLINE bool op_build_list(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
     u8 itemCount = READ_BYTE();
     SYNC_VM();
