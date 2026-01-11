@@ -1,10 +1,8 @@
-// src/engine/audio/audio_mixer.h
+// src/engine/media/audio/mixer.h
 
 #pragma once
 
-#include <SDL2/SDL.h>
-#include <stdbool.h>
-#include "engine/codec/decoder.h"
+#include "engine/media/codec/decoder.h"
 
 typedef struct AudioMixer AudioMixer;
 

@@ -1,12 +1,6 @@
-// src/engine/video_probe.c
+// src/engine/utils/probe.c
 
-#include <stdio.h>
-#include <math.h>
 #include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-#include <libavutil/display.h>
-#include <libavutil/pixdesc.h>
-#include "engine/video.h"
 #include "core/vm/vm.h" 
 
 // [移除] static Table metadata_cache; 以及相关的缓存逻辑

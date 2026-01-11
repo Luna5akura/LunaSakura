@@ -1,11 +1,9 @@
 // src/engine/codec/decoder.c
 
 #include "decoder.h"
-#include <stdio.h>
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libswresample/swresample.h>
-#include <libavutil/time.h>
 
 #define MAX_QUEUE_SIZE 8
 #define AUDIO_RB_SIZE 131072

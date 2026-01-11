@@ -1,14 +1,8 @@
-// src/engine/object.c
+// src/engine/binding/object.c
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-#include "engine/object.h"
+#include "object.h"
 #include "core/memory.h"  // 需要 ALLOCATE, FREE, markObject
 #include "core/vm/vm.h"      // 需要 VM 定义
-
-#include "engine/timeline.h" 
 
 // ============================================================================
 // 1. Clip Implementation

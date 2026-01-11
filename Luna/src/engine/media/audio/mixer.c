@@ -1,9 +1,6 @@
-// src/engine/audio/audio_mixer.c
+// src/engine/media/audio/mixer.c
 
-#include "audio_mixer.h"
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
+#include "mixer.h"
 
 #define MAX_AUDIO_SOURCES 32
 
