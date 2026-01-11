@@ -37,12 +37,6 @@ typedef int64_t i64;
 
 #define U8_COUNT 256
 
-static inline u32 loadWord4(const void* ptr) {
-    u32 result;
-    memcpy(&result, ptr, sizeof(u32));
-    return result;
-}
-
 // 开启调试打印的宏
 // #define DEBUG_PRINT_CODE
 // #define DEBUG_LOG_GC

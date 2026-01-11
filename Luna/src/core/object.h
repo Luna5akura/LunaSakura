@@ -165,6 +165,7 @@ ObjForeign* newForeign(VM* vm, size_t size, const ForeignClassMethods* methods);
 ObjClass* newClass(VM* vm, ObjString* name);
 ObjInstance* newInstance(VM* vm, ObjClass* klass);
 ObjBoundMethod* newBoundMethod(VM* vm, Value receiver, Value method);
+
 void printObject(Value value);
 // 类型检查辅助函数
 bool typesMatch(Value a, Value b);
