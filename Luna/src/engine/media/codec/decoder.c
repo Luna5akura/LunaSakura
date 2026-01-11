@@ -1,13 +1,13 @@
 // src/engine/codec/decoder.c
 
 #include "decoder.h"
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
+#include "engine/media/utils/ffmpeg_utils.h" // [新增]
 #include <libswresample/swresample.h>
 
 #define MAX_QUEUE_SIZE 8
 #define AUDIO_RB_SIZE 131072
 #define MIX_SAMPLE_RATE 44100
+
 
 // --- Internal Structures ---
 
@@ -44,8 +44,8 @@ struct Decoder {
     // 音频环形缓冲
     float* audio_ring_buffer;
     i32 rb_capacity;
-    i32 rb_head; // Write
-    i32 rb_tail; // Read
+    i32 rb_head;
+    i32 rb_tail;
     i32 rb_count;
 
     // 视频状态 (Main Thread)
@@ -58,15 +58,12 @@ struct Decoder {
     int64_t start_pts;
     bool has_start_pts;
 
-    // FFmpeg Contexts
-    AVFormatContext* fmt_ctx;
-    AVCodecContext* vid_ctx;
-    AVCodecContext* aud_ctx;
+    // [修改] 聚合的媒体上下文
+    MediaContext media; 
+    
+    // 额外的音频转换上下文 (不属于 MediaContext 通用部分)
     SwrContext* swr_ctx;
-    i32 video_stream_idx;
-    i32 audio_stream_idx;
 };
-
 // --- Queue Helpers ---
 
 static void fq_push(FrameQueue* q, AVFrame* frame, double pts) {
@@ -104,33 +101,20 @@ static void fq_clear(FrameQueue* q) {
 static int decoder_thread_func(void* data) {
     Decoder* dec = (Decoder*)data;
     
-    dec->fmt_ctx = avformat_alloc_context();
-    if (avformat_open_input(&dec->fmt_ctx, dec->file_path_copy, NULL, NULL) < 0) return -1;
-    avformat_find_stream_info(dec->fmt_ctx, NULL);
-
-    // Video Setup
-    dec->video_stream_idx = av_find_best_stream(dec->fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
-    if (dec->video_stream_idx >= 0) {
-        AVStream* st = dec->fmt_ctx->streams[dec->video_stream_idx];
-        const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
-        dec->vid_ctx = avcodec_alloc_context3(codec);
-        avcodec_parameters_to_context(dec->vid_ctx, st->codecpar);
-        avcodec_open2(dec->vid_ctx, codec, NULL);
+    // [修改] 使用工具函数统一打开视频和音频
+    if (!media_open(&dec->media, dec->file_path_copy, true, true)) {
+        fprintf(stderr, "[Decoder] Failed to open media: %s\n", dec->file_path_copy);
+        return -1;
     }
 
-    // Audio Setup
-    dec->audio_stream_idx = av_find_best_stream(dec->fmt_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
-    if (dec->audio_stream_idx >= 0) {
-        AVStream* st = dec->fmt_ctx->streams[dec->audio_stream_idx];
-        const AVCodec* codec = avcodec_find_decoder(st->codecpar->codec_id);
-        dec->aud_ctx = avcodec_alloc_context3(codec);
-        avcodec_parameters_to_context(dec->aud_ctx, st->codecpar);
-        if (avcodec_open2(dec->aud_ctx, codec, NULL) == 0) {
-            AVChannelLayout out_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
-            swr_alloc_set_opts2(&dec->swr_ctx, &out_layout, AV_SAMPLE_FMT_FLT, MIX_SAMPLE_RATE,
-                &st->codecpar->ch_layout, st->codecpar->format, st->codecpar->sample_rate, 0, NULL);
-            swr_init(dec->swr_ctx);
-        }
+    // [修改] 额外的音频 SWR 初始化逻辑 (仅在有音频流时执行)
+    if (dec->media.aud_ctx) {
+        AVCodecContext* aud_ctx = dec->media.aud_ctx;
+        AVChannelLayout out_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
+        
+        swr_alloc_set_opts2(&dec->swr_ctx, &out_layout, AV_SAMPLE_FMT_FLT, MIX_SAMPLE_RATE,
+            &aud_ctx->ch_layout, aud_ctx->sample_fmt, aud_ctx->sample_rate, 0, NULL);
+        swr_init(dec->swr_ctx);
     }
 
     AVPacket* pkt = av_packet_alloc();
@@ -153,9 +137,10 @@ static int decoder_thread_func(void* data) {
 
         if (seeking) {
             int64_t ts = (int64_t)(seek_tgt * AV_TIME_BASE);
-            av_seek_frame(dec->fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
-            if (dec->vid_ctx) avcodec_flush_buffers(dec->vid_ctx);
-            if (dec->aud_ctx) avcodec_flush_buffers(dec->aud_ctx);
+            // [修改] 使用 media.fmt_ctx
+            av_seek_frame(dec->media.fmt_ctx, -1, ts, AVSEEK_FLAG_BACKWARD);
+            if (dec->media.vid_ctx) avcodec_flush_buffers(dec->media.vid_ctx);
+            if (dec->media.aud_ctx) avcodec_flush_buffers(dec->media.aud_ctx);
         }
 
         // Check Queue Capacity
@@ -171,16 +156,18 @@ static int decoder_thread_func(void* data) {
         }
 
         // Read Frame
-        int ret = av_read_frame(dec->fmt_ctx, pkt);
+        // [修改] 使用 media.fmt_ctx
+        int ret = av_read_frame(dec->media.fmt_ctx, pkt);
         if (ret < 0) {
             SDL_Delay(10); 
             continue;
         }
 
         // Process Video
-        if (pkt->stream_index == dec->video_stream_idx && dec->vid_ctx) {
-            if (avcodec_send_packet(dec->vid_ctx, pkt) == 0) {
-                while (avcodec_receive_frame(dec->vid_ctx, frame) == 0) {
+        // [修改] 使用 media 字段
+        if (pkt->stream_index == dec->media.vid_stream_idx && dec->media.vid_ctx) {
+            if (avcodec_send_packet(dec->media.vid_ctx, pkt) == 0) {
+                while (avcodec_receive_frame(dec->media.vid_ctx, frame) == 0) {
                     AVFrame* cloned = av_frame_alloc();
                     av_frame_ref(cloned, frame);
                     
@@ -194,7 +181,8 @@ static int decoder_thread_func(void* data) {
                     
                     double pts = 0.0;
                     if (pts_val != AV_NOPTS_VALUE && dec->has_start_pts) {
-                        pts = (pts_val - dec->start_pts) * av_q2d(dec->fmt_ctx->streams[dec->video_stream_idx]->time_base);
+                        // [修改] 使用 media.vid_stream
+                        pts = (pts_val - dec->start_pts) * av_q2d(dec->media.vid_stream->time_base);
                     } else if (dec->video_queue.tail) {
                         pts = dec->video_queue.tail->pts + 0.033;
                     }
@@ -206,12 +194,14 @@ static int decoder_thread_func(void* data) {
             }
         }
         // Process Audio
-        else if (pkt->stream_index == dec->audio_stream_idx && dec->aud_ctx && dec->swr_ctx) {
-             if (avcodec_send_packet(dec->aud_ctx, pkt) == 0) {
-                 while (avcodec_receive_frame(dec->aud_ctx, frame) == 0) {
+        // [修改] 使用 media 字段
+        else if (pkt->stream_index == dec->media.aud_stream_idx && dec->media.aud_ctx && dec->swr_ctx) {
+             if (avcodec_send_packet(dec->media.aud_ctx, pkt) == 0) {
+                 while (avcodec_receive_frame(dec->media.aud_ctx, frame) == 0) {
                      uint8_t* out_data[2] = {0};
-                     int out_samples = av_rescale_rnd(swr_get_delay(dec->swr_ctx, dec->aud_ctx->sample_rate) + frame->nb_samples,
-                                                      MIX_SAMPLE_RATE, dec->aud_ctx->sample_rate, AV_ROUND_UP);
+                     // [修改] 使用 media.aud_ctx
+                     int out_samples = av_rescale_rnd(swr_get_delay(dec->swr_ctx, dec->media.aud_ctx->sample_rate) + frame->nb_samples,
+                                                      MIX_SAMPLE_RATE, dec->media.aud_ctx->sample_rate, AV_ROUND_UP);
                      av_samples_alloc(out_data, NULL, 2, out_samples, AV_SAMPLE_FMT_FLT, 0);
                      int len = swr_convert(dec->swr_ctx, out_data, out_samples, (const uint8_t**)frame->data, frame->nb_samples);
                      
@@ -238,18 +228,19 @@ static int decoder_thread_func(void* data) {
     
     av_frame_free(&frame);
     av_packet_free(&pkt);
-    if (dec->vid_ctx) avcodec_free_context(&dec->vid_ctx);
-    if (dec->aud_ctx) avcodec_free_context(&dec->aud_ctx);
+    
+    // [修改] 统一释放 FFmpeg 上下文
+    media_close(&dec->media);
+    
     if (dec->swr_ctx) swr_free(&dec->swr_ctx);
-    avformat_close_input(&dec->fmt_ctx);
     return 0;
 }
-
 // --- Public API Implementation ---
 
 Decoder* decoder_create(ObjClip* clip) {
     Decoder* dec = (Decoder*)malloc(sizeof(Decoder));
     memset(dec, 0, sizeof(Decoder));
+    media_ctx_init(&dec->media); // 初始化内部结构
     
     dec->clip_ref = clip;
     dec->file_path_copy = strdup(clip->path->chars); // 使用 strdup

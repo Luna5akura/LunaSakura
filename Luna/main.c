@@ -10,10 +10,7 @@
 #include "core/compiler/compiler.h"
 #include "core/vm/vm.h"
 
-// [新增] 必须包含这两个头文件，否则编译器不知道 Project 和 Timeline 的成员结构
-#include "engine/timeline.h"
-#include "engine/object.h" 
-#include "engine/compositor.h"
+#include "engine/engine.h"
 
 // --- 外部绑定函数声明 ---
 // 这些函数通常在 bind_std.c 和 bind_video.c 中实现

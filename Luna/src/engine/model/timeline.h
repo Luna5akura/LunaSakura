@@ -17,7 +17,6 @@ typedef struct {
     double timeline_duration; // 8 bytes
     double source_in;       // 8 bytes
     Transform transform;    // 32 bytes
-    u32 _padding;           // padding to 64 bytes cache line
 } TimelineClip;
 
 // === 容器结构 ===

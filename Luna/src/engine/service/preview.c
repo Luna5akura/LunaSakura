@@ -1,6 +1,7 @@
 // src/engine/service/preview.c
 
 #include "preview.h"
+#include "engine/media/utils/ffmpeg_utils.h" // [新增]
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
@@ -12,9 +13,9 @@ static double get_clock() {
 
 // 独立的预览播放函数
 void play_video_clip_preview(VM* vm, ObjClip* clip) {
-    // Resources
-    AVFormatContext* fmt_ctx = NULL;
-    AVCodecContext* dec_ctx = NULL;
+    MediaContext ctx;
+    media_ctx_init(&ctx);
+
     AVPacket* pkt = NULL;
     AVFrame* frame = NULL;
     AVFrame* frame_yuv = NULL;
@@ -25,51 +26,41 @@ void play_video_clip_preview(VM* vm, ObjClip* clip) {
     SDL_Renderer* renderer = NULL;
     SDL_Texture* texture = NULL;
     
-    const char* filename = clip->path->chars;
-    printf("[Preview] Opening '%s'...\n", filename);
+    printf("[Preview] Opening '%s'...\n", clip->path->chars);
 
-    // --- 1. FFmpeg Init ---
-    if (avformat_open_input(&fmt_ctx, filename, NULL, NULL) < 0) {
+    // --- 1. FFmpeg Init [修改] ---
+    if (!media_open(&ctx, clip->path->chars, true, false)) {
         fprintf(stderr, "[Error] Could not open file.\n");
         goto cleanup;
     }
-    if (avformat_find_stream_info(fmt_ctx, NULL) < 0) goto cleanup;
-    
-    i32 video_stream_idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
-    if (video_stream_idx < 0) goto cleanup;
-    
-    AVStream* video_stream = fmt_ctx->streams[video_stream_idx];
-    const AVCodec* decoder = avcodec_find_decoder(video_stream->codecpar->codec_id);
-    if (!decoder) goto cleanup;
-    
-    dec_ctx = avcodec_alloc_context3(decoder);
-    avcodec_parameters_to_context(dec_ctx, video_stream->codecpar);
-    if (avcodec_open2(dec_ctx, decoder, NULL) < 0) goto cleanup;
+    if (!ctx.vid_ctx) {
+        fprintf(stderr, "[Error] No video stream.\n");
+        goto cleanup;
+    }
 
     // --- 2. Seek ---
     if (clip->in_point > 0) {
-        i64 seek_target_ts = (i64)(clip->in_point / av_q2d(video_stream->time_base));
-        av_seek_frame(fmt_ctx, video_stream_idx, seek_target_ts, AVSEEK_FLAG_BACKWARD);
-        avcodec_flush_buffers(dec_ctx);
+        i64 seek_target_ts = (i64)(clip->in_point / av_q2d(ctx.vid_stream->time_base));
+        av_seek_frame(ctx.fmt_ctx, ctx.vid_stream_idx, seek_target_ts, AVSEEK_FLAG_BACKWARD);
+        avcodec_flush_buffers(ctx.vid_ctx);
     }
 
     // --- 3. SDL Init ---
-    // 检查 SDL 是否已初始化，防止重复初始化导致错误，也不要随意 Quit
+    // ... [中间 SDL 初始化代码保持不变] ...
     bool was_sdl_init = (SDL_WasInit(SDL_INIT_VIDEO) != 0);
     if (!was_sdl_init) {
         if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER)) goto cleanup;
     }
 
-    i32 width = dec_ctx->width;
-    i32 height = dec_ctx->height;
-    
-    // 创建独立窗口
+    i32 width = ctx.vid_ctx->width;
+    i32 height = ctx.vid_ctx->height;
+
+    // 创建窗口
     window = SDL_CreateWindow("Clip Preview",
                               SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                               width / 2, height / 2,
                               SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!window) goto cleanup;
-    
     u32 window_id = SDL_GetWindowID(window);
 
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -96,12 +87,13 @@ void play_video_clip_preview(VM* vm, ObjClip* clip) {
     SDL_Event event;
     double start_time = get_clock();
     
-    while (running && av_read_frame(fmt_ctx, pkt) >= 0) {
-        if (pkt->stream_index == video_stream_idx) {
-            if (avcodec_send_packet(dec_ctx, pkt) == 0) {
-                while (avcodec_receive_frame(dec_ctx, frame) == 0) {
+    // [修改] 使用 ctx.fmt_ctx
+    while (running && av_read_frame(ctx.fmt_ctx, pkt) >= 0) {
+        if (pkt->stream_index == ctx.vid_stream_idx) {
+            if (avcodec_send_packet(ctx.vid_ctx, pkt) == 0) {
+                while (avcodec_receive_frame(ctx.vid_ctx, frame) == 0) {
                     // Sync
-                    double pts_sec = frame->pts * av_q2d(video_stream->time_base);
+                    double pts_sec = frame->pts * av_q2d(ctx.vid_stream->time_base);
                     if (pts_sec < clip->in_point) continue;
                     if (pts_sec >= clip->in_point + clip->duration) {
                         running = false;
@@ -117,7 +109,7 @@ void play_video_clip_preview(VM* vm, ObjClip* clip) {
                     AVFrame* render_frame = frame;
                     if (frame->format != AV_PIX_FMT_YUV420P) {
                         if (!sws_ctx) {
-                            sws_ctx = sws_getContext(width, height, dec_ctx->pix_fmt,
+                            sws_ctx = sws_getContext(width, height, ctx.vid_ctx->pix_fmt,
                                                      width, height, AV_PIX_FMT_YUV420P,
                                                      SWS_BILINEAR, NULL, NULL, NULL);
                         }
@@ -134,7 +126,7 @@ void play_video_clip_preview(VM* vm, ObjClip* clip) {
                     SDL_RenderCopy(renderer, texture, NULL, NULL);
                     SDL_RenderPresent(renderer);
 
-                    // Event Handling (Scoped to this window)
+                    // Event Handling
                     while (SDL_PollEvent(&event)) {
                         if (event.type == SDL_WINDOWEVENT && event.window.windowID == window_id) {
                              if (event.window.event == SDL_WINDOWEVENT_CLOSE) running = false;
@@ -142,9 +134,6 @@ void play_video_clip_preview(VM* vm, ObjClip* clip) {
                         if (event.type == SDL_KEYDOWN && event.key.windowID == window_id) {
                             if (event.key.keysym.sym == SDLK_ESCAPE) running = false;
                         }
-                        // 如果有主循环在运行，非本窗口的事件可能会丢失。
-                        // 在更复杂的架构中，需要有一个全局事件队列。
-                        // 这里为了简单，我们只是"消费"掉事件。
                     }
                     if (!running) break;
                 }
@@ -158,14 +147,12 @@ cleanup:
     if (renderer) SDL_DestroyRenderer(renderer);
     if (window) SDL_DestroyWindow(window);
     
-    // 不要调用 SDL_Quit，因为主程序还在运行
-    
     if (yuv_buffer) av_free(yuv_buffer);
     if (frame) av_frame_free(&frame);
     if (frame_yuv) av_frame_free(&frame_yuv);
     if (pkt) av_packet_free(&pkt);
     if (sws_ctx) sws_freeContext(sws_ctx);
-    if (dec_ctx) avcodec_free_context(&dec_ctx);
-    if (fmt_ctx) avformat_close_input(&fmt_ctx);
+    
+    media_close(&ctx); // [修改]
     printf("[Preview] Closed.\n");
 }

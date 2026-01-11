@@ -2,7 +2,6 @@
 
 #include "memory.h"
 #include "vm/vm.h"
-#include "engine/timeline.h" 
 // === Allocation Helper ===
 static Obj* allocateObject(VM* vm, size_t size, ObjType type) {
     Obj* object = (Obj*)reallocate(vm, NULL, 0, size);

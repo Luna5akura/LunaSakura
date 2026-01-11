@@ -3,7 +3,7 @@
 #pragma once
 #include "error.h"
 #include "core/object.h"
-#include "engine/timeline.h"
+#include "engine/engine.h"
 // --- Configuration ---
 #define STACK_MAX 2048
 #define FRAMES_MAX 64

@@ -1,6 +1,7 @@
 // src/engine/service/transcoder.c
 
 #include "engine/service/transcoder.h"
+#include "engine/media/utils/ffmpeg_utils.h" // [新增]
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include "core/memory.h"
@@ -55,8 +56,9 @@ static i32 open_encoder_internal(VM* vm, AVFormatContext* out_fmt_ctx, AVCodecCo
 // --- Export Logic ---
 void transcode_clip(VM* vm, ObjClip* clip, const char* output_filename) {
     // Resources
-    AVFormatContext* in_fmt_ctx = NULL;
-    AVCodecContext* dec_ctx = NULL;
+    MediaContext in_media; // [修改] 使用 MediaContext
+    media_ctx_init(&in_media);
+
     AVFormatContext* out_fmt_ctx = NULL;
     AVCodecContext* enc_ctx = NULL;
     AVPacket* pkt = NULL;
@@ -66,24 +68,16 @@ void transcode_clip(VM* vm, ObjClip* clip, const char* output_filename) {
     i32 ret = 0;
     fprintf(stderr, "[Transcoder] Processing '%s' -> '%s'\n", clip->path->chars, output_filename);
 
-    // --- Input Setup ---
-    if (avformat_open_input(&in_fmt_ctx, clip->path->chars, NULL, NULL) < 0) {
-        fprintf(stderr, "[Transcoder] Error: Could not open input.\n");
+    // --- Input Setup [修改] ---
+    // 仅需视频流进行转码
+    if (!media_open(&in_media, clip->path->chars, true, false)) {
+        fprintf(stderr, "[Transcoder] Error: Could not open input file.\n");
         goto cleanup;
     }
-    if (avformat_find_stream_info(in_fmt_ctx, NULL) < 0) goto cleanup;
-    
-    i32 video_stream_idx = av_find_best_stream(in_fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
-    if (video_stream_idx < 0) goto cleanup;
-    
-    AVStream* in_stream = in_fmt_ctx->streams[video_stream_idx];
-    const AVCodec* dec = avcodec_find_decoder(in_stream->codecpar->codec_id);
-    
-    dec_ctx = avcodec_alloc_context3(dec);
-    vm->bytesAllocated += sizeof(AVCodecContext);
-    
-    avcodec_parameters_to_context(dec_ctx, in_stream->codecpar);
-    if (avcodec_open2(dec_ctx, dec, NULL) < 0) goto cleanup;
+    if (!in_media.vid_ctx) {
+        fprintf(stderr, "[Transcoder] Error: No video stream found.\n");
+        goto cleanup;
+    }
 
     // --- Output Setup ---
     avformat_alloc_output_context2(&out_fmt_ctx, NULL, NULL, output_filename);
@@ -102,11 +96,11 @@ void transcode_clip(VM* vm, ObjClip* clip, const char* output_filename) {
 
     // --- Seeking ---
     i64 seek_target_us = (i64)(clip->in_point * AV_TIME_BASE);
-    i64 seek_target_ts = av_rescale_q(seek_target_us, AV_TIME_BASE_Q, in_stream->time_base);
+    i64 seek_target_ts = av_rescale_q(seek_target_us, AV_TIME_BASE_Q, in_media.vid_stream->time_base);
  
     if (clip->in_point > 0) {
-        av_seek_frame(in_fmt_ctx, video_stream_idx, seek_target_ts, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
-        avcodec_flush_buffers(dec_ctx);
+        av_seek_frame(in_media.fmt_ctx, in_media.vid_stream_idx, seek_target_ts, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
+        avcodec_flush_buffers(in_media.vid_ctx);
     }
 
     // --- Allocation ---
@@ -123,21 +117,21 @@ void transcode_clip(VM* vm, ObjClip* clip, const char* output_filename) {
     i64 total_frames = (i64)(clip->duration * clip->fps);
     bool encode_finished = false;
 
-    // --- Main Transcode Loop ---
-    while (av_read_frame(in_fmt_ctx, pkt) >= 0) {
-        if (pkt->stream_index == video_stream_idx) {
+    // --- Main Transcode Loop [修改] ---
+    while (av_read_frame(in_media.fmt_ctx, pkt) >= 0) {
+        if (pkt->stream_index == in_media.vid_stream_idx) {
          
-            ret = avcodec_send_packet(dec_ctx, pkt);
+            ret = avcodec_send_packet(in_media.vid_ctx, pkt);
             if (ret < 0) {
                 av_packet_unref(pkt);
                 continue;
             }
             while (ret >= 0) {
-                ret = avcodec_receive_frame(dec_ctx, frame);
+                ret = avcodec_receive_frame(in_media.vid_ctx, frame);
                 if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
                 else if (ret < 0) goto cleanup;
 
-                // Accuracy Logic: Drop frames decoded before start
+                // Accuracy Logic
                 if (frame->best_effort_timestamp < seek_target_ts) {
                     av_frame_unref(frame);
                     continue;
@@ -195,13 +189,13 @@ void transcode_clip(VM* vm, ObjClip* clip, const char* output_filename) {
     printf("\n[Transcoder] Done.\n");
 
 cleanup:
-    if (dec_ctx) { avcodec_free_context(&dec_ctx); vm->bytesAllocated -= sizeof(AVCodecContext); }
+    media_close(&in_media); // [修改] 统一释放输入端
+
     if (enc_ctx) { avcodec_free_context(&enc_ctx); vm->bytesAllocated -= sizeof(AVCodecContext); }
     if (frame) { av_frame_free(&frame); vm->bytesAllocated -= sizeof(AVFrame); }
     if (pkt) { av_packet_free(&pkt); vm->bytesAllocated -= sizeof(AVPacket); }
     if (out_pkt) { av_packet_free(&out_pkt); vm->bytesAllocated -= sizeof(AVPacket); }
     
-    if (in_fmt_ctx) avformat_close_input(&in_fmt_ctx);
     if (out_fmt_ctx) {
         if (!(out_fmt_ctx->oformat->flags & AVFMT_NOFILE)) {
             avio_closep(&out_fmt_ctx->pb);

@@ -4,9 +4,7 @@
 #include <string.h>
 #include "core/memory.h"
 #include "core/vm/vm.h"
-#include "engine/video.h"
-#include "engine/timeline.h"
-#include "engine/object.h" // 必须包含，为了使用 ClipMethods 等
+#include "engine/engine.h" // 必须包含，为了使用 ClipMethods 等
 
 // --- 宏定义：简化操作 ---
 
@@ -170,7 +168,9 @@ Value clipExport(VM* vm, i32 argCount, Value* args) {
     if (!clip || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
     
     ObjString* filename = AS_STRING(args[0]);
-    export_video_clip(vm, clip, filename->chars);
+    
+    transcode_clip(vm, clip, filename->chars);
+    // export_video_clip(vm, clip, filename->chars);
     return NIL_VAL;
 }
 
