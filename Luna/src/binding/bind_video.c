@@ -21,6 +21,17 @@
         pop(vm); \
     } while(0)
 
+static void sync_common_props(VM* vm, ObjInstance* obj, Clip* inner) {
+    SET_PROP(obj, "default_scale_x", inner->default_scale_x);
+    SET_PROP(obj, "default_scale_y", inner->default_scale_y);
+    SET_PROP(obj, "default_x", inner->default_x);
+    SET_PROP(obj, "default_y", inner->default_y);
+    SET_PROP(obj, "default_opacity", inner->default_opacity);
+    SET_PROP(obj, "volume", inner->volume);
+    SET_PROP(obj, "in_point", inner->in_point);
+    SET_PROP(obj, "duration", inner->duration);
+}
+
 // 供 main.c 调用
 Project* get_active_project(VM* vm) {
     EngineContext* ctx = (EngineContext*)vm->user_data;
@@ -74,8 +85,7 @@ static void setHandle(VM* vm, ObjInstance* instance, Obj* internalObj) {
 
 // --- Clip 类实现 ---
 
-// 构造函数: Clip(path)
-Value clipInit(VM* vm, i32 argCount, Value* args) {
+Value videoInit(VM* vm, i32 argCount, Value* args) {
     if (argCount != 1 || !IS_STRING(args[0])) {
         fprintf(stderr, "Usage: Clip(path: String)\n");
         return NIL_VAL;
@@ -84,55 +94,72 @@ Value clipInit(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
     ObjString* path = AS_STRING(args[0]);
     
-    // 1. 加载元数据 (Probe)
+    // 1. Probe
     VideoMeta meta = load_video_metadata(path->chars);
     if (!meta.success) {
         fprintf(stderr, "Runtime Error: Could not load video metadata from '%s'\n", path->chars);
-        // 即便失败也可以返回对象，但属性可能为空，或者在这里返回 NIL 表示失败
-        return OBJ_VAL(thisObj);
+        return OBJ_VAL(thisObj); // 返回空壳或抛出异常
     }
     
-    // 2. 创建底层对象 (ObjClip 内部会自动调用 clip_create)
-    ObjClip* objClip = newClip(vm, path);
+    // 2. Create Media Clip
+    ObjClip* objClip = newClip(vm, path); 
+    if (objClip->clip) clip_free(objClip->clip);
+    objClip->clip = clip_create_media(path->chars);
     
-    // [修改] 获取内部纯 C 结构体指针
-    Clip* inner = objClip->clip; 
-    
-    // [修改] 填充纯 C 结构体数据
+    Clip* inner = objClip->clip;
     inner->duration = meta.duration;
     inner->width = meta.width;
     inner->height = meta.height;
     inner->fps = meta.fps;
-    inner->has_audio = true; // 简化假设，实际应从 meta 读取
+    inner->has_audio = true; // 实际应从 meta 获取
     inner->has_video = true;
     
-    // clip_create 已经设置了默认值，但这里覆盖确保一致
-    inner->default_scale_x = 1.0;
-    inner->default_scale_y = 1.0;
-    inner->default_opacity = 1.0;
-    inner->volume = 1.0;
-    inner->default_x = 0.0; 
-    inner->default_y = 0.0;
-    
-    // 3. 绑定 Handle
+    // 3. Bind
     setHandle(vm, thisObj, (Obj*)objClip);
     
-    // 4. 同步属性到 Luna 实例 (供脚本读取)
+    // 4. Sync Properties
     SET_PROP(thisObj, "width", inner->width);
     SET_PROP(thisObj, "height", inner->height);
-    SET_PROP(thisObj, "volume", inner->volume);
     SET_PROP(thisObj, "fps", inner->fps);
-    SET_PROP(thisObj, "duration", inner->duration);
-    SET_PROP(thisObj, "has_audio", inner->has_audio ? 1 : 0);
-    SET_PROP(thisObj, "has_video", inner->has_video ? 1 : 0);
-   
-    SET_PROP(thisObj, "in_point", inner->in_point);
-    SET_PROP(thisObj, "default_scale_x", inner->default_scale_x);
-    SET_PROP(thisObj, "default_scale_y", inner->default_scale_y);
-    SET_PROP(thisObj, "default_x", inner->default_x);
-    SET_PROP(thisObj, "default_y", inner->default_y);
-    SET_PROP(thisObj, "default_opacity", inner->default_opacity);
+    SET_PROP(thisObj, "has_video", 1);
+    SET_PROP(thisObj, "has_audio", 1);
+    sync_common_props(vm, thisObj, inner);
     
+    return OBJ_VAL(thisObj);
+}
+
+// 构造函数: Text(content: String)
+Value textInit(VM* vm, i32 argCount, Value* args) {
+    if (argCount != 1 || !IS_STRING(args[0])) {
+        fprintf(stderr, "Usage: Text(content: String)\n");
+        return NIL_VAL;
+    }
+    
+    ObjInstance* thisObj = GET_SELF;
+    char* content = AS_CSTRING(args[0]);
+
+    // 1. Create Text Clip (使用默认值)
+    ObjClip* objClip = newClip(vm, AS_STRING(args[0]));
+    if (objClip->clip) clip_free(objClip->clip);
+    
+    // 默认配置：Arial, 32px, 白色
+    // 注意：这里的 font path 必须存在，否则渲染会失败。
+    // 在实际项目中，可以使用内嵌字体或相对路径。
+    objClip->clip = clip_create_text(content, "arial.ttf", 32, 255, 255, 255);
+    
+    Clip* inner = objClip->clip;
+
+    // 2. Bind
+    setHandle(vm, thisObj, (Obj*)objClip);
+
+    // 3. Sync Properties
+    SET_PROP(thisObj, "width", 0);
+    SET_PROP(thisObj, "height", 0);
+    SET_PROP(thisObj, "fps", 0);
+    SET_PROP(thisObj, "has_video", 0);
+    SET_PROP(thisObj, "has_audio", 0);
+    sync_common_props(vm, thisObj, inner);
+
     return OBJ_VAL(thisObj);
 }
 
@@ -234,6 +261,44 @@ Value clipSetOpacity(VM* vm, i32 argCount, Value* args) {
 
     SET_PROP(thisObj, "default_opacity", val);
 
+    return NIL_VAL;
+}
+
+// --- Text 专用 Setters ---
+
+Value textSetFont(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjClip* objClip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
+    if (!objClip || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
+    
+    if (objClip->clip->type == CLIP_TYPE_TEXT) {
+        if (objClip->clip->text.font_path) free(objClip->clip->text.font_path);
+        objClip->clip->text.font_path = strdup(AS_CSTRING(args[0]));
+    }
+    return NIL_VAL;
+}
+
+Value textSetSize(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjClip* objClip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
+    if (!objClip || argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
+    
+    if (objClip->clip->type == CLIP_TYPE_TEXT) {
+        objClip->clip->text.font_size = (u32)AS_NUMBER(args[0]);
+    }
+    return NIL_VAL;
+}
+
+Value textSetColor(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjClip* objClip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
+    if (!objClip || argCount != 3) return NIL_VAL;
+    
+    if (objClip->clip->type == CLIP_TYPE_TEXT) {
+        objClip->clip->text.color.r = (u8)AS_NUMBER(args[0]);
+        objClip->clip->text.color.g = (u8)AS_NUMBER(args[1]);
+        objClip->clip->text.color.b = (u8)AS_NUMBER(args[2]);
+    }
     return NIL_VAL;
 }
 
@@ -392,13 +457,27 @@ static void defineClass(VM* vm, const char* name, NativeFn initFn, void (*method
     pop(vm);
 }
 
-static void registerClipMethods(VM* vm, ObjClass* klass) {
+// 通用方法 (Clip 和 Text 都有)
+static void registerCommonMethods(VM* vm, ObjClass* klass) {
     defineNativeMethod(vm, klass, "trim", clipTrim);
     defineNativeMethod(vm, klass, "export", clipExport);
     defineNativeMethod(vm, klass, "setScale", clipSetScale);
     defineNativeMethod(vm, klass, "setPos", clipSetPos);
     defineNativeMethod(vm, klass, "setOpacity", clipSetOpacity);
+}
+
+// Video Clip 独有
+static void registerClipMethods(VM* vm, ObjClass* klass) {
+    registerCommonMethods(vm, klass);
     defineNativeMethod(vm, klass, "setVolume", clipSetVolume);
+}
+
+// Text 独有
+static void registerTextMethods(VM* vm, ObjClass* klass) {
+    registerCommonMethods(vm, klass);
+    defineNativeMethod(vm, klass, "setFont", textSetFont);
+    defineNativeMethod(vm, klass, "setSize", textSetSize);
+    defineNativeMethod(vm, klass, "setColor", textSetColor);
 }
 
 static void registerTimelineMethods(VM* vm, ObjClass* klass) {
@@ -411,7 +490,8 @@ static void registerProjectMethods(VM* vm, ObjClass* klass) {
 }
 
 void registerVideoBindings(VM* vm) {
-    defineClass(vm, "Clip", clipInit, registerClipMethods);
+    defineClass(vm, "Clip", videoInit, registerClipMethods);
+    defineClass(vm, "Text", textInit, registerTextMethods);
     defineClass(vm, "Timeline", timelineInit, registerTimelineMethods);
     defineClass(vm, "Project", projectInit, registerProjectMethods);
 }

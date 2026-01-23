@@ -88,7 +88,40 @@
 
 ---
 
-## 2. Timeline 类 (时间线)
+
+## 2. Text 类 (文字图层) [新增]
+
+用于创建纯文字图层。
+
+### 构造函数
+#### `Text(content: String)`
+创建一个包含指定内容的文字图层。
+*   **默认属性**: 字体 Arial, 字号 32px, 颜色 白色, 时长 5秒。
+*   **示例**: `var t = Text("Hello World")`
+
+### 方法 (Text 特有)
+
+#### `setFont(path: String)`
+设置字体文件路径。
+*   **示例**: `t.setFont("fonts/Roboto-Bold.ttf")`
+
+#### `setSize(pixels: Number)`
+设置字号大小。
+*   **示例**: `t.setSize(64)`
+
+#### `setColor(r: Number, g: Number, b: Number)`
+设置文字颜色 (0-255)。
+*   **示例**: `t.setColor(255, 0, 0)`
+
+### 方法 (通用)
+*   `trim(start, duration)`: 调整文字显示的入点和持续时间。
+*   `setPos(x, y)`: 设置文字位置。
+*   `setScale(scale)`: 设置文字缩放。
+*   `setOpacity(opacity)`: 设置透明度。
+
+---
+
+## 3. Timeline 类 (时间线)
 
 `Timeline` 用于管理多个轨道和素材，负责将素材组合在一起。
 
@@ -119,7 +152,7 @@
 
 ---
 
-## 3. Project 类 (项目)
+## 4. Project 类 (项目)
 
 `Project` 是最高层级的容器，用于配置全局参数并连接渲染引擎。
 
@@ -161,7 +194,7 @@
 
 ---
 
-## 4. 完整示例代码
+## 5. 完整示例代码
 
 ```javascript
 # 1. 创建项目

@@ -207,11 +207,10 @@ static void draw_clip_text(Compositor* comp, TimelineClip* tc) {
         GlyphInfo* glyph = text_renderer_get_glyph(tr, *p);
         
         float xpos = start_x + (x_cursor + glyph->bearing_x) * scale;
-        // 字体基线校正 (FreeType origin 是基线，GL origin 是左上/左下，需根据实际坐标系调整)
-        // 这里假设 Y 向下增加 (常见 2D 坐标系)
-        float ypos = start_y + (glyph->bearing_y) * scale; // 需微调
-        // 简化版：直接对齐顶部
-        ypos = start_y; 
+        float font_size = (float)clip->text.font_size; // 需确保 Clip 结构体里有这个值
+        float baseline_y = start_y + font_size; // 简单估算基线位置
+        // 修改 ypos 计算：
+        float ypos = baseline_y - (glyph->bearing_y * scale);
 
         float w = glyph->width * scale;
         float h = glyph->height * scale;
@@ -223,7 +222,7 @@ static void draw_clip_text(Compositor* comp, TimelineClip* tc) {
         // 设置 UV 范围 (u0, v0, u1, v1)
         // 注意：v0/v1 顺序取决于纹理坐标系。GL原点在左下，FreeType生成的图集通常也是。
         // 但 Quad 也是 0..1。我们传入 (u0, v1, u1, v0) 可能需要根据翻转情况调整。
-        glUniform4f(loc_uv, glyph->u0, glyph->v1, glyph->u1, glyph->v0); 
+        glUniform4f(loc_uv, glyph->u0, glyph->v0, glyph->u1, glyph->v1); 
         
         glBindVertexArray(comp->vao);
         glDrawArrays(GL_TRIANGLES, 0, 6);

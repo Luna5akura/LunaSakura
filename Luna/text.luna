@@ -1,0 +1,40 @@
+# text.luna
+
+# 1. 初始化
+var proj = Project(960, 540, 30)
+var tl = Timeline(960, 540, 30)
+proj.setTimeline(tl)
+
+# 2. 背景视频
+print "Loading Video..."
+var video = Clip("test.mp4")
+if video != nil:
+    video.trim(0, 10)
+    video.setScale(1.0)
+    tl.add(0, video, 0)
+
+# 3. 标题文字
+print "Creating Title..."
+var title = Text("LUNA ENGINE")
+
+# 链式配置 (如果你实现了 return this) 或者分步配置
+title.setFont("arial.ttf")
+title.setSize(80)
+title.setColor(255, 200, 50) # 金黄色
+title.setPos(100, 100)
+title.trim(0, 5) # 显示前5秒
+
+tl.add(1, title, 0) # 轨道1，0秒开始
+
+# 4. 字幕文字
+var sub = Text("Rendered with OpenGL & C")
+sub.setSize(30)
+sub.setPos(100, 200)
+sub.setOpacity(0.8)
+
+tl.add(1, sub, 1) # 轨道1，1秒开始
+
+print "Timeline Duration: "
+print tl.duration
+
+proj.preview()
