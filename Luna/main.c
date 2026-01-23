@@ -31,10 +31,10 @@ static void main_mark_roots(VM* vm) {
     // 1. 获取上下文
     EngineContext* ctx = (EngineContext*)vm->user_data;
     
-    // 2. 如果当前有活跃项目，且项目有时间轴，则标记时间轴
-    if (ctx && ctx->active_project && ctx->active_project->timeline) {
-        timeline_mark(vm, ctx->active_project->timeline);
-    }
+    // // 2. 如果当前有活跃项目，且项目有时间轴，则标记时间轴
+    // if (ctx && ctx->active_project && ctx->active_project->timeline) {
+    //     timeline_mark(vm, ctx->active_project->timeline);
+    // }
 }
 
 

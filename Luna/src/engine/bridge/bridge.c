@@ -1,13 +1,77 @@
 // src/engine/bridge/bridge.c
 
 #include "object.h"
-#include "core/memory.h"  // 需要 ALLOCATE, FREE, markObject
-#include "engine/engine.h"
-#include "core/vm/vm.h"      // 需要 VM 定义
+#include "core/memory.h"  // 这里包含真正的 memory 实现
+#include "core/vm/vm.h"   // 这里包含 VM 定义
+#include "engine/model/timeline.h" 
 
-// ============================================================================
-// 1. Clip Implementation
-// ============================================================================
+
+static void markRawTimeline(VM* vm, Timeline* tl) {
+    if (!tl) return;
+
+    for (uint32_t i = 0; i < tl->track_count; i++) {
+        Track* track = &tl->tracks[i];
+        for (uint32_t j = 0; j < track->clip_count; j++) {
+            TimelineClip* tc = &track->clips[j];
+            
+            // 关键点：通过 user_data 找回 ObjClip
+            if (tc->media && tc->media->user_data) {
+                markObject(vm, (Obj*)tc->media->user_data);
+            }
+        }
+    }
+}
+
+// --- 1. 适配器实现 ---
+
+// 这个静态函数符合 ReallocFn 签名
+static void* vm_realloc_wrapper(void* ctx, void* ptr, size_t old_size, size_t new_size) {
+    VM* vm = (VM*)ctx;
+    // 调用 core/memory.c 中的 reallocate
+    // 这样 Model 层的分配依然会被计入 vm->bytesAllocated，从而触发 GC
+    return reallocate(vm, ptr, old_size, new_size);
+}
+
+// --- 2. Timeline 对象实现 ---
+
+static void timelineFree(VM* vm, Obj* obj) {
+    ObjTimeline* oTl = (ObjTimeline*)obj;
+    if (oTl->timeline) {
+        // 调用 pure C 的释放函数
+        timeline_free(oTl->timeline);
+        oTl->timeline = NULL;
+    }
+}
+
+// --- 关键：手动标记逻辑 ---
+// Model 层不知道 "markObject"，所以由 Bridge 层遍历 C 结构体来找到需要标记的对象
+static void timelineMark(VM* vm, Obj* obj) {
+    ObjTimeline* oTl = (ObjTimeline*)obj;
+    if (oTl->timeline) {
+        // 复用辅助函数
+        markRawTimeline(vm, oTl->timeline);
+    }
+}
+
+const ForeignClassMethods TimelineMethods = {
+    "timeline",
+    NULL,
+    timelineFree,
+    timelineMark
+};
+
+ObjTimeline* newTimeline(VM* vm, uint32_t width, uint32_t height, double fps) {
+    ObjTimeline* obj = (ObjTimeline*)newForeign(vm, sizeof(ObjTimeline), &TimelineMethods);
+    
+    // 构造分配器接口，传入 vm 指针
+    Allocator allocator;
+    allocator.ctx = vm;
+    allocator.fn = vm_realloc_wrapper;
+
+    // 传入分配器创建 Model
+    obj->timeline = timeline_create(&allocator, width, height, fps);
+    return obj;
+}
 
 static void clipFree(VM* vm, Obj* obj) {
     ObjClip* oClip = (ObjClip*)obj;
@@ -46,43 +110,6 @@ ObjClip* newClip(VM* vm, ObjString* path) {
 }
 
 // ============================================================================
-// 2. Timeline Implementation
-// ============================================================================
-
-// GC 释放阶段回调：必须释放 timeline_create 分配的 C 内存
-static void timelineFree(VM* vm, Obj* obj) {
-    ObjTimeline* oTl = (ObjTimeline*)obj;
-    if (oTl->timeline) {
-        // 调用 engine/timeline.c 中的销毁函数
-        timeline_free(vm, oTl->timeline); 
-        oTl->timeline = NULL;
-    }
-}
-
-// GC 标记阶段回调
-static void timelineMark(VM* vm, Obj* obj) {
-    ObjTimeline* oTl = (ObjTimeline*)obj;
-    if (oTl->timeline) {
-        // 调用 engine/timeline.c 中的标记函数，遍历所有 Track 和 Clips
-        timeline_mark(vm, oTl->timeline);
-    }
-}
-
-const ForeignClassMethods TimelineMethods = {
-    "timeline",
-    NULL,
-    timelineFree, // 必须注册
-    timelineMark
-};
-
-ObjTimeline* newTimeline(VM* vm, u32 width, u32 height, double fps) {
-    ObjTimeline* obj = (ObjTimeline*)newForeign(vm, sizeof(ObjTimeline), &TimelineMethods);
-    // 调用实际的引擎创建逻辑
-    obj->timeline = timeline_create(vm, width, height, fps);
-    return obj;
-}
-
-// ============================================================================
 // 3. Project Implementation
 // ============================================================================
 
@@ -102,10 +129,10 @@ static void projectFree(VM* vm, Obj* obj) {
 
 static void projectMark(VM* vm, Obj* obj) {
     ObjProject* oProj = (ObjProject*)obj;
-    if (oProj->project && oProj->project->timeline) {
-        // 标记 Project 持有的 Timeline
-        // 注意：如果 Project->timeline 是 Timeline* (Raw C Ptr)，我们需要手动递归标记
-        timeline_mark(vm, oProj->project->timeline);
+    if (oProj->timelineObj) {
+        // 标记 ObjTimeline，由于 ObjTimeline 会标记它内部的 Clip，
+        // 所以这里不需要再调用 markRawTimeline 了，一举两得。
+        markObject(vm, (Obj*)oProj->timelineObj);
     }
 }
 

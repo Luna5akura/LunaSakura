@@ -1,3 +1,5 @@
+// src/engine/bridge/object.h
+
 #pragma once
 
 #include "core/object.h"
@@ -24,6 +26,7 @@ typedef struct {
 typedef struct {
     ObjForeign header;
     Project* project; 
+    struct ObjTimeline* timelineObj; // [新增] 强引用
 } ObjProject;
 
 // --- Method Tables ---

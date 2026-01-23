@@ -276,12 +276,12 @@ Value timelineAdd(VM* vm, i32 argCount, Value* args) {
     }
     
     while (tlObj->timeline->track_count <= (u32)trackIdx) {
-        timeline_add_track(vm, tlObj->timeline);
+        timeline_add_track(tlObj->timeline);
     }
     
     // [修改] 关键点：将封装对象解包，传递纯数据指针 (Clip*) 给引擎核心
     // timeline_add_clip 现在定义在 engine/model/timeline.h 中，接受 Clip*
-    timeline_add_clip(vm, tlObj->timeline, trackIdx, objClip->clip, start);
+    timeline_add_clip(tlObj->timeline, trackIdx, objClip->clip, start);
 
     // 更新时长
     SET_PROP(thisObj, "duration", tlObj->timeline->duration);

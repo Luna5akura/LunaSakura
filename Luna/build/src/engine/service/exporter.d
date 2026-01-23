@@ -1,10 +1,11 @@
 build/src/engine/service/exporter.o: src/engine/service/exporter.c \
  src/engine/service/exporter.h src/engine/model/timeline.h src/common.h \
- src/engine/bridge/object.h src/core/object.h src/core/chunk.h \
- src/core/value.h src/core/table.h src/engine/model/clip.h \
- src/engine/model/project.h src/engine/model/transform.h \
- src/engine/media/codec/encoder.h src/core/memory.h src/core/vm/vm.h \
- src/core/vm/error.h src/engine/engine.h src/engine/render/compositor.h \
+ src/allocator.h src/engine/bridge/object.h src/core/object.h \
+ src/core/chunk.h src/core/value.h src/core/table.h \
+ src/engine/model/clip.h src/engine/model/project.h \
+ src/engine/model/transform.h src/engine/media/codec/encoder.h \
+ src/core/memory.h src/core/vm/vm.h src/core/vm/error.h \
+ src/engine/engine.h src/engine/render/compositor.h \
  src/engine/media/codec/decoder.h include/glad/glad.h \
  include/KHR/khrplatform.h src/engine/media/audio/mixer.h \
  src/engine/media/utils/probe.h src/engine/service/preview.h \
@@ -12,6 +13,7 @@ build/src/engine/service/exporter.o: src/engine/service/exporter.c \
 src/engine/service/exporter.h:
 src/engine/model/timeline.h:
 src/common.h:
+src/allocator.h:
 src/engine/bridge/object.h:
 src/core/object.h:
 src/core/chunk.h:

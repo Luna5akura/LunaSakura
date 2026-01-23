@@ -2,11 +2,7 @@
 
 #include "engine/model/timeline.h"
 #include <stdio.h>
-#include <stdlib.h>
-#include <math.h>
 #include <string.h>
-#include "core/memory.h"
-#include "core/vm/vm.h" // 需要 VM 进行内存分配
 
 #define INITIAL_TRACK_CAPACITY 4
 
@@ -17,54 +13,53 @@ static double get_clip_end_time(TimelineClip* clip) {
 
 // === Lifecycle ===
 
-Timeline* timeline_create(VM* vm, u32 width, u32 height, double fps) {
-    Timeline* tl = ALLOCATE(vm, Timeline, 1);
+
+Timeline* timeline_create(Allocator* allocator, uint32_t width, uint32_t height, double fps) {
+    // 使用通用宏 MEM_ALLOC
+    Timeline* tl = MEM_ALLOC(allocator, Timeline, 1);
     if (!tl) return NULL;
     memset(tl, 0, sizeof(Timeline));
     
+    // 保存分配器上下文
+    tl->allocator = *allocator; 
+
     tl->width = width;
     tl->height = height;
     tl->fps = fps;
-    tl->duration = 0.0;
- 
-    // Default background: Black
-    tl->background_color.r = 0;
-    tl->background_color.g = 0;
-    tl->background_color.b = 0;
-    tl->background_color.a = 255; 
+    tl->background_color.a = 255;
 
-    // Initialize tracks array
-    tl->track_capacity = INITIAL_TRACK_CAPACITY;
-    tl->tracks = ALLOCATE(vm, Track, tl->track_capacity);
+    tl->track_capacity = 4;
+    // 使用 MEM_ALLOC
+    tl->tracks = MEM_ALLOC(allocator, Track, tl->track_capacity);
     memset(tl->tracks, 0, sizeof(Track) * tl->track_capacity);
-    tl->track_count = 0;
     
     return tl;
 }
 
-void timeline_free(VM* vm, Timeline* tl) {
+void timeline_free(Timeline* tl) {
     if (!tl) return;
+    Allocator* a = &tl->allocator; // 获取保存的分配器
     
-    // 1. Free all tracks and their clips
-    for (i32 i = 0; i < (i32)tl->track_count; i++) {
+    for (int i = 0; i < (int)tl->track_count; i++) {
         Track* track = &tl->tracks[i];
         if (track->clips) {
-            FREE_ARRAY(vm, TimelineClip, track->clips, track->clip_capacity);
+            // 使用 MEM_FREE_ARRAY
+            MEM_FREE_ARRAY(a, TimelineClip, track->clips, track->clip_capacity);
         }
     }
     
-    // 2. Free container
-    if (tl->tracks) FREE_ARRAY(vm, Track, tl->tracks, tl->track_capacity);
-    FREE(vm, Timeline, tl);
+    MEM_FREE_ARRAY(a, Track, tl->tracks, tl->track_capacity);
+    MEM_FREE(a, Timeline, tl); // 释放自身，此时 a 指针失效，但函数也结束了
 }
 
 // === Track Management ===
 
-i32 timeline_add_track(VM* vm, Timeline* tl) {
+i32 timeline_add_track(Timeline* tl) {
+    Allocator* a = &tl->allocator;
     // Resize capacity if needed
     if (tl->track_count >= tl->track_capacity) {
-        u32 new_capacity = tl->track_capacity * 2;
-        tl->tracks = GROW_ARRAY(vm, Track, tl->tracks, tl->track_capacity, new_capacity);
+        u32 new_capacity = MEM_GROW_CAPACITY(tl->track_capacity);
+        tl->tracks = MEM_GROW_ARRAY(a, Track, tl->tracks, tl->track_capacity, new_capacity);
         if (!tl->tracks) return -1;
      
         // Zero out new slots
@@ -79,7 +74,7 @@ i32 timeline_add_track(VM* vm, Timeline* tl) {
     snprintf(track->name, sizeof(track->name), "Track %d", track->id + 1);
     
     track->clip_capacity = 8; // Initial capacity for clips
-    track->clips = ALLOCATE(vm, TimelineClip, track->clip_capacity);
+    track->clips = MEM_ALLOC(a, TimelineClip, track->clip_capacity);
     memset(track->clips, 0, sizeof(TimelineClip) * track->clip_capacity);
     
     track->clip_count = 0;
@@ -89,12 +84,13 @@ i32 timeline_add_track(VM* vm, Timeline* tl) {
     return (i32)tl->track_count++;
 }
 
-void timeline_remove_track(VM* vm, Timeline* tl, i32 track_index) {
+void timeline_remove_track(Timeline* tl, i32 track_index) {
+    Allocator* a = &tl->allocator;
     if (track_index < 0 || track_index >= (i32)tl->track_count) return;
  
     // Free the track clips
     Track* track = &tl->tracks[track_index];
-    if (track->clips) FREE_ARRAY(vm, TimelineClip, track->clips, track->clip_capacity);
+    if (track->clips) MEM_FREE_ARRAY(a, TimelineClip, track->clips, track->clip_capacity);
     
     // Shift remaining tracks
     for (i32 i = track_index; i < (i32)tl->track_count - 1; i++) {
@@ -120,14 +116,15 @@ void timeline_update_duration(Timeline* tl) {
     tl->duration = max_duration;
 }
 
-i32 timeline_add_clip(VM* vm, Timeline* tl, i32 track_index, Clip* media, double start_time) {
+i32 timeline_add_clip(Timeline* tl, i32 track_index, Clip* media, double start_time) {
+    Allocator* a = &tl->allocator;
     if (track_index < 0 || track_index >= (i32)tl->track_count) return -1;
     Track* track = &tl->tracks[track_index];
     
     // Resize clips if needed
     if (track->clip_count >= track->clip_capacity) {
         u32 new_cap = track->clip_capacity * 2;
-        track->clips = GROW_ARRAY(vm, TimelineClip, track->clips, track->clip_capacity, new_cap);
+        track->clips = MEM_GROW_ARRAY(a, TimelineClip, track->clips, track->clip_capacity, new_cap);
         if (!track->clips) return -1;
         // Zero init is optional here since we will memmove, but good for safety
         memset(track->clips + track->clip_count, 0, (new_cap - track->clip_count) * sizeof(TimelineClip));
@@ -234,18 +231,4 @@ TimelineClip* timeline_get_clip_at(Track* track, double time) {
     }
     
     return NULL;
-}
-
-void timeline_mark(VM* vm, Timeline* tl) {
-    if (!tl) return;
-    for (uint32_t i = 0; i < tl->track_count; i++) {
-        Track* track = &tl->tracks[i];
-        for (uint32_t j = 0; j < track->clip_count; j++) {
-            TimelineClip* tc = &track->clips[j];
-            if (tc->media && tc->media->user_data) {
-                // 通过 user_data 找回 ObjClip 进行标记
-                markObject(vm, (Obj*)tc->media->user_data);
-            }
-        }
-    }
 }

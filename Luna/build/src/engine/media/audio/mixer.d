@@ -3,7 +3,7 @@ build/src/engine/media/audio/mixer.o: src/engine/media/audio/mixer.c \
  include/glad/glad.h include/KHR/khrplatform.h src/engine/bridge/object.h \
  src/core/object.h src/core/chunk.h src/core/value.h src/common.h \
  src/core/table.h src/engine/model/clip.h src/engine/model/timeline.h \
- src/engine/model/transform.h src/engine/model/project.h
+ src/allocator.h src/engine/model/transform.h src/engine/model/project.h
 src/engine/media/audio/mixer.h:
 src/engine/media/codec/decoder.h:
 include/glad/glad.h:
@@ -16,5 +16,6 @@ src/common.h:
 src/core/table.h:
 src/engine/model/clip.h:
 src/engine/model/timeline.h:
+src/allocator.h:
 src/engine/model/transform.h:
 src/engine/model/project.h:
