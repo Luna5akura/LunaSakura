@@ -117,11 +117,13 @@ static RenderSource* get_source_safe(Compositor* comp, Clip* clip) {
     
     // 2. 创建新的
     if (comp->source_count >= comp->source_capacity) {
-        int old = comp->source_capacity;
-        comp->source_capacity = old < 8 ? 8 : old * 2;
-        // 注意：这里要按照 RenderSource 结构体大小扩容
-        comp->render_sources = reallocate(comp->vm, comp->render_sources, 
-            sizeof(RenderSource) * old, sizeof(RenderSource) * comp->source_capacity);
+        int old_capacity = comp->source_capacity;
+        comp->source_capacity = MEM_GROW_CAPACITY(old_capacity);
+        
+        // 使用宏进行扩容，保持代码风格一致
+        comp->render_sources = GROW_ARRAY(comp->vm, RenderSource, 
+            comp->render_sources, old_capacity, comp->source_capacity);
+            
         sources = (RenderSource*)comp->render_sources;
     }
     
@@ -146,6 +148,21 @@ static RenderSource* get_source_safe(Compositor* comp, Clip* clip) {
     }
     
     return src;
+}
+
+static GLuint build_shader_program(const char* vs_src, const char* fs_src) {
+    GLuint vs = compile_shader(vs_src, GL_VERTEX_SHADER);
+    GLuint fs = compile_shader(fs_src, GL_FRAGMENT_SHADER);
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+    glLinkProgram(program);
+    
+    // 可选：检查 Link 状态
+    
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    return program;
 }
 
 // static Decoder* get_decoder_safe(Compositor* comp, Clip* clip) {
@@ -202,14 +219,9 @@ Compositor* compositor_create(VM* vm, Timeline* timeline) {
     comp->timeline = timeline;
     comp->mixer = mixer_create(44100);
 
-    GLuint vs = compile_shader(VS_SOURCE, GL_VERTEX_SHADER);
-    GLuint fs = compile_shader(FS_SOURCE_YUV, GL_FRAGMENT_SHADER);
-    comp->shader_program = glCreateProgram();
-    glAttachShader(comp->shader_program, vs);
-    glAttachShader(comp->shader_program, fs);
-    glLinkProgram(comp->shader_program);
-    glDeleteShader(vs); glDeleteShader(fs);
-    
+
+    comp->shader_program = build_shader_program(VS_SOURCE, FS_SOURCE_YUV);
+
     // Quad for rendering (Full Rect)
     float quad[] = { 
         0,0, 0,0, 
@@ -322,34 +334,53 @@ void compositor_render(Compositor* comp, double time) {
             if (new_frame) {
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
                 
+                // 检查尺寸是否变更，决定是 Realloc 还是 Update
+                bool resize = (src->width != fw || src->height != fh);
+                if (resize) {
+                    src->width = fw;
+                    src->height = fh;
+                }
+
                 // Y Plane
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, src->tex_y);
                 glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[0]);
-                // [修改] 使用 fw 和 fh
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw, fh, 
-                             0, GL_RED, GL_UNSIGNED_BYTE, data[0]);
+                if (resize) {
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw, fh, 
+                                 0, GL_RED, GL_UNSIGNED_BYTE, data[0]);
+                } else {
+                    // [优化] 使用 SubImage
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw, fh,
+                                    GL_RED, GL_UNSIGNED_BYTE, data[0]);
+                }
 
                 // U Plane
                 glActiveTexture(GL_TEXTURE1);
                 glBindTexture(GL_TEXTURE_2D, src->tex_u);
                 glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[1]);
-                // [修改] 使用 fw/2 和 fh/2
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw/2, fh/2, 
-                             0, GL_RED, GL_UNSIGNED_BYTE, data[1]);
+                if (resize) {
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw/2, fh/2, 
+                                 0, GL_RED, GL_UNSIGNED_BYTE, data[1]);
+                } else {
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw/2, fh/2,
+                                    GL_RED, GL_UNSIGNED_BYTE, data[1]);
+                }
 
-                // V Plane
+                // V Plane (同理)
                 glActiveTexture(GL_TEXTURE2);
                 glBindTexture(GL_TEXTURE_2D, src->tex_v);
                 glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[2]);
-                // [修改] 使用 fw/2 和 fh/2
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw/2, fh/2, 
-                             0, GL_RED, GL_UNSIGNED_BYTE, data[2]);
+                if (resize) {
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw/2, fh/2, 
+                                 0, GL_RED, GL_UNSIGNED_BYTE, data[2]);
+                } else {
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw/2, fh/2,
+                                    GL_RED, GL_UNSIGNED_BYTE, data[2]);
+                }
                              
                 glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
             }
             
-            // 绘制
             draw_clip_rect(comp, src, tc);
         }
 
@@ -370,13 +401,7 @@ void compositor_blit_to_screen(Compositor* comp, i32 window_width, i32 window_he
     
     // Lazy Compile Screen Shader
     if (blit_program == 0) {
-        GLuint vs = compile_shader(VS_SCREEN, GL_VERTEX_SHADER);
-        GLuint fs = compile_shader(FS_SCREEN, GL_FRAGMENT_SHADER);
-        blit_program = glCreateProgram();
-        glAttachShader(blit_program, vs);
-        glAttachShader(blit_program, fs);
-        glLinkProgram(blit_program);
-        glDeleteShader(vs); glDeleteShader(fs);
+        blit_program = build_shader_program(VS_SCREEN, FS_SCREEN);
     }
     
     // Draw to Default Framebuffer (Screen)

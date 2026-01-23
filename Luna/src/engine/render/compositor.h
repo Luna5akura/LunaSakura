@@ -3,12 +3,10 @@
 #pragma once
 
 #include <SDL2/SDL.h>
-#include <glad/glad.h> // 必须引入 GL，因为 Compositor 负责渲染
-#include "allocator.h" // 如果 Compositor 也用分配器
+#include <glad/glad.h> 
 #include "engine/model/timeline.h"
 #include "engine/media/audio/mixer.h"
 
-// 前向声明 VM
 typedef struct VM VM;
 
 typedef struct Compositor {
@@ -23,7 +21,6 @@ typedef struct Compositor {
     uint8_t* cpu_output_buffer;
     bool cpu_buffer_stale;
     
-    // [修改] 渲染源列表 (RenderSource 数组，内部包含 Decoder 和 Textures)
     // 为了不在头文件暴露 RenderSource 结构体，使用 void* 
     void* render_sources; 
     int32_t source_count;
@@ -32,7 +29,6 @@ typedef struct Compositor {
     AudioMixer* mixer;
 } Compositor;
 
-// ... (API 函数签名不变) ...
 Compositor* compositor_create(VM* vm, Timeline* timeline);
 void compositor_free(VM* vm, Compositor* comp);
 void compositor_render(Compositor* comp, double time);

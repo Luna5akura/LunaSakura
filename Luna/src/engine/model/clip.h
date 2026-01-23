@@ -3,29 +3,46 @@
 #pragma once
 
 #include "common.h"
+#include "engine/model/transform.h"
 
-// 纯数据结构，不依赖虚拟机
-typedef struct Clip {
-    // 用于 GC 的反向指针（Bridge 层赋值，Engine 层不使用但保留位置）
-    void* user_data; 
+typedef enum {
+    CLIP_TYPE_MEDIA,
+    CLIP_TYPE_TEXT
+} ClipType;
 
-    // 资源路径 (不再使用 ObjString，改用纯 char*)
-    char* path;
+typedef struct {
+    char* content;
+    char* font_path;
+    u32 font_size;
+    struct { u8 r, g, b, a; } color;
     
-    // 基础属性
+    // 缓存一些度量值，避免每次都重算
+    float cached_width;
+    float cached_height;
+} TextData;
+
+typedef struct Clip {
+    void* user_data; 
+    ClipType type;
+
+    // 通用属性
+    char* path; // MEDIA用作文件路径，TEXT用作ID或空
     double duration;
     double start_time;
     double in_point;
     double out_point;
     double fps;
 
-    // 媒体信息
+    // MEDIA 属性
     bool has_video;
     bool has_audio;
     i32 audio_channels;
     i32 audio_sample_rate;
 
-    // 变换属性默认值
+    // TEXT 属性
+    TextData text;
+
+    // 变换默认值
     double default_scale_x;
     double default_scale_y;
     double default_x;
@@ -38,5 +55,6 @@ typedef struct Clip {
     i32 layer;
 } Clip;
 
-Clip* clip_create(const char* path);
+Clip* clip_create_media(const char* path);
+Clip* clip_create_text(const char* content, const char* font_path, u32 size, u8 r, u8 g, u8 b);
 void clip_free(Clip* clip);

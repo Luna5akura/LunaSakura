@@ -1,74 +1,53 @@
-以下是各个模块和主要文件的职责介绍：
+基于我们刚才完成的架构重构和代码清理，以下是各个核心文件的简短功能说明，按照模块分类：
 
-### 1. Core (虚拟机核心层)
-> **职责**：负责脚本语言的编译、执行、内存管理和垃圾回收 (GC)。这部分代码不知道“视频剪辑”是什么，它只懂字节码和对象。
+### 1. Engine Core (引擎入口)
+*   **`src/engine/engine.h`**:
+    **引擎总头文件**。聚合了所有子模块的头文件，定义了引擎的上下文结构，供外部（如绑定层）一次性引入。
 
-*   **`core/vm/`**: 虚拟机的运行时环境。
-    *   `vm.c/h`: 解释器的主循环，负责执行指令、管理栈。
-*   **`core/memory.c/h`**: 内存分配器。负责 `malloc`/`free` 以及最重要的 GC (标记-清除)。
-*   **`core/object.h`**: 定义了脚本中对象的基础头结构 (`Obj`, `ObjString`, `ObjInstance` 等)。
+### 2. Model (纯数据模型层)
+> **特点**：不依赖虚拟机，纯 C 数据结构。
+*   **`src/engine/model/clip.h / .c`**:
+    **素材模型**。定义单个媒体文件的基础属性（路径、原始时长、分辨率、是否有音轨等）。
+*   **`src/engine/model/timeline.h / .c`**:
+    **时间轴模型**。管理多轨道（Track）和片段（TimelineClip）的排列、插入、删除和排序逻辑。
+*   **`src/engine/model/transform.h`**:
+    **变换结构**。定义位置（x, y）、缩放、旋转和透明度的数据结构，内存对齐以利于计算。
+*   **`src/engine/model/project.h`**:
+    **项目配置**。持有时间轴实例以及全局设置（画布分辨率、帧率、预览范围）。
 
-### 2. Binding (绑定层 / API 适配层)
-> **职责**：充当“翻译官”。它将脚本语言的函数调用（如 `clip.trim()`）翻译成 C 语言的底层操作，并将底层数据（C 结构体）包装成脚本对象返回。
+### 3. Media (媒体处理层)
+> **特点**：基于 FFmpeg 和 SDL 处理音视频 I/O。
+*   **`src/engine/media/utils/ffmpeg_utils.h / .c`**:
+    **FFmpeg 封装工具**。提供统一的打开文件、查找流、初始化编解码器上下文的辅助函数，简化错误处理。
+*   **`src/engine/media/utils/probe.h / .c`**:
+    **元数据探测器**。在不完全解码的情况下，快速读取视频文件的宽、高、FPS 和时长信息。
+*   **`src/engine/media/codec/decoder.h / .c`**:
+    **解码器**。负责后台线程读取视频文件，维护帧队列，输出原始 YUV 图像数据和 PCM 音频数据。
+*   **`src/engine/media/codec/encoder.h / .c`**:
+    **编码器**。负责将原始图像数据（RGB 或 YUV）压缩编码为 H.264/MP4 文件，支持格式自动转换。
+*   **`src/engine/media/audio/mixer.h / .c`**:
+    **音频混音器**。管理 SDL 音频设备，将多个解码器的音频流进行实时叠加（混音）并输出到扬声器。
 
-*   **`binding/bind_video.c`**:
-    *   注册类（Clip, Timeline, Project）到虚拟机中。
-    *   解析脚本传递的参数（检查类型、转换数字等）。
-    *   **关键点**：它持有 `ObjClip`（包装器），从中取出 `Clip*`（纯数据），然后传给 Engine 层。
+### 4. Render (渲染层)
+> **特点**：基于 OpenGL 处理图像合成。
+*   **`src/engine/render/compositor.h / .c`**:
+    **合成器**。渲染管线的核心。根据时间轴数据，驱动解码器获取纹理，运行 Shader 处理位置变换和图层叠加，将结果绘制到 FBO 或屏幕。
 
-### 3. Engine - Bridge (桥接层 / 对象定义层)
-> **职责**：定义 C 引擎的数据如何在虚拟机中“存在”。它是连接 Core 和 Engine Model 的胶水。
+### 5. Service (业务服务层)
+> **特点**：组合上述模块实现高级功能。
+*   **`src/engine/service/exporter.h / .c`**:
+    **导出服务**。协调 Compositor 和 Encoder，逐帧渲染时间轴内容并写入最终的视频文件。
+*   **`src/engine/service/transcoder.h / .c`**:
+    **转码服务**。高效的“解码 -> 编码”管道。用于素材格式转换或剪切，绕过渲染层以获得最高速度。
+*   **`src/engine/service/preview.h / .c`**:
+    **预览服务**。提供一个独立的调试窗口，用于播放和查看单个素材的内容。
 
-*   **`engine/bridge/object.h`**:
-    *   定义 `ObjClip`, `ObjTimeline`。
-    *   这些结构体必须包含 `ObjForeign` 头，以便被 GC 管理。
-    *   **重构后**：它们现在只持有一个指向底层纯数据的指针（如 `Clip* clip`），不再包含具体业务属性。
-*   **`engine/bridge/bridge.c`**:
-    *   实现 GC 的回调函数（`mark` 和 `free`）。当虚拟机想销毁 `ObjClip` 时，这里负责去 `free(clip)`。
-
-### 4. Engine - Model (纯数据模型层) - *核心重构区域*
-> **职责**：定义业务数据的**纯 C 结构**。这部分代码**不依赖**虚拟机的对象系统（`Obj`），理论上可以移植到任何 C 项目中。
-
-*   **`engine/model/clip.h/c`**:
-    *   定义 `struct Clip`。包含路径、时长、变换参数等纯数据。
-    *   提供 `clip_create`/`clip_free`。
-*   **`engine/model/timeline.h/c`**:
-    *   定义 `struct Timeline` 和 `struct Track`。
-    *   管理 `Clip*` 的集合，处理插入、删除、排序逻辑。
-*   **`engine/model/transform.h`**:
-    *   定义位置、缩放、旋转的数学结构。
-
-### 5. Engine - Media (媒体处理层)
-> **职责**：处理音视频文件的编解码 I/O。依赖 FFmpeg，服务于 Model。
-
-*   **`engine/media/utils/ffmpeg_utils.c`**: 封装 FFmpeg 繁琐的初始化和打开文件流程。
-*   **`engine/media/utils/probe.c`**: “探针”。只读不写，快速获取视频的宽高、时长、FPS。
-*   **`engine/media/codec/decoder.c`**:
-    *   **消费者**：读取 `Clip` 数据。
-    *   **生产者**：输出 GL 纹理 (YUV) 和 音频 PCM 数据。
-    *   实现核心的解码线程。
-*   **`engine/media/codec/encoder.c`**:
-    *   负责将 RGB 像素数据编码成 H.264/MP4 文件。
-*   **`engine/media/audio/mixer.c`**:
-    *   音频混音器。将多个 Decoder 的 PCM 数据叠加，输出到扬声器。
-
-### 6. Engine - Render (渲染层)
-> **职责**：处理图像合成。依赖 OpenGL。
-
-*   **`engine/render/compositor.c`**:
-    *   **输入**：`Timeline`（包含多个 Clip 的位置信息）+ 当前时间 `t`。
-    *   **处理**：调用 `Decoder` 获取纹理，根据 `Transform` 运行 Shader 进行合成。
-    *   **输出**：渲染到 FBO（用于导出）或 屏幕（用于预览）。
-
-### 7. Engine - Service (业务服务层)
-> **职责**：组合上述模块，提供高级功能。这是 `bind_video.c` 通常直接调用的地方。
-
-*   **`engine/service/exporter.c`**:
-    *   导出流程控制器。循环调用：`Compositor` 渲染一帧 -> `Encoder` 编码一帧。
-*   **`engine/service/transcoder.c`**:
-    *   转码服务。不经过渲染层，直接从 `Decoder` 管道接 `Encoder`，用于格式转换或剪切。
-*   **`engine/service/preview.c`**:
-    *   提供简单的调试预览窗口（SDL Window）。
+### 6. Bridge (虚拟机桥接层)
+> **特点**：连接 Core 和 Engine，管理生命周期。
+*   **`src/engine/bridge/object.h`**:
+    **对象定义**。定义虚拟机可识别的结构体（`ObjClip`, `ObjTimeline`），它们内部持有指向 Model 层纯数据的指针。
+*   **`src/engine/bridge/bridge.c`**:
+    **生命周期管理**。实现这些对象的创建函数，以及垃圾回收（GC）所需的标记（Mark）和释放（Free）回调，确保 C 内存不泄漏。
 
 以下是 **Core (虚拟机核心层)** 各个模块的职责总结，以及对解耦情况的分析。
 

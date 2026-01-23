@@ -16,7 +16,8 @@ pkgs.mkShell {
     nodejs_20
     xorg.libX11
     libva       
-    libdrm      # <--- 【这里是新增的】提供 drm_fourcc.h 和 libdrm 库
+    libdrm 
+    freetype
   ];
 
   shellHook = ''
@@ -26,6 +27,12 @@ pkgs.mkShell {
         echo "✅ libdrm found: $(pkg-config --modversion libdrm)"
     else
         echo "❌ libdrm not found by pkg-config"
+    fi
+    # 新增：验证 pkg-config 能否找到 freetype2
+    if pkg-config --exists freetype2; then
+        echo "✅ freetype2 found: $(pkg-config --modversion freetype2)"
+    else
+        echo "❌ freetype2 not found by pkg-config"
     fi
   '';
 }

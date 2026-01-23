@@ -101,7 +101,7 @@ ObjClip* newClip(VM* vm, ObjString* path) {
 
     // 1. 创建底层 C 模型
     // 注意：path->chars 是 raw char*
-    obj->clip = clip_create(path->chars);
+    obj->clip = clip_create_media(path->chars);
     
     // 2. 建立反向连接 (用于 GC 标记阶段从 Timeline 回溯)
     obj->clip->user_data = obj;
