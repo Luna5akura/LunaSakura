@@ -1,7 +1,6 @@
 // src/engine/model/clip.h
 
 #pragma once
-
 #include "common.h"
 #include "engine/model/transform.h"
 
@@ -15,16 +14,15 @@ typedef struct {
     char* font_path;
     u32 font_size;
     struct { u8 r, g, b, a; } color;
-    
+   
     // 缓存上次计算的包围盒
     float cached_width;
     float cached_height;
 } TextData;
 
 typedef struct Clip {
-    void* user_data; 
+    void* user_data;
     ClipType type;
-
     // --- 通用属性 ---
     char* path; // MEDIA: 文件路径; TEXT: 可为空
     double duration;
@@ -32,24 +30,21 @@ typedef struct Clip {
     double in_point;
     double out_point;
     double fps;
-
     // --- MEDIA 属性 ---
     bool has_video;
     bool has_audio;
     i32 audio_channels;
     i32 audio_sample_rate;
-
     // --- TEXT 属性 ---
     TextData text;
-
     // --- 变换属性 ---
     double default_scale_x;
     double default_scale_y;
     double default_x;
     double default_y;
+    double default_rotation;
     double default_opacity;
-
-    double volume; 
+    double volume;
     u32 width;
     u32 height;
     i32 layer;

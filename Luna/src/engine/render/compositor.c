@@ -5,6 +5,7 @@
 #include "engine/render/gl_utils.h" // 使用新工具库
 #include "core/memory.h"
 #include "core/vm/vm.h"
+#include <math.h> // For cosf, sinf
 
 typedef struct {
     Decoder* decoder;
@@ -12,11 +13,10 @@ typedef struct {
     GLuint tex_u;
     GLuint tex_v;
     // 记录纹理尺寸，如果视频分辨率改变需重新分配
-    int width, height; 
+    int width, height;
 } RenderSource;
 
 // --- Shader Sources ---
-
 // 1. Scene Shader (YUV -> RGB, Transforms)
 const char* VS_SOURCE = "#version 330 core\n"
     "layout (location = 0) in vec2 aPos;\n"
@@ -25,8 +25,8 @@ const char* VS_SOURCE = "#version 330 core\n"
     "uniform mat4 u_projection;\n"
     "uniform mat4 u_model;\n"
     "void main() {\n"
-    "   gl_Position = u_projection * u_model * vec4(aPos, 0.0, 1.0);\n"
-    "   TexCoord = aTexCoord;\n"
+    " gl_Position = u_projection * u_model * vec4(aPos, 0.0, 1.0);\n"
+    " TexCoord = aTexCoord;\n"
     "}\n";
 
 const char* FS_SOURCE_YUV = "#version 330 core\n"
@@ -37,13 +37,13 @@ const char* FS_SOURCE_YUV = "#version 330 core\n"
     "uniform sampler2D tex_v;\n"
     "uniform float u_opacity;\n"
     "void main() {\n"
-    "   float y = texture(tex_y, TexCoord).r;\n"
-    "   float u = texture(tex_u, TexCoord).r - 0.5;\n"
-    "   float v = texture(tex_v, TexCoord).r - 0.5;\n"
-    "   float r = y + 1.402 * v;\n"
-    "   float g = y - 0.344136 * u - 0.714136 * v;\n"
-    "   float b = y + 1.772 * u;\n"
-    "   FragColor = vec4(r, g, b, u_opacity);\n"
+    " float y = texture(tex_y, TexCoord).r;\n"
+    " float u = texture(tex_u, TexCoord).r - 0.5;\n"
+    " float v = texture(tex_v, TexCoord).r - 0.5;\n"
+    " float r = y + 1.402 * v;\n"
+    " float g = y - 0.344136 * u - 0.714136 * v;\n"
+    " float b = y + 1.772 * u;\n"
+    " FragColor = vec4(r, g, b, u_opacity);\n"
     "}\n";
 
 // 2. Screen Blit Shader (Texture -> Screen)
@@ -54,8 +54,8 @@ const char* VS_SCREEN = "#version 330 core\n"
     "out vec2 TexCoord;\n"
     "void main() {\n"
     // 这里做简单的坐标映射，覆盖全屏
-    "   gl_Position = vec4(aPos.x * 2.0 - 1.0, 1.0 - aPos.y * 2.0, 0.0, 1.0);\n"
-    "   TexCoord = vec2(aTexCoord.x, 1.0 - aTexCoord.y);\n"
+    " gl_Position = vec4(aPos.x * 2.0 - 1.0, 1.0 - aPos.y * 2.0, 0.0, 1.0);\n"
+    " TexCoord = vec2(aTexCoord.x, 1.0 - aTexCoord.y);\n"
     "}\n";
 
 const char* FS_SCREEN = "#version 330 core\n"
@@ -63,9 +63,8 @@ const char* FS_SCREEN = "#version 330 core\n"
     "in vec2 TexCoord;\n"
     "uniform sampler2D screenTexture;\n"
     "void main() {\n"
-    "   FragColor = texture(screenTexture, TexCoord);\n"
+    " FragColor = texture(screenTexture, TexCoord);\n"
     "}\n";
-
 
 // --- Text Shader ---
 // 允许对每个字符设置 UV 范围 (u_uv_rect) 来复用同一个单位 Quad (0..1)
@@ -76,69 +75,103 @@ const char* FS_SOURCE_TEXT = "#version 330 core\n"
     "uniform vec4 u_color;\n"
     "uniform vec4 u_uv_rect;\n" // xy=top-left, zw=bottom-right
     "void main() {\n"
-    "   // 映射 UV: 从 0..1 映射到 u_uv_rect 范围\n"
-    "   vec2 uv = mix(u_uv_rect.xy, u_uv_rect.zw, TexCoord);\n"
-    "   // 采样红色通道作为 Alpha\n"
-    "   float alpha = texture(textAtlas, uv).r;\n"
-    "   FragColor = vec4(u_color.rgb, alpha * u_color.a);\n"
+    " // 映射 UV: 从 0..1 映射到 u_uv_rect 范围\n"
+    " vec2 uv = mix(u_uv_rect.xy, u_uv_rect.zw, TexCoord);\n"
+    " // 采样红色通道作为 Alpha\n"
+    " float alpha = texture(textAtlas, uv).r;\n"
+    " FragColor = vec4(u_color.rgb, alpha * u_color.a);\n"
     "}\n";
-
 
 // --- Math Helpers ---
 typedef struct { float m[16]; } mat4;
 
-static mat4 mat4_ortho(float left, float right, float bottom, float top, float near, float far) {
-    mat4 res = {0}; 
-    res.m[0]=2.0f/(right-left); 
-    res.m[5]=2.0f/(top-bottom); 
-    res.m[10]=-2.0f/(far-near); 
-    res.m[12]=-(right+left)/(right-left); 
-    res.m[13]=-(top+bottom)/(top-bottom); 
-    res.m[14]=-(far+near)/(far-near); 
-    res.m[15]=1.0f; 
+static mat4 mat4_identity(void) {
+    mat4 res = {0};
+    res.m[0] = 1.0f; res.m[5] = 1.0f; res.m[10] = 1.0f; res.m[15] = 1.0f;
     return res;
 }
 
-static mat4 mat4_translate_scale(float x, float y, float sx, float sy) {
-    mat4 res = {0}; 
-    res.m[0]=sx; res.m[5]=sy; res.m[10]=1.0f; res.m[15]=1.0f; 
-    res.m[12]=x; res.m[13]=y; 
+static mat4 mat4_mult(mat4 a, mat4 b) {
+    mat4 res = {0};
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            for (int k = 0; k < 4; k++) {
+                res.m[i * 4 + j] += a.m[i * 4 + k] * b.m[k * 4 + j];
+            }
+        }
+    }
+    return res;
+}
+
+static mat4 mat4_translate(float x, float y) {
+    mat4 res = mat4_identity();
+    res.m[12] = x;
+    res.m[13] = y;
+    return res;
+}
+
+static mat4 mat4_scale(float sx, float sy) {
+    mat4 res = mat4_identity();
+    res.m[0] = sx;
+    res.m[5] = sy;
+    return res;
+}
+
+static mat4 mat4_rotate(float angle_deg) {
+    float rad = angle_deg * 3.141592653589793f / 180.0f;
+    float c = cosf(rad);
+    float s = sinf(rad);
+    mat4 res = mat4_identity();
+    res.m[0] = c; res.m[1] = -s;
+    res.m[4] = s; res.m[5] = c;
+    return res;
+}
+
+static mat4 mat4_ortho(float left, float right, float bottom, float top, float near, float far) {
+    mat4 res = {0};
+    res.m[0]=2.0f/(right-left);
+    res.m[5]=2.0f/(top-bottom);
+    res.m[10]=-2.0f/(far-near);
+    res.m[12]=-(right+left)/(right-left);
+    res.m[13]=-(top+bottom)/(top-bottom);
+    res.m[14]=-(far+near)/(far-near);
+    res.m[15]=1.0f;
     return res;
 }
 
 // Helper: Get Decoder
 static RenderSource* get_source_safe(Compositor* comp, Clip* clip) {
     RenderSource* sources = (RenderSource*)comp->render_sources;
-    
+   
     // 1. 查找现有
     for(int i=0; i<comp->source_count; i++) {
         if (decoder_get_clip_ref(sources[i].decoder) == clip) {
             return &sources[i];
         }
     }
-    
+   
     // 2. 创建新的
     if (comp->source_count >= comp->source_capacity) {
         int old_capacity = comp->source_capacity;
         comp->source_capacity = MEM_GROW_CAPACITY(old_capacity);
-        
+       
         // 使用宏进行扩容，保持代码风格一致
-        comp->render_sources = GROW_ARRAY(comp->vm, RenderSource, 
+        comp->render_sources = GROW_ARRAY(comp->vm, RenderSource,
             comp->render_sources, old_capacity, comp->source_capacity);
-            
+           
         sources = (RenderSource*)comp->render_sources;
     }
-    
+   
     RenderSource* src = &sources[comp->source_count++];
     memset(src, 0, sizeof(RenderSource));
-    
+   
     src->decoder = decoder_create(clip);
-    
+   
     // 3. 在 Compositor 侧创建 GL 纹理
     glGenTextures(1, &src->tex_y);
     glGenTextures(1, &src->tex_u);
     glGenTextures(1, &src->tex_v);
-    
+   
     // 配置纹理参数
     GLuint texs[] = {src->tex_y, src->tex_u, src->tex_v};
     for(int i=0; i<3; i++) {
@@ -148,158 +181,156 @@ static RenderSource* get_source_safe(Compositor* comp, Clip* clip) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
-    
+   
     return src;
 }
 
-// static Decoder* get_decoder_safe(Compositor* comp, Clip* clip) {
-//     for(int i=0; i<comp->decoder_count; i++) {
-//         if (decoder_get_clip_ref(comp->decoders[i]) == clip) return comp->decoders[i];
-//     }
-//     Decoder* dec = decoder_create(clip);
-//     if (comp->decoder_count >= comp->decoder_capacity) {
-//         int old = comp->decoder_capacity;
-//         comp->decoder_capacity = old < 8 ? 8 : old * 2;
-//         comp->decoders = GROW_ARRAY(comp->vm, Decoder*, comp->decoders, old, comp->decoder_capacity);
-//     }
-//     comp->decoders[comp->decoder_count++] = dec;
-//     return dec;
-// }
-
-// Helper: Draw
 // [新增] 专门绘制文字的函数
 static void draw_clip_text(Compositor* comp, TimelineClip* tc) {
     Clip* clip = tc->media;
     TextRenderer* tr = comp->text_renderer;
-    
+   
     // 1. 更新 Atlas (如果需要)
     text_renderer_update(tr, clip);
-    
+   
     glUseProgram(comp->text_shader_program);
-    
+   
     // 2. 绑定 Atlas 纹理
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, text_renderer_get_texture(tr));
     glUniform1i(glGetUniformLocation(comp->text_shader_program, "textAtlas"), 0);
-    
+   
     // 3. 设置全局颜色和透明度 (结合 Clip 自身的 transform.opacity)
     float r = clip->text.color.r / 255.0f;
     float g = clip->text.color.g / 255.0f;
     float b = clip->text.color.b / 255.0f;
     float a = (clip->text.color.a / 255.0f) * tc->transform.opacity;
-    
+   
     glUniform4f(glGetUniformLocation(comp->text_shader_program, "u_color"), r, g, b, a);
-    
+   
     // 4. 遍历字符并绘制
     // 计算起始位置 (基于 Transform)
     // 注意：tc->transform.x/y 是 Clip 左上角在 Timeline 上的坐标
     float start_x = tc->transform.x;
+    float rotation = tc->transform.rotation;
     float start_y = tc->transform.y;
-    float scale = tc->transform.scale_x; // 假设统一缩放
-    
+   
     float x_cursor = 0;
-    
+   
     GLint loc_model = glGetUniformLocation(comp->text_shader_program, "u_model");
     GLint loc_uv = glGetUniformLocation(comp->text_shader_program, "u_uv_rect");
-    
+   
+    // 计算缩放后的中心 (假设 cached 是基线大小)
+    float scale_x = tc->transform.scale_x;
+    float scale_y = tc->transform.scale_y; // 如果未定义 scale_y，使用 scale_x
+    float scaled_w = clip->text.cached_width * scale_x;
+    float scaled_h = clip->text.cached_height * scale_y;
+    float center_x = scaled_w / 2.0f;
+    float center_y = scaled_h / 2.0f;
+   
+    // 组变换 (不包括本地 glyph 变换)
+    mat4 group_model = mat4_identity();
+    group_model = mat4_mult(mat4_translate(start_x + center_x, start_y + center_y), group_model);
+    group_model = mat4_mult(mat4_rotate(rotation), group_model);
+    group_model = mat4_mult(mat4_translate(-center_x, -center_y), group_model);
+   
     const char* p = clip->text.content;
     while (*p) {
         GlyphInfo* glyph = text_renderer_get_glyph(tr, *p);
-        
-        float xpos = start_x + (x_cursor + glyph->bearing_x) * scale;
-        float font_size = (float)clip->text.font_size; // 需确保 Clip 结构体里有这个值
-        float baseline_y = start_y + font_size; // 简单估算基线位置
-        // 修改 ypos 计算：
-        float ypos = baseline_y - (glyph->bearing_y * scale);
-
-        float w = glyph->width * scale;
-        float h = glyph->height * scale;
-        
+       
+        float rel_x = x_cursor + glyph->bearing_x;
+        float rel_y = clip->text.font_size - glyph->bearing_y; // 基线调整
+        float w = glyph->width;
+        float h = glyph->height;
+       
         // 设置 Model 矩阵
-        mat4 model = mat4_translate_scale(xpos, ypos, w, h);
+        mat4 local_model = mat4_identity();
+        local_model = mat4_mult(mat4_translate(rel_x, rel_y), local_model);
+        local_model = mat4_mult(mat4_scale(w * scale_x, h * scale_y), local_model);
+        mat4 model = mat4_mult(group_model, local_model);
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, model.m);
-        
+       
         // 设置 UV 范围 (u0, v0, u1, v1)
-        // 注意：v0/v1 顺序取决于纹理坐标系。GL原点在左下，FreeType生成的图集通常也是。
-        // 但 Quad 也是 0..1。我们传入 (u0, v1, u1, v0) 可能需要根据翻转情况调整。
-        glUniform4f(loc_uv, glyph->u0, glyph->v0, glyph->u1, glyph->v1); 
-        
+        glUniform4f(loc_uv, glyph->u0, glyph->v0, glyph->u1, glyph->v1);
+       
         glBindVertexArray(comp->vao);
         glDrawArrays(GL_TRIANGLES, 0, 6);
-        
+       
         x_cursor += glyph->advance;
         p++;
     }
 }
 
-
 static void draw_clip_rect(Compositor* comp, RenderSource* src, TimelineClip* tc) {
     if (src->tex_y == 0) return;
-    
+   
     glUseProgram(comp->shader_program);
-    
+   
     // 绑定纹理
     glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, src->tex_y);
     glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, src->tex_u);
     glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, src->tex_v);
-    
+   
     glUniform1i(glGetUniformLocation(comp->shader_program, "tex_y"), 0);
     glUniform1i(glGetUniformLocation(comp->shader_program, "tex_u"), 1);
     glUniform1i(glGetUniformLocation(comp->shader_program, "tex_v"), 2);
-    
+   
     // ... (矩阵计算和绘制逻辑保持不变) ...
     float scale_x = tc->transform.scale_x;
     float scale_y = tc->transform.scale_y;
+    float rotation = tc->transform.rotation;
     float opacity = tc->transform.opacity;
     // (防止除零等保护逻辑)...
     float w = (float)tc->media->width * scale_x;
     float h = (float)tc->media->height * scale_y;
-    
-    mat4 model = mat4_translate_scale(tc->transform.x, tc->transform.y, w, h);
+   
+    float center_x = w / 2.0f;
+    float center_y = h / 2.0f;
+    mat4 model = mat4_identity();
+    model = mat4_mult(mat4_translate(tc->transform.x + center_x, tc->transform.y + center_y), model);
+    model = mat4_mult(mat4_rotate(rotation), model);
+    model = mat4_mult(mat4_translate(-center_x, -center_y), model);
+    model = mat4_mult(mat4_scale(w, h), model);
     glUniformMatrix4fv(glGetUniformLocation(comp->shader_program, "u_model"), 1, GL_FALSE, model.m);
     glUniform1f(glGetUniformLocation(comp->shader_program, "u_opacity"), opacity);
-    
+   
     glBindVertexArray(comp->vao);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
 // === API Implementation ===
-
 Compositor* compositor_create(VM* vm, Timeline* timeline) {
     Compositor* comp = ALLOCATE(vm, Compositor, 1);
     memset(comp, 0, sizeof(Compositor));
     comp->vm = vm;
     comp->timeline = timeline;
     comp->mixer = mixer_create(44100);
-
-
     comp->shader_program = build_shader_program(VS_SOURCE, FS_SOURCE_YUV);
     comp->text_shader_program = build_shader_program(VS_SOURCE, FS_SOURCE_TEXT);
     comp->text_renderer = text_renderer_create();
-
     // Quad for rendering (Full Rect)
-    float quad[] = { 
-        0,0, 0,0, 
-        1,0, 1,0, 
-        0,1, 0,1, 
-        0,1, 0,1, 
-        1,0, 1,0, 
-        1,1, 1,1 
+    float quad[] = {
+        0,0, 0,0,
+        1,0, 1,0,
+        0,1, 0,1,
+        0,1, 0,1,
+        1,0, 1,0,
+        1,1, 1,1
     };
-    
+   
     glGenVertexArrays(1, &comp->vao);
     glGenBuffers(1, &comp->vbo);
     glBindVertexArray(comp->vao);
     glBindBuffer(GL_ARRAY_BUFFER, comp->vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
-    
+   
     // Attr 0: Pos (2 floats), Attr 1: TexCoord (2 floats)
     // Stride = 4 * sizeof(float)
-    glEnableVertexAttribArray(0); 
+    glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(1); 
+    glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
-    
+   
     // FBO Setup
     glGenFramebuffers(1, &comp->fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, comp->fbo);
@@ -309,24 +340,22 @@ Compositor* compositor_create(VM* vm, Timeline* timeline) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, comp->output_texture, 0);
-    
+   
     // Check FBO
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         fprintf(stderr, "Error: Framebuffer is not complete!\n");
     }
-    
+   
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
     return comp;
 }
 
 void compositor_free(VM* vm, Compositor* comp) {
     if (!comp) return;
-
     if (comp->text_renderer) text_renderer_free(comp->text_renderer);
     glDeleteProgram(comp->text_shader_program);
     if (comp->mixer) mixer_free(comp->mixer);
-    
+   
     // [修改] 释放 RenderSource 资源
     RenderSource* sources = (RenderSource*)comp->render_sources;
     for(int i=0; i<comp->source_count; i++) {
@@ -338,9 +367,8 @@ void compositor_free(VM* vm, Compositor* comp) {
     if (comp->render_sources) {
         free(comp->render_sources); // 使用 free 或 reallocate(..., 0)
     }
-
     if(comp->cpu_output_buffer) free(comp->cpu_output_buffer);
-    
+   
     glDeleteProgram(comp->shader_program);
     glDeleteFramebuffers(1, &comp->fbo);
     glDeleteTextures(1, &comp->output_texture);
@@ -352,99 +380,95 @@ void compositor_free(VM* vm, Compositor* comp) {
 void compositor_render(Compositor* comp, double time) {
     glBindFramebuffer(GL_FRAMEBUFFER, comp->fbo);
     glViewport(0, 0, comp->timeline->width, comp->timeline->height);
-    
+   
     // ... (Clear Color 逻辑) ...
     u8 r = comp->timeline->background_color.r;
     u8 g = comp->timeline->background_color.g;
     u8 b = comp->timeline->background_color.b;
     glClearColor(r/255.f, g/255.f, b/255.f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-    
+   
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    
+   
     mat4 proj = mat4_ortho(0, comp->timeline->width, comp->timeline->height, 0, -1, 1);
     glUseProgram(comp->shader_program);
     glUniformMatrix4fv(glGetUniformLocation(comp->shader_program, "u_projection"), 1, GL_FALSE, proj.m);
     glUseProgram(comp->text_shader_program);
     glUniformMatrix4fv(glGetUniformLocation(comp->text_shader_program, "u_projection"), 1, GL_FALSE, proj.m);
-    
+   
     if (comp->mixer) mixer_begin_frame(comp->mixer);
-    
+   
     for(int i=0; i<comp->timeline->track_count; i++) {
         Track* track = &comp->timeline->tracks[i];
         if (!(track->flags & 1)) continue;
-
         TimelineClip* tc = timeline_get_clip_at(track, time);
         if (!tc) continue;
-       
+      
         // === [修改] 分流处理 ===
         if (tc->media->type == CLIP_TYPE_TEXT) {
             // 文字渲染路径
             draw_clip_text(comp, tc);
-        } else { 
+        } else {
             RenderSource* src = get_source_safe(comp, tc->media);
             double clip_time = (time - tc->timeline_start) + tc->source_in;
-            
+           
             bool new_frame = decoder_update_video(src->decoder, clip_time);
-            
+           
             uint8_t* data[3];
             int linesize[3];
             int fw = 0, fh = 0; // [新增] 用于接收宽高
-            
+           
             // [修改] 调用新的 API
             if (decoder_get_video_data(src->decoder, data, linesize, &fw, &fh)) {
-                
+               
                 if (new_frame) {
                     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                    
+                   
                     // 检查尺寸是否变更，决定是 Realloc 还是 Update
                     bool resize = (src->width != fw || src->height != fh);
                     if (resize) {
                         src->width = fw;
                         src->height = fh;
                     }
-
                     // Y Plane
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, src->tex_y);
                     glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[0]);
                     if (resize) {
-                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw, fh, 
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw, fh,
                                     0, GL_RED, GL_UNSIGNED_BYTE, data[0]);
                     } else {
                         // [优化] 使用 SubImage
                         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw, fh,
                                         GL_RED, GL_UNSIGNED_BYTE, data[0]);
                     }
-
                     // U Plane
                     glActiveTexture(GL_TEXTURE1);
                     glBindTexture(GL_TEXTURE_2D, src->tex_u);
                     glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[1]);
                     if (resize) {
-                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw/2, fh/2, 
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw/2, fh/2,
                                     0, GL_RED, GL_UNSIGNED_BYTE, data[1]);
                     } else {
                         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw/2, fh/2,
                                         GL_RED, GL_UNSIGNED_BYTE, data[1]);
                     }
-
                     // V Plane (同理)
                     glActiveTexture(GL_TEXTURE2);
                     glBindTexture(GL_TEXTURE_2D, src->tex_v);
                     glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[2]);
                     if (resize) {
-                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw/2, fh/2, 
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw/2, fh/2,
                                     0, GL_RED, GL_UNSIGNED_BYTE, data[2]);
                     } else {
                         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw/2, fh/2,
                                         GL_RED, GL_UNSIGNED_BYTE, data[2]);
                     }
-                                
+                               
                     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
                 }
-                
+               
                 draw_clip_rect(comp, src, tc);
             }
             if (comp->mixer) {
@@ -452,36 +476,35 @@ void compositor_render(Compositor* comp, double time) {
             }
         }
     }
-    
+   
     if (comp->mixer) mixer_end_frame(comp->mixer);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     comp->cpu_buffer_stale = true;
 }
 
-
 // [新增] 修复 undefined reference 错误
 void compositor_blit_to_screen(Compositor* comp, i32 window_width, i32 window_height) {
     static GLuint blit_program = 0;
-    
+   
     // Lazy Compile Screen Shader
     if (blit_program == 0) {
         blit_program = build_shader_program(VS_SCREEN, FS_SCREEN);
     }
-    
+   
     // Draw to Default Framebuffer (Screen)
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, window_width, window_height);
-    
+   
     // Clear Screen (Black bars if aspect ratio differs)
     glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-    
+   
     glUseProgram(blit_program);
-    
+   
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, comp->output_texture);
     glUniform1i(glGetUniformLocation(blit_program, "screenTexture"), 0);
-    
+   
     // Reuse the full-screen quad VAO
     glBindVertexArray(comp->vao);
     glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -489,28 +512,27 @@ void compositor_blit_to_screen(Compositor* comp, i32 window_width, i32 window_he
 
 void compositor_read_pixels(Compositor* comp, u8* out_buffer) {
     if (!out_buffer) return;
-
     glBindFramebuffer(GL_FRAMEBUFFER, comp->fbo);
-    
+   
     i32 width = comp->timeline->width;
     i32 height = comp->timeline->height;
     i32 stride = width * 4;
-    
+   
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, out_buffer);
-    
+   
     // Vertical Flip (OpenGL Origin Bottom-Left -> Image Origin Top-Left)
     u8* temp_row = malloc(stride);
     for (int y = 0; y < height / 2; y++) {
         u8* top_row = out_buffer + y * stride;
         u8* bot_row = out_buffer + (height - 1 - y) * stride;
-        
+       
         memcpy(temp_row, top_row, stride);
         memcpy(top_row, bot_row, stride);
         memcpy(bot_row, temp_row, stride);
     }
     free(temp_row);
-    
+   
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 

@@ -11,6 +11,7 @@ var video = Clip("test.mp4")
 if video != nil:
     video.trim(0, 10)
     video.setScale(1.0)
+    video.setRotation(45)
     tl.add(0, video, 0)
 
 # 3. 标题文字
@@ -21,7 +22,7 @@ var title = Text("LUNA ENGINE")
 title.setFont("arial.ttf")
 title.setSize(80)
 title.setColor(255, 200, 50) # 金黄色
-title.setPos(100, 100)
+title.setPos(0, 1)
 title.trim(0, 5) # 显示前5秒
 
 tl.add(1, title, 0) # 轨道1，0秒开始
@@ -29,7 +30,7 @@ tl.add(1, title, 0) # 轨道1，0秒开始
 # 4. 字幕文字
 var sub = Text("Rendered with OpenGL & C")
 sub.setSize(30)
-sub.setPos(100, 200)
+sub.setPos(1, 2)
 sub.setOpacity(0.8)
 
 tl.add(1, sub, 1) # 轨道1，1秒开始
