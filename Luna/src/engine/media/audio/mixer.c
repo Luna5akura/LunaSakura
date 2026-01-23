@@ -1,6 +1,8 @@
 // src/engine/media/audio/mixer.c
 
 #include "mixer.h"
+#include <SDL2/SDL.h> // 仅用于 Thread 和 Mutex，不用于渲染
+
 
 #define MAX_AUDIO_SOURCES 32
 

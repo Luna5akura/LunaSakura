@@ -28,4 +28,4 @@ void mixer_add_source(AudioMixer* mixer, Decoder* decoder, float volume);
 void mixer_end_frame(AudioMixer* mixer);
 
 // --- Internal (SDL Callback) ---
-void mixer_sdl_callback(void* userdata, Uint8* stream, int len);
+void mixer_sdl_callback(void* userdata, u8* stream, int len);

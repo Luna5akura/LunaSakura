@@ -5,6 +5,15 @@
 #include "core/memory.h"
 #include "core/vm/vm.h"
 
+typedef struct {
+    Decoder* decoder;
+    GLuint tex_y;
+    GLuint tex_u;
+    GLuint tex_v;
+    // 记录纹理尺寸，如果视频分辨率改变需重新分配
+    int width, height; 
+} RenderSource;
+
 // --- Shader Sources ---
 
 // 1. Scene Shader (YUV -> RGB, Transforms)
@@ -96,43 +105,83 @@ static GLuint compile_shader(const char* src, GLenum type) {
 }
 
 // Helper: Get Decoder
-static Decoder* get_decoder_safe(Compositor* comp, Clip* clip) {
-    for(int i=0; i<comp->decoder_count; i++) {
-        if (decoder_get_clip_ref(comp->decoders[i]) == clip) return comp->decoders[i];
+static RenderSource* get_source_safe(Compositor* comp, Clip* clip) {
+    RenderSource* sources = (RenderSource*)comp->render_sources;
+    
+    // 1. 查找现有
+    for(int i=0; i<comp->source_count; i++) {
+        if (decoder_get_clip_ref(sources[i].decoder) == clip) {
+            return &sources[i];
+        }
     }
-    Decoder* dec = decoder_create(clip);
-    if (comp->decoder_count >= comp->decoder_capacity) {
-        int old = comp->decoder_capacity;
-        comp->decoder_capacity = old < 8 ? 8 : old * 2;
-        comp->decoders = GROW_ARRAY(comp->vm, Decoder*, comp->decoders, old, comp->decoder_capacity);
+    
+    // 2. 创建新的
+    if (comp->source_count >= comp->source_capacity) {
+        int old = comp->source_capacity;
+        comp->source_capacity = old < 8 ? 8 : old * 2;
+        // 注意：这里要按照 RenderSource 结构体大小扩容
+        comp->render_sources = reallocate(comp->vm, comp->render_sources, 
+            sizeof(RenderSource) * old, sizeof(RenderSource) * comp->source_capacity);
+        sources = (RenderSource*)comp->render_sources;
     }
-    comp->decoders[comp->decoder_count++] = dec;
-    return dec;
+    
+    RenderSource* src = &sources[comp->source_count++];
+    memset(src, 0, sizeof(RenderSource));
+    
+    src->decoder = decoder_create(clip);
+    
+    // 3. 在 Compositor 侧创建 GL 纹理
+    glGenTextures(1, &src->tex_y);
+    glGenTextures(1, &src->tex_u);
+    glGenTextures(1, &src->tex_v);
+    
+    // 配置纹理参数
+    GLuint texs[] = {src->tex_y, src->tex_u, src->tex_v};
+    for(int i=0; i<3; i++) {
+        glBindTexture(GL_TEXTURE_2D, texs[i]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    
+    return src;
 }
 
+// static Decoder* get_decoder_safe(Compositor* comp, Clip* clip) {
+//     for(int i=0; i<comp->decoder_count; i++) {
+//         if (decoder_get_clip_ref(comp->decoders[i]) == clip) return comp->decoders[i];
+//     }
+//     Decoder* dec = decoder_create(clip);
+//     if (comp->decoder_count >= comp->decoder_capacity) {
+//         int old = comp->decoder_capacity;
+//         comp->decoder_capacity = old < 8 ? 8 : old * 2;
+//         comp->decoders = GROW_ARRAY(comp->vm, Decoder*, comp->decoders, old, comp->decoder_capacity);
+//     }
+//     comp->decoders[comp->decoder_count++] = dec;
+//     return dec;
+// }
+
 // Helper: Draw
-static void draw_clip_rect(Compositor* comp, Decoder* dec, TimelineClip* tc) {
-    GLuint ty = decoder_get_texture_y(dec);
-    GLuint tu = decoder_get_texture_u(dec);
-    GLuint tv = decoder_get_texture_v(dec);
-    
-    if (ty == 0) return;
+static void draw_clip_rect(Compositor* comp, RenderSource* src, TimelineClip* tc) {
+    if (src->tex_y == 0) return;
     
     glUseProgram(comp->shader_program);
+    
+    // 绑定纹理
+    glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, src->tex_y);
+    glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, src->tex_u);
+    glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, src->tex_v);
+    
     glUniform1i(glGetUniformLocation(comp->shader_program, "tex_y"), 0);
     glUniform1i(glGetUniformLocation(comp->shader_program, "tex_u"), 1);
     glUniform1i(glGetUniformLocation(comp->shader_program, "tex_v"), 2);
     
-    glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, ty);
-    glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, tu);
-    glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, tv);
-    
+    // ... (矩阵计算和绘制逻辑保持不变) ...
     float scale_x = tc->transform.scale_x;
     float scale_y = tc->transform.scale_y;
     float opacity = tc->transform.opacity;
-    if (fabsf(scale_x) < 0.001f) scale_x = 1.0f;
-    if (fabsf(scale_y) < 0.001f) scale_y = 1.0f;
-    
+    // (防止除零等保护逻辑)...
     float w = (float)tc->media->width * scale_x;
     float h = (float)tc->media->height * scale_y;
     
@@ -207,8 +256,19 @@ Compositor* compositor_create(VM* vm, Timeline* timeline) {
 void compositor_free(VM* vm, Compositor* comp) {
     if (!comp) return;
     if (comp->mixer) mixer_free(comp->mixer);
-    for(int i=0; i<comp->decoder_count; i++) decoder_destroy(comp->decoders[i]);
-    if(comp->decoders) FREE_ARRAY(vm, Decoder*, comp->decoders, comp->decoder_capacity);
+    
+    // [修改] 释放 RenderSource 资源
+    RenderSource* sources = (RenderSource*)comp->render_sources;
+    for(int i=0; i<comp->source_count; i++) {
+        decoder_destroy(sources[i].decoder);
+        glDeleteTextures(1, &sources[i].tex_y);
+        glDeleteTextures(1, &sources[i].tex_u);
+        glDeleteTextures(1, &sources[i].tex_v);
+    }
+    if (comp->render_sources) {
+        free(comp->render_sources); // 使用 free 或 reallocate(..., 0)
+    }
+
     if(comp->cpu_output_buffer) free(comp->cpu_output_buffer);
     
     glDeleteProgram(comp->shader_program);
@@ -223,6 +283,7 @@ void compositor_render(Compositor* comp, double time) {
     glBindFramebuffer(GL_FRAMEBUFFER, comp->fbo);
     glViewport(0, 0, comp->timeline->width, comp->timeline->height);
     
+    // ... (Clear Color 逻辑) ...
     u8 r = comp->timeline->background_color.r;
     u8 g = comp->timeline->background_color.g;
     u8 b = comp->timeline->background_color.b;
@@ -240,19 +301,60 @@ void compositor_render(Compositor* comp, double time) {
     
     for(int i=0; i<comp->timeline->track_count; i++) {
         Track* track = &comp->timeline->tracks[i];
-        if (!(track->flags & 1)) continue; // Check visible bit
+        if (!(track->flags & 1)) continue;
 
         TimelineClip* tc = timeline_get_clip_at(track, time);
         if (!tc) continue;
         
-        Decoder* dec = get_decoder_safe(comp, tc->media);
+        // [修改] 获取 RenderSource
+        RenderSource* src = get_source_safe(comp, tc->media);
         double clip_time = (time - tc->timeline_start) + tc->source_in;
         
-        if (decoder_update_video(dec, clip_time)) {
-             draw_clip_rect(comp, dec, tc);
+        bool new_frame = decoder_update_video(src->decoder, clip_time);
+        
+        uint8_t* data[3];
+        int linesize[3];
+        int fw = 0, fh = 0; // [新增] 用于接收宽高
+        
+        // [修改] 调用新的 API
+        if (decoder_get_video_data(src->decoder, data, linesize, &fw, &fh)) {
+            
+            if (new_frame) {
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                
+                // Y Plane
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, src->tex_y);
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[0]);
+                // [修改] 使用 fw 和 fh
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw, fh, 
+                             0, GL_RED, GL_UNSIGNED_BYTE, data[0]);
+
+                // U Plane
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, src->tex_u);
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[1]);
+                // [修改] 使用 fw/2 和 fh/2
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw/2, fh/2, 
+                             0, GL_RED, GL_UNSIGNED_BYTE, data[1]);
+
+                // V Plane
+                glActiveTexture(GL_TEXTURE2);
+                glBindTexture(GL_TEXTURE_2D, src->tex_v);
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[2]);
+                // [修改] 使用 fw/2 和 fh/2
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw/2, fh/2, 
+                             0, GL_RED, GL_UNSIGNED_BYTE, data[2]);
+                             
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+            }
+            
+            // 绘制
+            draw_clip_rect(comp, src, tc);
         }
+
         if (comp->mixer) {
-            mixer_add_source(comp->mixer, dec, (float)tc->media->volume);
+            mixer_add_source(comp->mixer, src->decoder, (float)tc->media->volume);
         }
     }
     
@@ -260,6 +362,7 @@ void compositor_render(Compositor* comp, double time) {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     comp->cpu_buffer_stale = true;
 }
+
 
 // [新增] 修复 undefined reference 错误
 void compositor_blit_to_screen(Compositor* comp, i32 window_width, i32 window_height) {

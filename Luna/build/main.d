@@ -5,7 +5,7 @@ build/main.o: main.c include/glad/glad.h include/KHR/khrplatform.h \
  src/engine/bridge/object.h src/engine/model/clip.h \
  src/engine/model/timeline.h src/allocator.h src/engine/model/transform.h \
  src/engine/model/project.h src/engine/render/compositor.h \
- src/engine/media/codec/decoder.h src/engine/media/audio/mixer.h \
+ src/engine/media/audio/mixer.h src/engine/media/codec/decoder.h \
  src/engine/media/utils/probe.h src/engine/service/exporter.h \
  src/engine/service/preview.h src/engine/service/transcoder.h
 include/glad/glad.h:
@@ -27,8 +27,8 @@ src/allocator.h:
 src/engine/model/transform.h:
 src/engine/model/project.h:
 src/engine/render/compositor.h:
-src/engine/media/codec/decoder.h:
 src/engine/media/audio/mixer.h:
+src/engine/media/codec/decoder.h:
 src/engine/media/utils/probe.h:
 src/engine/service/exporter.h:
 src/engine/service/preview.h:

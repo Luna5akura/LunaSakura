@@ -3,6 +3,7 @@
 #include "decoder.h"
 #include "engine/media/utils/ffmpeg_utils.h" // [新增]
 #include <libswresample/swresample.h>
+#include <SDL2/SDL.h> // 仅用于 Thread 和 Mutex，不用于渲染
 
 #define MAX_QUEUE_SIZE 8
 #define AUDIO_RB_SIZE 131072
@@ -23,47 +24,39 @@ typedef struct {
     int count;
 } FrameQueue;
 
+
 struct Decoder {
-    // 标识
+    // ... (标识、线程、队列、音频 RB 等保持不变) ...
     Clip* clip_ref;
     char* file_path_copy;
-
-    // 线程与同步
     SDL_Thread* thread;
     SDL_mutex* mutex;
     SDL_cond* cond_can_produce;
     bool thread_running;
-    
-    // Seek 控制
     bool seek_requested;
     double seek_target_time;
-
-    // 队列
     FrameQueue video_queue;
-
-    // 音频环形缓冲
     float* audio_ring_buffer;
-    i32 rb_capacity;
-    i32 rb_head;
-    i32 rb_tail;
-    i32 rb_count;
+    int32_t rb_capacity;
+    int32_t rb_head;
+    int32_t rb_tail;
+    int32_t rb_count;
 
-    // 视频状态 (Main Thread)
-    GLuint tex_y, tex_u, tex_v;
+    // [修改] 视频状态
+    // 移除: GLuint tex_y, tex_u, tex_v;
+    // 新增: 缓存当前要在屏幕上显示的帧 (CPU Memory)
+    AVFrame* current_frame_cpu;
+    
     double current_pts;
-    bool texture_ready;
     bool active_this_frame;
     
-    // 基础 PTS 修正
     int64_t start_pts;
     bool has_start_pts;
-
-    // [修改] 聚合的媒体上下文
-    MediaContext media; 
     
-    // 额外的音频转换上下文 (不属于 MediaContext 通用部分)
+    MediaContext media; 
     SwrContext* swr_ctx;
 };
+
 // --- Queue Helpers ---
 
 static void fq_push(FrameQueue* q, AVFrame* frame, double pts) {
@@ -240,30 +233,18 @@ static int decoder_thread_func(void* data) {
 Decoder* decoder_create(Clip* clip) {
     Decoder* dec = (Decoder*)malloc(sizeof(Decoder));
     memset(dec, 0, sizeof(Decoder));
-    media_ctx_init(&dec->media); // 初始化内部结构
+    media_ctx_init(&dec->media);
     
     dec->clip_ref = clip;
     dec->file_path_copy = strdup(clip->path); 
     dec->mutex = SDL_CreateMutex();
     dec->cond_can_produce = SDL_CreateCond();
     
-    dec->rb_capacity = AUDIO_RB_SIZE;
+    dec->rb_capacity = 131072;
     dec->audio_ring_buffer = (float*)malloc(sizeof(float) * dec->rb_capacity);
     
-    // GL Texture Init
-    glGenTextures(1, &dec->tex_y);
-    glGenTextures(1, &dec->tex_u);
-    glGenTextures(1, &dec->tex_v);
-    
-    GLenum params[] = {dec->tex_y, dec->tex_u, dec->tex_v};
-    for(int i=0; i<3; i++) {
-        glBindTexture(GL_TEXTURE_2D, params[i]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    }
+    // [修改] 不再初始化 GL 纹理
+    dec->current_frame_cpu = NULL;
 
     dec->thread_running = true;
     dec->thread = SDL_CreateThread(decoder_thread_func, "DecoderThread", dec);
@@ -281,9 +262,9 @@ void decoder_destroy(Decoder* dec) {
     SDL_DestroyMutex(dec->mutex);
     SDL_DestroyCond(dec->cond_can_produce);
     
-    glDeleteTextures(1, &dec->tex_y);
-    glDeleteTextures(1, &dec->tex_u);
-    glDeleteTextures(1, &dec->tex_v);
+    // [修改] 释放 CPU 帧缓存
+    if (dec->current_frame_cpu) av_frame_free(&dec->current_frame_cpu);
+    // 移除: glDeleteTextures...
     
     fq_clear(&dec->video_queue);
     free(dec->audio_ring_buffer);
@@ -294,6 +275,7 @@ void decoder_destroy(Decoder* dec) {
 bool decoder_update_video(Decoder* dec, double timeline_time) {
     SDL_LockMutex(dec->mutex);
     
+    // Seek 检查逻辑 (保持不变)
     double diff = timeline_time - dec->current_pts;
     if (diff < -0.1 || diff > 1.0) {
         dec->seek_requested = true;
@@ -301,10 +283,11 @@ bool decoder_update_video(Decoder* dec, double timeline_time) {
         dec->current_pts = timeline_time;
         SDL_CondSignal(dec->cond_can_produce);
         SDL_UnlockMutex(dec->mutex);
-        return false;
+        return false; // Seek 发生，画面未就绪
     }
     
     AVFrame* best_frame = NULL;
+    // 队列消耗逻辑 (保持不变)
     while (dec->video_queue.head) {
         double f_pts = dec->video_queue.head->pts;
         if (f_pts < timeline_time - 0.05) {
@@ -321,44 +304,44 @@ bool decoder_update_video(Decoder* dec, double timeline_time) {
     }
     SDL_UnlockMutex(dec->mutex);
 
+    // [修改] 核心变化：只更新 CPU 帧指针，不进行 GL 上传
     if (best_frame) {
         if (dec->clip_ref->width == 0) {
             dec->clip_ref->width = best_frame->width;
             dec->clip_ref->height = best_frame->height;
         }
 
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, dec->tex_y);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, best_frame->linesize[0]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, best_frame->width, best_frame->height, 
-                     0, GL_RED, GL_UNSIGNED_BYTE, best_frame->data[0]);
-        
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, dec->tex_u);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, best_frame->linesize[1]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, best_frame->width/2, best_frame->height/2, 
-                     0, GL_RED, GL_UNSIGNED_BYTE, best_frame->data[1]);
-        
-        glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, dec->tex_v);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, best_frame->linesize[2]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, best_frame->width/2, best_frame->height/2, 
-                     0, GL_RED, GL_UNSIGNED_BYTE, best_frame->data[2]);
-        
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 4); 
-        
-        dec->texture_ready = true;
-        av_frame_free(&best_frame);
+        // 替换当前持有的帧
+        if (dec->current_frame_cpu) {
+            av_frame_free(&dec->current_frame_cpu);
+        }
+        dec->current_frame_cpu = best_frame;
+        return true; // 告诉 Compositor：有新数据了
     }
-    return dec->texture_ready;
+    
+    return false; // 无新数据，保持上一帧
 }
 
-GLuint decoder_get_texture_y(Decoder* dec) { return dec->tex_y; }
-GLuint decoder_get_texture_u(Decoder* dec) { return dec->tex_u; }
-GLuint decoder_get_texture_v(Decoder* dec) { return dec->tex_v; }
+// [新增] 仅暴露数据指针
+bool decoder_get_video_data(Decoder* dec, uint8_t* data[3], int linesize[3], int* width, int* height) {
+    if (!dec || !dec->current_frame_cpu) return false;
+    
+    AVFrame* f = dec->current_frame_cpu;
+    for (int i=0; i<3; i++) {
+        data[i] = f->data[i];
+        linesize[i] = f->linesize[i];
+    }
+    
+    // 输出宽高
+    if (width) *width = f->width;
+    if (height) *height = f->height;
+    
+    return true;
+}
+
+// GLuint decoder_get_texture_y(Decoder* dec) { return dec->tex_y; }
+// GLuint decoder_get_texture_u(Decoder* dec) { return dec->tex_u; }
+// GLuint decoder_get_texture_v(Decoder* dec) { return dec->tex_v; }
 
 Clip* decoder_get_clip_ref(Decoder* dec) { return dec->clip_ref; }
 
