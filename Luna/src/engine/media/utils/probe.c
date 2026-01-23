@@ -1,10 +1,10 @@
 // src/engine/media/utils/probe.c
 
+#include "common.h"
 #include "engine/media/utils/probe.h"
-#include "engine/media/utils/ffmpeg_utils.h" // [新增]
-#include "core/vm/vm.h" 
+#include "engine/media/utils/ffmpeg_utils.h"
 
-VideoMeta load_video_metadata(VM* vm, const char* filepath) {
+VideoMeta load_video_metadata(const char* filepath) {
     VideoMeta meta = {0};
     MediaContext ctx; 
 

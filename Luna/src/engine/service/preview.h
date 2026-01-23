@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "engine/bridge/object.h"
+#include "engine/model/clip.h"
 
 
 // 弹出一个独立窗口预览单个素材 (阻塞式，用于调试查看素材内容)

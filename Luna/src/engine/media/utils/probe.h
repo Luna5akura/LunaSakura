@@ -4,9 +4,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// Forward decl
-struct VM;
-
 typedef struct {
     double duration;
     double fps;
@@ -15,4 +12,4 @@ typedef struct {
     bool success;
 } VideoMeta;
 
-VideoMeta load_video_metadata(struct VM* vm, const char* filepath);
+VideoMeta load_video_metadata(const char* filepath);

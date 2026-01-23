@@ -2,9 +2,8 @@
 
 #pragma once
 
-#include "engine/bridge/object.h"
+#include "engine/model/clip.h"
 
-// 前向声明 VM，避免循环引用
 typedef struct VM VM;
 
 /**

@@ -85,7 +85,7 @@ Value clipInit(VM* vm, i32 argCount, Value* args) {
     ObjString* path = AS_STRING(args[0]);
     
     // 1. 加载元数据 (Probe)
-    VideoMeta meta = load_video_metadata(vm, path->chars);
+    VideoMeta meta = load_video_metadata(path->chars);
     if (!meta.success) {
         fprintf(stderr, "Runtime Error: Could not load video metadata from '%s'\n", path->chars);
         // 即便失败也可以返回对象，但属性可能为空，或者在这里返回 NIL 表示失败
