@@ -2,6 +2,7 @@
 
 #pragma once
 #include "value.h"
+
 // --- Instruction Set ---
 typedef enum {
     OP_CONSTANT,

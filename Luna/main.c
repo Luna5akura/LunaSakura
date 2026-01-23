@@ -27,6 +27,17 @@ Project* get_active_project(VM* vm);
 void reset_active_project(VM* vm);
 
 
+static void main_mark_roots(VM* vm) {
+    // 1. 获取上下文
+    EngineContext* ctx = (EngineContext*)vm->user_data;
+    
+    // 2. 如果当前有活跃项目，且项目有时间轴，则标记时间轴
+    if (ctx && ctx->active_project && ctx->active_project->timeline) {
+        timeline_mark(vm, ctx->active_project->timeline);
+    }
+}
+
+
 // --- 辅助函数 ---
 time_t get_file_mtime(const char* path) {
     struct stat attr;
@@ -107,6 +118,9 @@ int main(int argc, char* argv[]) {
     // 本地 VM 实例
     VM vm;
     memset(&vm, 0, sizeof(VM));
+
+    EngineContext engine_ctx; 
+    memset(&engine_ctx, 0, sizeof(EngineContext));
     bool vm_initialized = false;
 
     // === 主循环 ===
@@ -135,6 +149,18 @@ int main(int argc, char* argv[]) {
             initVM(&vm);
             vm_initialized = true;
 
+            engine_ctx.active_project = NULL; 
+            
+            // 2. 挂载到 VM
+            vm.user_data = &engine_ctx;
+            
+            // 3. 注册 GC 回调
+            vm.host_mark_roots = main_mark_roots;
+
+            // [注意] reset_active_project 现在其实是多余的，
+            // 因为我们上面刚刚把 engine_ctx.active_project 设为 NULL。
+            // 但为了保险起见保留也行，前提是 vm.user_data 已经设置好了。
+            reset_active_project(&vm); 
             // 清除旧的 Project 指针引用 (bind_video 内部的静态变量也需要在 initVM 后重新设置，
             // 但如果你使用的是静态变量，可能需要显式调用 reset)
             reset_active_project(&vm);

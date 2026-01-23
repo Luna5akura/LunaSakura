@@ -2,7 +2,6 @@
 
 #include "value.h"
 
-// 前置声明
 typedef struct VM VM;
 
 // --- Hash Table Entry ---
@@ -12,7 +11,6 @@ typedef struct {
 } Entry;
 
 // --- Hash Table ---
-// 使用开放寻址法 (Open Addressing) 和 线性探测 (Linear Probing)
 typedef struct {
     u32 count;      // 包含 活跃条目 + 墓碑 (Tombstones) 的总数
     u32 capacity;   // 总容量 (必须是 2 的幂)

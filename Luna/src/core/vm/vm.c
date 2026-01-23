@@ -61,7 +61,8 @@ void initVM(VM* vm) {
     vm->opLeString = copyString(vm, "__le", 4);
     vm->opGeString = copyString(vm, "__ge", 4);
 
-    vm->active_project = NULL;
+    vm->user_data = NULL;
+    vm->host_mark_roots = NULL;
     vm->handlerCount = 0;
 }
 void freeVM(VM* vm) {
@@ -72,10 +73,6 @@ void freeVM(VM* vm) {
     if (vm->grayStack) {
         free(vm->grayStack);
         vm->grayStack = NULL;
-    }
-    if (vm->active_project) {
-        // Project由GC释放，无需手动free
-        vm->active_project = NULL;
     }
 }
 void defineNative(VM* vm, const char* name, NativeFn function) {

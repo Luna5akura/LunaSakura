@@ -1,7 +1,8 @@
-// src/engine/binding/object.c
+// src/engine/bridge/bridge.c
 
 #include "object.h"
 #include "core/memory.h"  // 需要 ALLOCATE, FREE, markObject
+#include "engine/engine.h"
 #include "core/vm/vm.h"      // 需要 VM 定义
 
 // ============================================================================

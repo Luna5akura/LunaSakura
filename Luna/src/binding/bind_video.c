@@ -23,12 +23,13 @@
 
 // 供 main.c 调用
 Project* get_active_project(VM* vm) {
-    // 这里假设 active_project 是直接存储 C 指针，还是存储的 ObjProject* ?
-    // 如果 vm->active_project 是 C 结构体指针 (Project*)，则直接返回
-    return vm->active_project;
+    EngineContext* ctx = (EngineContext*)vm->user_data;
+    return ctx ? ctx->active_project : NULL;
 }
+
 void reset_active_project(VM* vm) {
-    vm->active_project = NULL;
+    EngineContext* ctx = (EngineContext*)vm->user_data;
+    if (ctx) ctx->active_project = NULL;
 }
 
 // --- 内部辅助函数 ---
@@ -340,7 +341,10 @@ Value projectPreview(VM* vm, i32 argCount, Value* args) {
         }
     }
 
-    vm->active_project = proj->project;
+    EngineContext* ctx = (EngineContext*)vm->user_data;
+    if (ctx) {
+        ctx->active_project = proj->project;
+    }
     return NIL_VAL;
 }
 

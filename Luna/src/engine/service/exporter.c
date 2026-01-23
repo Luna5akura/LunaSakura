@@ -4,6 +4,7 @@
 #include "engine/media/codec/encoder.h"
 #include "core/memory.h"
 #include "core/vm/vm.h"
+#include "engine/engine.h"
 
 void export_timeline(VM* vm, Timeline* tl, const char* output_filename) {
     if (!tl) return;

@@ -5,7 +5,7 @@
 #include <SDL2/SDL.h>
 #include <glad/glad.h>
 
-#include "engine/binding/object.h" // 需要 ObjClip 定义
+#include "engine/bridge/object.h" // 需要 ObjClip 定义
 
 // 前向声明，外部无需知道具体结构
 typedef struct Decoder Decoder;

@@ -263,11 +263,10 @@ static void markRoots(VM* vm) {
         upvalue = next;
     }
     markTable(vm, &vm->globals);
-    if (vm->active_project && vm->active_project->timeline) {
-        timeline_mark(vm, vm->active_project->timeline);
+    if (vm->host_mark_roots) {
+        vm->host_mark_roots(vm);
     }
     if (vm->initString) markObject(vm, (Obj*)vm->initString);
-
     if (vm->opAddString) markObject(vm, (Obj*)vm->opAddString);
     if (vm->opSubString) markObject(vm, (Obj*)vm->opSubString);
     if (vm->opMulString) markObject(vm, (Obj*)vm->opMulString);

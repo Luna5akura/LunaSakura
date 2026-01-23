@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "engine/binding/object.h"
+#include "engine/bridge/object.h"
 
 // 前向声明
 typedef struct VM VM;

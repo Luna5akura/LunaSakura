@@ -4,6 +4,7 @@
 #include "error.h"
 #include "call_utils.h"
 #include "core/memory.h"
+
 // --- Macros for Handler Context ---
 #define SP (*spPtr)
 #define IP (*ipPtr)

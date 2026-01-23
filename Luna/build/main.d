@@ -2,7 +2,7 @@ build/main.o: main.c include/glad/glad.h include/KHR/khrplatform.h \
  src/core/memory.h src/core/object.h src/core/chunk.h src/core/value.h \
  src/common.h src/core/table.h src/core/compiler/compiler.h \
  src/core/vm/vm.h src/core/vm/error.h src/engine/engine.h \
- src/engine/binding/object.h src/engine/model/timeline.h \
+ src/engine/bridge/object.h src/engine/model/timeline.h \
  src/engine/model/transform.h src/engine/model/project.h \
  src/engine/render/compositor.h src/engine/media/codec/decoder.h \
  src/engine/media/audio/mixer.h src/engine/media/utils/probe.h \
@@ -20,7 +20,7 @@ src/core/compiler/compiler.h:
 src/core/vm/vm.h:
 src/core/vm/error.h:
 src/engine/engine.h:
-src/engine/binding/object.h:
+src/engine/bridge/object.h:
 src/engine/model/timeline.h:
 src/engine/model/transform.h:
 src/engine/model/project.h:

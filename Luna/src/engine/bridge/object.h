@@ -1,4 +1,4 @@
-// src/engine/binding/object.h
+// src/engine/bridge/object.h
 
 #pragma once
 

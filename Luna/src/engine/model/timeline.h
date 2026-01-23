@@ -3,7 +3,7 @@
 #pragma once
 
 #include "common.h" // 假设你有这个，或者使用 <stdint.h>
-#include "engine/binding/object.h" // 需要 ObjClip 定义
+#include "engine/bridge/object.h" // 需要 ObjClip 定义
 #include "transform.h"
 
 typedef struct VM VM;

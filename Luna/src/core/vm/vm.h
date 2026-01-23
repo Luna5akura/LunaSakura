@@ -3,7 +3,7 @@
 #pragma once
 #include "error.h"
 #include "core/object.h"
-#include "engine/engine.h"
+
 // --- Configuration ---
 #define STACK_MAX 2048
 #define FRAMES_MAX 64
@@ -59,8 +59,9 @@ struct VM {
     Obj** grayStack;
  
     // --- Engine State ---
-    Project* active_project;
- 
+    void* user_data; 
+    void (*host_mark_roots)(VM* vm);
+
     // --- Exception Handling ---
     Handler handlers[FRAMES_MAX];
     int handlerCount;
