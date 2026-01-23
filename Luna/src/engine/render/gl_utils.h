@@ -3,6 +3,7 @@
 #pragma once
 #include <glad/glad.h>
 #include <stdio.h>
+#include "common.h"
 
 static GLuint compile_shader(const char* src, GLenum type) {
     GLuint shader = glCreateShader(type);

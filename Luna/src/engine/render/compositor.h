@@ -6,6 +6,7 @@
 #include <glad/glad.h> 
 #include "engine/model/timeline.h"
 #include "engine/media/audio/mixer.h"
+#include "engine/render/text_renderer.h" // 新增
 
 typedef struct VM VM;
 
@@ -13,7 +14,9 @@ typedef struct Compositor {
     VM* vm;
     Timeline* timeline;
     
-    unsigned int shader_program;
+    unsigned int shader_program;     // Video YUV Shader
+    unsigned int text_shader_program;// [新增] Text Shader
+    
     unsigned int vao, vbo;
     unsigned int fbo;
     unsigned int output_texture;
@@ -21,11 +24,11 @@ typedef struct Compositor {
     uint8_t* cpu_output_buffer;
     bool cpu_buffer_stale;
     
-    // 为了不在头文件暴露 RenderSource 结构体，使用 void* 
     void* render_sources; 
     int32_t source_count;
     int32_t source_capacity;
     
+    TextRenderer* text_renderer; // [新增]
     AudioMixer* mixer;
 } Compositor;
 

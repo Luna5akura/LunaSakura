@@ -7,15 +7,13 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
+// 单个字符的布局信息
 typedef struct {
     u32 codepoint;
-    float u0, v0, u1, v1; // Atlas UV
-    float width, height;  // 像素尺寸
-    float bearing_x, bearing_y;
-    float advance;
-    
-    // 渲染时的动态计算值
-    float q_x0, q_y0, q_x1, q_y1; 
+    float u0, v0, u1, v1; // 在 Atlas 中的 UV 坐标
+    float width, height;  // 纹理像素大小
+    float bearing_x, bearing_y; // 排版偏移
+    float advance; // 前进距离
 } GlyphInfo;
 
 typedef struct TextRenderer {
@@ -23,26 +21,24 @@ typedef struct TextRenderer {
     FT_Face face;
     char* loaded_font_path;
     
-    // Texture Atlas
     GLuint atlas_id;
     int atlas_width;
     int atlas_height;
-    int atlas_x_offset; // 当前填入的位置（简单横向打包）
+    int atlas_x_offset; 
     
-    // 缓存的字形 (简单实现：最大 128 个 ASCII 字符，实际项目可用 Hashmap)
+    // 简易缓存：支持 ASCII (0-127)。实际生产应使用哈希表支持 Unicode。
     GlyphInfo glyphs[128]; 
     bool glyph_loaded[128];
 
-    // 当前排版结果
-    float total_width;
-    float total_height;
 } TextRenderer;
 
 TextRenderer* text_renderer_create();
 void text_renderer_free(TextRenderer* tr);
 
-// 如果字体或内容变化，重新生成 Atlas 和布局
-// 返回 true 表示纹理或尺寸发生了变化
+// 准备渲染数据 (检查字体变更，更新 Atlas，计算宽高)
+// 返回 true 表示数据已更新
 bool text_renderer_update(TextRenderer* tr, Clip* clip);
 
+// 辅助函数：获取内部信息
+GlyphInfo* text_renderer_get_glyph(TextRenderer* tr, char c);
 GLuint text_renderer_get_texture(TextRenderer* tr);

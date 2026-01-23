@@ -9,7 +9,7 @@ static void init_defaults(Clip* c) {
     c->default_scale_y = 1.0;
     c->default_opacity = 1.0;
     c->volume = 1.0;
-    c->fps = 30.0; // 默认
+    c->fps = 30.0;
 }
 
 Clip* clip_create_media(const char* path) {
@@ -31,7 +31,7 @@ Clip* clip_create_text(const char* content, const char* font_path, u32 size, u8 
     c->text.font_size = size;
     c->text.color.r = r; c->text.color.g = g; c->text.color.b = b; c->text.color.a = 255;
     
-    c->duration = 5.0; // 文字默认时长5秒
+    c->duration = 5.0; // 默认 5 秒
     init_defaults(c);
     return c;
 }

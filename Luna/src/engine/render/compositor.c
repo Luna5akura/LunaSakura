@@ -2,6 +2,7 @@
 
 #include "compositor.h"
 #include "engine/media/codec/decoder.h"
+#include "engine/render/gl_utils.h" // 使用新工具库
 #include "core/memory.h"
 #include "core/vm/vm.h"
 
@@ -66,6 +67,23 @@ const char* FS_SCREEN = "#version 330 core\n"
     "}\n";
 
 
+// --- Text Shader ---
+// 允许对每个字符设置 UV 范围 (u_uv_rect) 来复用同一个单位 Quad (0..1)
+const char* FS_SOURCE_TEXT = "#version 330 core\n"
+    "in vec2 TexCoord;\n"
+    "out vec4 FragColor;\n"
+    "uniform sampler2D textAtlas;\n"
+    "uniform vec4 u_color;\n"
+    "uniform vec4 u_uv_rect;\n" // xy=top-left, zw=bottom-right
+    "void main() {\n"
+    "   // 映射 UV: 从 0..1 映射到 u_uv_rect 范围\n"
+    "   vec2 uv = mix(u_uv_rect.xy, u_uv_rect.zw, TexCoord);\n"
+    "   // 采样红色通道作为 Alpha\n"
+    "   float alpha = texture(textAtlas, uv).r;\n"
+    "   FragColor = vec4(u_color.rgb, alpha * u_color.a);\n"
+    "}\n";
+
+
 // --- Math Helpers ---
 typedef struct { float m[16]; } mat4;
 
@@ -86,22 +104,6 @@ static mat4 mat4_translate_scale(float x, float y, float sx, float sy) {
     res.m[0]=sx; res.m[5]=sy; res.m[10]=1.0f; res.m[15]=1.0f; 
     res.m[12]=x; res.m[13]=y; 
     return res;
-}
-
-static GLuint compile_shader(const char* src, GLenum type) {
-    GLuint shader=glCreateShader(type); 
-    glShaderSource(shader, 1, &src, NULL); 
-    glCompileShader(shader); 
-    
-    // Check compilation errors (Optional but recommended)
-    GLint success;
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        char infoLog[512];
-        glGetShaderInfoLog(shader, 512, NULL, infoLog);
-        fprintf(stderr, "Shader Compilation Error: %s\n", infoLog);
-    }
-    return shader;
 }
 
 // Helper: Get Decoder
@@ -150,21 +152,6 @@ static RenderSource* get_source_safe(Compositor* comp, Clip* clip) {
     return src;
 }
 
-static GLuint build_shader_program(const char* vs_src, const char* fs_src) {
-    GLuint vs = compile_shader(vs_src, GL_VERTEX_SHADER);
-    GLuint fs = compile_shader(fs_src, GL_FRAGMENT_SHADER);
-    GLuint program = glCreateProgram();
-    glAttachShader(program, vs);
-    glAttachShader(program, fs);
-    glLinkProgram(program);
-    
-    // 可选：检查 Link 状态
-    
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-    return program;
-}
-
 // static Decoder* get_decoder_safe(Compositor* comp, Clip* clip) {
 //     for(int i=0; i<comp->decoder_count; i++) {
 //         if (decoder_get_clip_ref(comp->decoders[i]) == clip) return comp->decoders[i];
@@ -180,6 +167,73 @@ static GLuint build_shader_program(const char* vs_src, const char* fs_src) {
 // }
 
 // Helper: Draw
+// [新增] 专门绘制文字的函数
+static void draw_clip_text(Compositor* comp, TimelineClip* tc) {
+    Clip* clip = tc->media;
+    TextRenderer* tr = comp->text_renderer;
+    
+    // 1. 更新 Atlas (如果需要)
+    text_renderer_update(tr, clip);
+    
+    glUseProgram(comp->text_shader_program);
+    
+    // 2. 绑定 Atlas 纹理
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, text_renderer_get_texture(tr));
+    glUniform1i(glGetUniformLocation(comp->text_shader_program, "textAtlas"), 0);
+    
+    // 3. 设置全局颜色和透明度 (结合 Clip 自身的 transform.opacity)
+    float r = clip->text.color.r / 255.0f;
+    float g = clip->text.color.g / 255.0f;
+    float b = clip->text.color.b / 255.0f;
+    float a = (clip->text.color.a / 255.0f) * tc->transform.opacity;
+    
+    glUniform4f(glGetUniformLocation(comp->text_shader_program, "u_color"), r, g, b, a);
+    
+    // 4. 遍历字符并绘制
+    // 计算起始位置 (基于 Transform)
+    // 注意：tc->transform.x/y 是 Clip 左上角在 Timeline 上的坐标
+    float start_x = tc->transform.x;
+    float start_y = tc->transform.y;
+    float scale = tc->transform.scale_x; // 假设统一缩放
+    
+    float x_cursor = 0;
+    
+    GLint loc_model = glGetUniformLocation(comp->text_shader_program, "u_model");
+    GLint loc_uv = glGetUniformLocation(comp->text_shader_program, "u_uv_rect");
+    
+    const char* p = clip->text.content;
+    while (*p) {
+        GlyphInfo* glyph = text_renderer_get_glyph(tr, *p);
+        
+        float xpos = start_x + (x_cursor + glyph->bearing_x) * scale;
+        // 字体基线校正 (FreeType origin 是基线，GL origin 是左上/左下，需根据实际坐标系调整)
+        // 这里假设 Y 向下增加 (常见 2D 坐标系)
+        float ypos = start_y + (glyph->bearing_y) * scale; // 需微调
+        // 简化版：直接对齐顶部
+        ypos = start_y; 
+
+        float w = glyph->width * scale;
+        float h = glyph->height * scale;
+        
+        // 设置 Model 矩阵
+        mat4 model = mat4_translate_scale(xpos, ypos, w, h);
+        glUniformMatrix4fv(loc_model, 1, GL_FALSE, model.m);
+        
+        // 设置 UV 范围 (u0, v0, u1, v1)
+        // 注意：v0/v1 顺序取决于纹理坐标系。GL原点在左下，FreeType生成的图集通常也是。
+        // 但 Quad 也是 0..1。我们传入 (u0, v1, u1, v0) 可能需要根据翻转情况调整。
+        glUniform4f(loc_uv, glyph->u0, glyph->v1, glyph->u1, glyph->v0); 
+        
+        glBindVertexArray(comp->vao);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        
+        x_cursor += glyph->advance;
+        p++;
+    }
+}
+
+
 static void draw_clip_rect(Compositor* comp, RenderSource* src, TimelineClip* tc) {
     if (src->tex_y == 0) return;
     
@@ -221,6 +275,8 @@ Compositor* compositor_create(VM* vm, Timeline* timeline) {
 
 
     comp->shader_program = build_shader_program(VS_SOURCE, FS_SOURCE_YUV);
+    comp->text_shader_program = build_shader_program(VS_SOURCE, FS_SOURCE_TEXT);
+    comp->text_renderer = text_renderer_create();
 
     // Quad for rendering (Full Rect)
     float quad[] = { 
@@ -267,6 +323,9 @@ Compositor* compositor_create(VM* vm, Timeline* timeline) {
 
 void compositor_free(VM* vm, Compositor* comp) {
     if (!comp) return;
+
+    if (comp->text_renderer) text_renderer_free(comp->text_renderer);
+    glDeleteProgram(comp->text_shader_program);
     if (comp->mixer) mixer_free(comp->mixer);
     
     // [修改] 释放 RenderSource 资源
@@ -308,6 +367,8 @@ void compositor_render(Compositor* comp, double time) {
     mat4 proj = mat4_ortho(0, comp->timeline->width, comp->timeline->height, 0, -1, 1);
     glUseProgram(comp->shader_program);
     glUniformMatrix4fv(glGetUniformLocation(comp->shader_program, "u_projection"), 1, GL_FALSE, proj.m);
+    glUseProgram(comp->text_shader_program);
+    glUniformMatrix4fv(glGetUniformLocation(comp->text_shader_program, "u_projection"), 1, GL_FALSE, proj.m);
     
     if (comp->mixer) mixer_begin_frame(comp->mixer);
     
@@ -317,75 +378,79 @@ void compositor_render(Compositor* comp, double time) {
 
         TimelineClip* tc = timeline_get_clip_at(track, time);
         if (!tc) continue;
-        
-        // [修改] 获取 RenderSource
-        RenderSource* src = get_source_safe(comp, tc->media);
-        double clip_time = (time - tc->timeline_start) + tc->source_in;
-        
-        bool new_frame = decoder_update_video(src->decoder, clip_time);
-        
-        uint8_t* data[3];
-        int linesize[3];
-        int fw = 0, fh = 0; // [新增] 用于接收宽高
-        
-        // [修改] 调用新的 API
-        if (decoder_get_video_data(src->decoder, data, linesize, &fw, &fh)) {
+       
+        // === [修改] 分流处理 ===
+        if (tc->media->type == CLIP_TYPE_TEXT) {
+            // 文字渲染路径
+            draw_clip_text(comp, tc);
+        } else { 
+            RenderSource* src = get_source_safe(comp, tc->media);
+            double clip_time = (time - tc->timeline_start) + tc->source_in;
             
-            if (new_frame) {
-                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            bool new_frame = decoder_update_video(src->decoder, clip_time);
+            
+            uint8_t* data[3];
+            int linesize[3];
+            int fw = 0, fh = 0; // [新增] 用于接收宽高
+            
+            // [修改] 调用新的 API
+            if (decoder_get_video_data(src->decoder, data, linesize, &fw, &fh)) {
                 
-                // 检查尺寸是否变更，决定是 Realloc 还是 Update
-                bool resize = (src->width != fw || src->height != fh);
-                if (resize) {
-                    src->width = fw;
-                    src->height = fh;
-                }
+                if (new_frame) {
+                    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                    
+                    // 检查尺寸是否变更，决定是 Realloc 还是 Update
+                    bool resize = (src->width != fw || src->height != fh);
+                    if (resize) {
+                        src->width = fw;
+                        src->height = fh;
+                    }
 
-                // Y Plane
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, src->tex_y);
-                glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[0]);
-                if (resize) {
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw, fh, 
-                                 0, GL_RED, GL_UNSIGNED_BYTE, data[0]);
-                } else {
-                    // [优化] 使用 SubImage
-                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw, fh,
-                                    GL_RED, GL_UNSIGNED_BYTE, data[0]);
-                }
+                    // Y Plane
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, src->tex_y);
+                    glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[0]);
+                    if (resize) {
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw, fh, 
+                                    0, GL_RED, GL_UNSIGNED_BYTE, data[0]);
+                    } else {
+                        // [优化] 使用 SubImage
+                        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw, fh,
+                                        GL_RED, GL_UNSIGNED_BYTE, data[0]);
+                    }
 
-                // U Plane
-                glActiveTexture(GL_TEXTURE1);
-                glBindTexture(GL_TEXTURE_2D, src->tex_u);
-                glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[1]);
-                if (resize) {
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw/2, fh/2, 
-                                 0, GL_RED, GL_UNSIGNED_BYTE, data[1]);
-                } else {
-                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw/2, fh/2,
-                                    GL_RED, GL_UNSIGNED_BYTE, data[1]);
-                }
+                    // U Plane
+                    glActiveTexture(GL_TEXTURE1);
+                    glBindTexture(GL_TEXTURE_2D, src->tex_u);
+                    glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[1]);
+                    if (resize) {
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw/2, fh/2, 
+                                    0, GL_RED, GL_UNSIGNED_BYTE, data[1]);
+                    } else {
+                        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw/2, fh/2,
+                                        GL_RED, GL_UNSIGNED_BYTE, data[1]);
+                    }
 
-                // V Plane (同理)
-                glActiveTexture(GL_TEXTURE2);
-                glBindTexture(GL_TEXTURE_2D, src->tex_v);
-                glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[2]);
-                if (resize) {
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw/2, fh/2, 
-                                 0, GL_RED, GL_UNSIGNED_BYTE, data[2]);
-                } else {
-                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw/2, fh/2,
-                                    GL_RED, GL_UNSIGNED_BYTE, data[2]);
+                    // V Plane (同理)
+                    glActiveTexture(GL_TEXTURE2);
+                    glBindTexture(GL_TEXTURE_2D, src->tex_v);
+                    glPixelStorei(GL_UNPACK_ROW_LENGTH, linesize[2]);
+                    if (resize) {
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, fw/2, fh/2, 
+                                    0, GL_RED, GL_UNSIGNED_BYTE, data[2]);
+                    } else {
+                        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw/2, fh/2,
+                                        GL_RED, GL_UNSIGNED_BYTE, data[2]);
+                    }
+                                
+                    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
                 }
-                             
-                glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                
+                draw_clip_rect(comp, src, tc);
             }
-            
-            draw_clip_rect(comp, src, tc);
-        }
-
-        if (comp->mixer) {
-            mixer_add_source(comp->mixer, src->decoder, (float)tc->media->volume);
+            if (comp->mixer) {
+                mixer_add_source(comp->mixer, src->decoder, (float)tc->media->volume);
+            }
         }
     }
     
