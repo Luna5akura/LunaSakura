@@ -3,6 +3,7 @@
 #include "decoder.h"
 #include "engine/media/utils/ffmpeg_utils.h" // [新增]
 #include <libswresample/swresample.h>
+#include <stdatomic.h> // [新增]
 #include <SDL2/SDL.h> // 仅用于 Thread 和 Mutex，不用于渲染
 
 #define MAX_QUEUE_SIZE 8
@@ -26,7 +27,7 @@ typedef struct {
 
 
 struct Decoder {
-    // ... (标识、线程、队列、音频 RB 等保持不变) ...
+    // ... (video_queue, clip_ref 等保持不变) ...
     Clip* clip_ref;
     char* file_path_copy;
     SDL_Thread* thread;
@@ -36,23 +37,22 @@ struct Decoder {
     bool seek_requested;
     double seek_target_time;
     FrameQueue video_queue;
-    float* audio_ring_buffer;
-    int32_t rb_capacity;
-    int32_t rb_head;
-    int32_t rb_tail;
-    int32_t rb_count;
-
-    // [修改] 视频状态
-    // 移除: GLuint tex_y, tex_u, tex_v;
-    // 新增: 缓存当前要在屏幕上显示的帧 (CPU Memory)
+    
+    // [修改] 视频帧缓存
     AVFrame* current_frame_cpu;
     
+    // [修改] 音频环形缓冲 (SPSC Lock-Free)
+    float* audio_ring_buffer;
+    int32_t rb_capacity;
+    atomic_int rb_head; // 原子类型: 写指针
+    atomic_int rb_tail; // 原子类型: 读指针
+    // 移除: int32_t rb_count; (不再需要，通过 head - tail 计算)
+
+    // ... (其他状态保持不变) ...
     double current_pts;
     bool active_this_frame;
-    
     int64_t start_pts;
     bool has_start_pts;
-    
     MediaContext media; 
     SwrContext* swr_ctx;
 };
@@ -124,7 +124,10 @@ static int decoder_thread_func(void* data) {
             seek_tgt = dec->seek_target_time;
             dec->seek_requested = false;
             fq_clear(&dec->video_queue);
-            dec->rb_head = dec->rb_tail = dec->rb_count = 0;
+            
+            // [修改] 重置原子索引
+            atomic_store(&dec->rb_head, 0);
+            atomic_store(&dec->rb_tail, 0);
         }
         SDL_UnlockMutex(dec->mutex);
 
@@ -192,25 +195,41 @@ static int decoder_thread_func(void* data) {
              if (avcodec_send_packet(dec->media.aud_ctx, pkt) == 0) {
                  while (avcodec_receive_frame(dec->media.aud_ctx, frame) == 0) {
                      uint8_t* out_data[2] = {0};
-                     // [修改] 使用 media.aud_ctx
                      int out_samples = av_rescale_rnd(swr_get_delay(dec->swr_ctx, dec->media.aud_ctx->sample_rate) + frame->nb_samples,
                                                       MIX_SAMPLE_RATE, dec->media.aud_ctx->sample_rate, AV_ROUND_UP);
                      av_samples_alloc(out_data, NULL, 2, out_samples, AV_SAMPLE_FMT_FLT, 0);
                      int len = swr_convert(dec->swr_ctx, out_data, out_samples, (const uint8_t**)frame->data, frame->nb_samples);
                      
                      if (len > 0) {
-                         SDL_LockMutex(dec->mutex);
-                         int floats_to_write = len * 2;
-                         int available = dec->rb_capacity - dec->rb_count;
-                         if (available >= floats_to_write) {
-                             float* raw = (float*)out_data[0];
-                             for (int i=0; i<floats_to_write; i++) {
-                                 dec->audio_ring_buffer[dec->rb_head] = raw[i];
-                                 dec->rb_head = (dec->rb_head + 1) % dec->rb_capacity;
+                         // [修改] 无锁写入逻辑
+                         // 不需要 SDL_LockMutex(dec->mutex)
+                         
+                         int floats_to_write = len * 2; // Stereo
+                         float* raw = (float*)out_data[0];
+                         
+                         // 1. 获取当前索引快照
+                         int head = atomic_load_explicit(&dec->rb_head, memory_order_relaxed);
+                         int tail = atomic_load_explicit(&dec->rb_tail, memory_order_acquire);
+                         
+                         // 2. 计算剩余空间 (保留一个空位以区分满和空)
+                         // Free = (Tail - Head + Cap - 1) % Cap
+                         int free_space = (tail - head + dec->rb_capacity - 1) % dec->rb_capacity;
+                         
+                         if (free_space >= floats_to_write) {
+                             // 3. 写入数据 (处理回绕)
+                             int chunk1 = dec->rb_capacity - head;
+                             if (chunk1 >= floats_to_write) {
+                                 memcpy(dec->audio_ring_buffer + head, raw, floats_to_write * sizeof(float));
+                             } else {
+                                 memcpy(dec->audio_ring_buffer + head, raw, chunk1 * sizeof(float));
+                                 memcpy(dec->audio_ring_buffer, raw + chunk1, (floats_to_write - chunk1) * sizeof(float));
                              }
-                             dec->rb_count += floats_to_write;
-                         }
-                         SDL_UnlockMutex(dec->mutex);
+                             
+                             // 4. 更新 Head (发布数据)
+                             int new_head = (head + floats_to_write) % dec->rb_capacity;
+                             atomic_store_explicit(&dec->rb_head, new_head, memory_order_release);
+                         } 
+                         // else: 空间不足，丢弃数据 (Drop) - 这比阻塞音频线程要好
                      }
                      av_freep(&out_data[0]);
                  }
@@ -240,8 +259,12 @@ Decoder* decoder_create(Clip* clip) {
     dec->mutex = SDL_CreateMutex();
     dec->cond_can_produce = SDL_CreateCond();
     
-    dec->rb_capacity = 131072;
+    dec->rb_capacity = AUDIO_RB_SIZE;
     dec->audio_ring_buffer = (float*)malloc(sizeof(float) * dec->rb_capacity);
+    
+    // [新增] 原子初始化
+    atomic_init(&dec->rb_head, 0);
+    atomic_init(&dec->rb_tail, 0);
     
     // [修改] 不再初始化 GL 纹理
     dec->current_frame_cpu = NULL;
@@ -350,15 +373,31 @@ void decoder_set_active(Decoder* dec, bool active) {
 }
 
 void decoder_mix_audio(Decoder* dec, float* stream, int len_samples, float volume) {
-    if (SDL_TryLockMutex(dec->mutex) == 0) {
-        if (dec->rb_count > 0) {
-            int read_amt = (dec->rb_count > len_samples) ? len_samples : dec->rb_count;
-            for (int k = 0; k < read_amt; k++) {
-                stream[k] += dec->audio_ring_buffer[dec->rb_tail] * volume;
-                dec->rb_tail = (dec->rb_tail + 1) % dec->rb_capacity;
-            }
-            dec->rb_count -= read_amt;
+    if (!dec || !dec->audio_ring_buffer) return;
+
+    // [修改] 无锁读取逻辑
+    // 1. 获取快照
+    int tail = atomic_load_explicit(&dec->rb_tail, memory_order_relaxed);
+    int head = atomic_load_explicit(&dec->rb_head, memory_order_acquire);
+    
+    // 2. 计算可用数据
+    // Available = (Head - Tail + Cap) % Cap
+    int available = (head - tail + dec->rb_capacity) % dec->rb_capacity;
+    
+    if (available > 0) {
+        int read_amt = (available > len_samples) ? len_samples : available;
+        
+        // 3. 读取并混合
+        // 由于需要 += 混音，且涉及回绕，这里用循环简单处理，
+        // 或者分两段处理 (如果性能敏感，可以用 SIMD 优化这里)
+        int idx = tail;
+        for (int k = 0; k < read_amt; k++) {
+            stream[k] += dec->audio_ring_buffer[idx] * volume;
+            idx++;
+            if (idx == dec->rb_capacity) idx = 0;
         }
-        SDL_UnlockMutex(dec->mutex);
+        
+        // 4. 更新 Tail (消费数据)
+        atomic_store_explicit(&dec->rb_tail, idx, memory_order_release);
     }
 }
