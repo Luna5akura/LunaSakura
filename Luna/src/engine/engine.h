@@ -23,6 +23,5 @@
 
 typedef struct {
     Project* active_project;
-    // 未来可以加更多：AudioSystem* audio; 等等
 } EngineContext;
 

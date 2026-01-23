@@ -9,53 +9,40 @@
 // 1. Clip Implementation
 // ============================================================================
 
-// GC 标记阶段回调：告诉 GC Clip 引用了哪些对象
-static void clipMark(VM* vm, Obj* obj) {
-    ObjClip* clip = (ObjClip*)obj;
-    if (clip->path) {
-        markObject(vm, (Obj*)clip->path);
+static void clipFree(VM* vm, Obj* obj) {
+    ObjClip* oClip = (ObjClip*)obj;
+    if (oClip->clip) {
+        // 调用纯 C 的释放函数
+        clip_free(oClip->clip);
+        oClip->clip = NULL;
     }
 }
 
-// Clip 没有引用 malloc 分配的外部 C 指针，只有 VM 管理的 ObjString，
-// 所以不需要专门的 free 回调，VM 回收 ObjClip 内存时会自动断开引用。
+// Clip 内部现在只持有 malloc 出来的内存，不再直接持有 ObjString (path 已经深拷贝了)
+// 所以通常不需要 mark，除非我们在 Clip->user_data 里藏了别的 VM 对象。
+// 这里暂时留空或保留基本的结构。
+static void clipMark(VM* vm, Obj* obj) {
+    // 如果 Clip 结构体未来需要引用其他 Obj (如滤镜列表)，则通过 oClip->clip 访问并标记
+}
+
 const ForeignClassMethods ClipMethods = {
-    "clip",      // typeName
-    NULL,        // allocate (可选)
-    NULL,        // free (不需要手动释放)
-    clipMark     // mark
+    "clip",
+    NULL,
+    clipFree, // 必须注册，因为 Clip* 是 malloc 的
+    clipMark
 };
 
 ObjClip* newClip(VM* vm, ObjString* path) {
-    // 1. 调用 Core 的通用构造器
-    ObjClip* clip = (ObjClip*)newForeign(vm, sizeof(ObjClip), &ClipMethods);
+    ObjClip* obj = (ObjClip*)newForeign(vm, sizeof(ObjClip), &ClipMethods);
 
-    // 2. 初始化字段
-    clip->path = path;
+    // 1. 创建底层 C 模型
+    // 注意：path->chars 是 raw char*
+    obj->clip = clip_create(path->chars);
     
-    // 设置默认值
-    clip->duration = 0.0;
-    clip->start_time = 0.0;
-    clip->in_point = 0.0;
-    clip->out_point = 0.0;
-    clip->fps = 0.0;
-    clip->volume = 1.0;
-    clip->width = 0;
-    clip->height = 0;
-    clip->layer = 0;
-    
-    clip->has_video = false;
-    clip->has_audio = false;
-    clip->audio_channels = 0;
-    clip->audio_sample_rate = 0;
+    // 2. 建立反向连接 (用于 GC 标记阶段从 Timeline 回溯)
+    obj->clip->user_data = obj;
 
-    clip->default_scale_x = 1.0;
-    clip->default_scale_y = 1.0;
-    clip->default_x = 0.0;
-    clip->default_y = 0.0;
-    clip->default_opacity = 1.0;
-
-    return clip;
+    return obj;
 }
 
 // ============================================================================

@@ -54,7 +54,7 @@ static i32 open_encoder_internal(VM* vm, AVFormatContext* out_fmt_ctx, AVCodecCo
 }
 
 // --- Export Logic ---
-void transcode_clip(VM* vm, ObjClip* clip, const char* output_filename) {
+void transcode_clip(VM* vm, Clip* clip, const char* output_filename) {
     // Resources
     MediaContext in_media; // [修改] 使用 MediaContext
     media_ctx_init(&in_media);
@@ -66,11 +66,11 @@ void transcode_clip(VM* vm, ObjClip* clip, const char* output_filename) {
     AVFrame* frame = NULL;
     
     i32 ret = 0;
-    fprintf(stderr, "[Transcoder] Processing '%s' -> '%s'\n", clip->path->chars, output_filename);
+    fprintf(stderr, "[Transcoder] Processing '%s' -> '%s'\n", clip->path, output_filename);
 
     // --- Input Setup [修改] ---
     // 仅需视频流进行转码
-    if (!media_open(&in_media, clip->path->chars, true, false)) {
+    if (!media_open(&in_media, clip->path, true, false)) {
         fprintf(stderr, "[Transcoder] Error: Could not open input file.\n");
         goto cleanup;
     }

@@ -25,7 +25,7 @@ typedef struct {
 
 struct Decoder {
     // 标识
-    ObjClip* clip_ref;
+    Clip* clip_ref;
     char* file_path_copy;
 
     // 线程与同步
@@ -237,13 +237,13 @@ static int decoder_thread_func(void* data) {
 }
 // --- Public API Implementation ---
 
-Decoder* decoder_create(ObjClip* clip) {
+Decoder* decoder_create(Clip* clip) {
     Decoder* dec = (Decoder*)malloc(sizeof(Decoder));
     memset(dec, 0, sizeof(Decoder));
     media_ctx_init(&dec->media); // 初始化内部结构
     
     dec->clip_ref = clip;
-    dec->file_path_copy = strdup(clip->path->chars); // 使用 strdup
+    dec->file_path_copy = strdup(clip->path); 
     dec->mutex = SDL_CreateMutex();
     dec->cond_can_produce = SDL_CreateCond();
     
@@ -360,7 +360,7 @@ GLuint decoder_get_texture_y(Decoder* dec) { return dec->tex_y; }
 GLuint decoder_get_texture_u(Decoder* dec) { return dec->tex_u; }
 GLuint decoder_get_texture_v(Decoder* dec) { return dec->tex_v; }
 
-ObjClip* decoder_get_clip_ref(Decoder* dec) { return dec->clip_ref; }
+Clip* decoder_get_clip_ref(Decoder* dec) { return dec->clip_ref; }
 
 void decoder_set_active(Decoder* dec, bool active) {
     dec->active_this_frame = active;

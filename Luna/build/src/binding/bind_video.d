@@ -1,7 +1,7 @@
 build/src/binding/bind_video.o: src/binding/bind_video.c \
  src/core/memory.h src/core/object.h src/core/chunk.h src/core/value.h \
  src/common.h src/core/table.h src/core/vm/vm.h src/core/vm/error.h \
- src/engine/engine.h src/engine/bridge/object.h \
+ src/engine/engine.h src/engine/bridge/object.h src/engine/model/clip.h \
  src/engine/model/timeline.h src/engine/model/transform.h \
  src/engine/model/project.h src/engine/render/compositor.h \
  src/engine/media/codec/decoder.h include/glad/glad.h \
@@ -18,6 +18,7 @@ src/core/vm/vm.h:
 src/core/vm/error.h:
 src/engine/engine.h:
 src/engine/bridge/object.h:
+src/engine/model/clip.h:
 src/engine/model/timeline.h:
 src/engine/model/transform.h:
 src/engine/model/project.h:

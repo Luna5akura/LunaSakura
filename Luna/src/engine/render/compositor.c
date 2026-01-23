@@ -1,6 +1,7 @@
 // src/engine/render/compositor.c
 
 #include "compositor.h"
+#include "engine/media/codec/decoder.h"
 #include "core/memory.h"
 #include "core/vm/vm.h"
 
@@ -95,7 +96,7 @@ static GLuint compile_shader(const char* src, GLenum type) {
 }
 
 // Helper: Get Decoder
-static Decoder* get_decoder_safe(Compositor* comp, ObjClip* clip) {
+static Decoder* get_decoder_safe(Compositor* comp, Clip* clip) {
     for(int i=0; i<comp->decoder_count; i++) {
         if (decoder_get_clip_ref(comp->decoders[i]) == clip) return comp->decoders[i];
     }

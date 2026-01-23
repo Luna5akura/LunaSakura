@@ -120,7 +120,7 @@ void timeline_update_duration(Timeline* tl) {
     tl->duration = max_duration;
 }
 
-i32 timeline_add_clip(VM* vm, Timeline* tl, i32 track_index, ObjClip* media, double start_time) {
+i32 timeline_add_clip(VM* vm, Timeline* tl, i32 track_index, Clip* media, double start_time) {
     if (track_index < 0 || track_index >= (i32)tl->track_count) return -1;
     Track* track = &tl->tracks[track_index];
     
@@ -238,12 +238,13 @@ TimelineClip* timeline_get_clip_at(Track* track, double time) {
 
 void timeline_mark(VM* vm, Timeline* tl) {
     if (!tl) return;
-    for (u32 i = 0; i < tl->track_count; i++) {
+    for (uint32_t i = 0; i < tl->track_count; i++) {
         Track* track = &tl->tracks[i];
-        for (u32 j = 0; j < track->clip_count; j++) {
-            TimelineClip* clip = &track->clips[j];
-            if (clip->media) {
-                markObject(vm, (Obj*)clip->media);
+        for (uint32_t j = 0; j < track->clip_count; j++) {
+            TimelineClip* tc = &track->clips[j];
+            if (tc->media && tc->media->user_data) {
+                // 通过 user_data 找回 ObjClip 进行标记
+                markObject(vm, (Obj*)tc->media->user_data);
             }
         }
     }

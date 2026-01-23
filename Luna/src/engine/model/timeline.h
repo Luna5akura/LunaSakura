@@ -6,21 +6,19 @@
 #include "engine/bridge/object.h" // 需要 ObjClip 定义
 #include "transform.h"
 
-typedef struct VM VM;
-
 // === 基础组件 ===
 
 // 时间轴片段
+
 typedef struct {
-    ObjClip* media;         // 8 bytes
-    double timeline_start;  // 8 bytes
-    double timeline_duration; // 8 bytes
-    double source_in;       // 8 bytes
-    Transform transform;    // 32 bytes
+    Clip* media;            // 修改：使用 Clip* 而非 ObjClip*
+    double timeline_start;
+    double timeline_duration;
+    double source_in;
+    Transform transform;
 } TimelineClip;
 
 // === 容器结构 ===
-
 typedef struct {
     i32 id;
     u8 flags; // bit 0: visible, bit 1: locked
@@ -48,14 +46,14 @@ typedef struct Timeline {
 
 // === API ===
 Timeline* timeline_create(VM* vm, u32 width, u32 height, double fps);
-void timeline_free(VM* vm, Timeline* tl);
-
 i32 timeline_add_track(VM* vm, Timeline* tl);
 void timeline_remove_track(VM* vm, Timeline* tl, i32 track_index);
-
-i32 timeline_add_clip(VM* vm, Timeline* tl, i32 track_index, ObjClip* media, double start_time);
+void timeline_update_duration(Timeline* tl);
 void timeline_remove_clip(Timeline* tl, i32 track_index, i32 clip_index);
 
-TimelineClip* timeline_get_clip_at(Track* track, double time);
-void timeline_update_duration(Timeline* tl);
+i32 timeline_add_clip(struct VM* vm, Timeline* tl, int32_t track_index, Clip* media, double start_time);
+struct VM;
 void timeline_mark(VM* vm, Timeline* tl);
+void timeline_free(VM* vm, Timeline* tl);
+
+TimelineClip* timeline_get_clip_at(Track* track, double time);

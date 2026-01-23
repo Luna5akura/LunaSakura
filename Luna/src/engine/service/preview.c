@@ -6,14 +6,13 @@
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
 #include <SDL2/SDL.h>
-#include "core/vm/vm.h"
 
 static double get_clock() {
     return (double)SDL_GetTicks() / 1000.0;
 }
 
 // 独立的预览播放函数
-void play_video_clip_preview(VM* vm, ObjClip* clip) {
+void play_video_clip_preview(Clip* clip) {
     MediaContext ctx;
     media_ctx_init(&ctx);
 
@@ -27,10 +26,10 @@ void play_video_clip_preview(VM* vm, ObjClip* clip) {
     SDL_Renderer* renderer = NULL;
     SDL_Texture* texture = NULL;
     
-    printf("[Preview] Opening '%s'...\n", clip->path->chars);
+    printf("[Preview] Opening '%s'...\n", clip->path);
 
     // --- 1. FFmpeg Init [修改] ---
-    if (!media_open(&ctx, clip->path->chars, true, false)) {
+    if (!media_open(&ctx, clip->path, true, false)) {
         fprintf(stderr, "[Error] Could not open file.\n");
         goto cleanup;
     }

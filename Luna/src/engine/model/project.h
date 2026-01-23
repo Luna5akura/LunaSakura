@@ -3,7 +3,7 @@
 #pragma once
 
 #include "common.h"
-#include "engine/model/timeline.h" // 需要 Timeline 定义
+typedef struct Timeline Timeline;
 
 // Project 纯数据结构
 // 负责持有 Timeline 指针以及全局项目配置

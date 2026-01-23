@@ -13,7 +13,7 @@ typedef struct Decoder Decoder;
 // --- Lifecycle ---
 
 // 为指定的 Clip 创建解码器
-Decoder* decoder_create(ObjClip* clip);
+Decoder* decoder_create(Clip* clip); 
 
 // 销毁解码器，停止线程，释放资源
 void decoder_destroy(Decoder* dec);
@@ -30,7 +30,7 @@ GLuint decoder_get_texture_u(Decoder* dec);
 GLuint decoder_get_texture_v(Decoder* dec);
 
 // 获取解码器关联的 Clip 对象（用于缓存查找）
-ObjClip* decoder_get_clip_ref(Decoder* dec);
+Clip* decoder_get_clip_ref(Decoder* dec);
 
 // 标记当前帧是否活跃（用于音频混音策略）
 void decoder_set_active(Decoder* dec, bool active);

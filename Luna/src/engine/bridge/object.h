@@ -1,54 +1,29 @@
-// src/engine/bridge/object.h
-
 #pragma once
 
 #include "core/object.h"
-// 必须前向声明 Timeline，因为 Timeline 指针被 ObjTimeline 持有
-// 但 Timeline 结构体定义在 model/timeline.h 中
-typedef struct Timeline Timeline;
-typedef struct Project Project;
+// 引入纯 C 模型定义
+#include "engine/model/clip.h"
+#include "engine/model/timeline.h"
+#include "engine/model/project.h"
 
 // --- Host Objects Definitions ---
 
-// 1. Clip Object
+// 1. Clip Object (VM Wrapper)
 typedef struct {
     ObjForeign header; 
-
-    struct sObjString* path;
-    double duration;
-    double start_time;
-    double in_point;
-    double out_point;
-    double fps;
-
-    bool has_video;
-    bool has_audio;
-    i32 audio_channels;
-    i32 audio_sample_rate;
-
-    // 变换属性默认值
-    double default_scale_x;
-    double default_scale_y;
-    double default_x;
-    double default_y;
-    double default_opacity;
-
-    double volume; 
-    u32 width;
-    u32 height;
-    i32 layer;
+    Clip* clip; 
 } ObjClip;
 
 // 2. Timeline Object
 typedef struct {
     ObjForeign header;
-    Timeline* timeline; // 指向 C 层的 Timeline 结构
+    Timeline* timeline; 
 } ObjTimeline;
 
 // 3. Project Object
 typedef struct {
     ObjForeign header;
-    struct Project* project; // 指向 C 层的 Project 结构 (如果 project.h 存在)
+    Project* project; 
 } ObjProject;
 
 // --- Method Tables ---

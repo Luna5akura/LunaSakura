@@ -17,4 +17,4 @@ typedef struct VM VM;
  * @param clip 包含源文件路径、入出点信息的素材对象
  * @param output_filename 输出文件的完整路径 (如 "export.mp4")
  */
-void transcode_clip(VM* vm, ObjClip* clip, const char* output_filename);
+void transcode_clip(VM* vm, Clip* clip, const char* output_filename);
