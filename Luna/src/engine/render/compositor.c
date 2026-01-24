@@ -247,7 +247,7 @@ static void draw_clip_text(Compositor* comp, TimelineClip* tc) {
         mat4 local_model = mat4_identity();
         local_model = mat4_mult(mat4_translate(rel_x, rel_y), local_model);
         local_model = mat4_mult(mat4_scale(w * scale_x, h * scale_y), local_model);
-        mat4 model = mat4_mult(group_model, local_model);
+        mat4 model = mat4_mult(local_model, group_model); 
         glUniformMatrix4fv(loc_model, 1, GL_FALSE, model.m);
        
         // 设置 UV 范围 (u0, v0, u1, v1)

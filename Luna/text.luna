@@ -30,7 +30,7 @@ tl.add(1, title, 0) # 轨道1，0秒开始
 # 4. 字幕文字
 var sub = Text("Rendered with OpenGL & C")
 sub.setSize(30)
-sub.setPos(1, 2)
+sub.setPos(1, 211)
 sub.setOpacity(0.8)
 
 tl.add(1, sub, 1) # 轨道1，1秒开始
