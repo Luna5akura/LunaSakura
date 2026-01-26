@@ -5,6 +5,9 @@ var proj = Project(960, 540, 30)
 var tl = Timeline(960, 540, 30)
 proj.setTimeline(tl)
 
+# 新增: 添加自定义预设
+addUserPreset("spin", "bezier", 0.5)  # 自定义旋转预设
+
 # 2. 背景视频
 print "Loading Video..."
 var video = Clip("test.mp4")
@@ -12,30 +15,31 @@ if video != nil:
     video.trim(0, 10)
     video.setScale(1.0)
     video.setRotation(45)
-    tl.add(0, video, 0)
+    var videoInst = tl.add(0, video, 0)  # 返回 ClipInstance
 
 # 3. 标题文字
 print "Creating Title..."
 var title = Text("LUNA ENGINE")
-
-# 链式配置 (如果你实现了 return this) 或者分步配置
 title.setFont("arial.ttf")
 title.setSize(80)
 title.setColor(255, 200, 50) # 金黄色
 title.setPos(0, 1)
 title.trim(0, 5) # 显示前5秒
-
-tl.add(1, title, 0) # 轨道1，0秒开始
+var titleInst = tl.add(1, title, 0) # 返回 ClipInstance
+# 新增: 关键帧 - opacity 淡入
+titleInst.addKeyframe("opacity", 0, 0, "linear")  # 开始透明
+titleInst.addKeyframeWithPreset("opacity", 2, 1, "ease_in")  # 2秒淡入到1，使用预设
 
 # 4. 字幕文字
 var sub = Text("Rendered with OpenGL & C")
 sub.setSize(30)
 sub.setPos(1, 211)
 sub.setOpacity(0.8)
-
-tl.add(1, sub, 1) # 轨道1，1秒开始
+var subInst = tl.add(1, sub, 1) # 返回 ClipInstance
+# 新增: 关键帧 - rotation 旋转
+subInst.addKeyframe("rotation", 0, 0, "hold")  # 开始0度
+subInst.addKeyframeWithPreset("rotation", 5, 360, "spin")  # 5秒旋转到360，使用自定义预设
 
 print "Timeline Duration: "
 print tl.duration
-
 proj.preview()

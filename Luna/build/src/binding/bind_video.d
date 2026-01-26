@@ -3,10 +3,10 @@ build/src/binding/bind_video.o: src/binding/bind_video.c \
  src/common.h src/core/table.h src/core/vm/vm.h src/core/vm/error.h \
  src/engine/engine.h src/engine/bridge/object.h src/engine/model/clip.h \
  src/engine/model/transform.h src/engine/model/timeline.h src/allocator.h \
- src/engine/model/project.h src/engine/render/compositor.h \
- include/glad/glad.h include/KHR/khrplatform.h \
- src/engine/media/audio/mixer.h src/engine/media/codec/decoder.h \
- src/engine/render/text_renderer.h \
+ src/engine/model/animation.h src/engine/model/project.h \
+ src/engine/render/compositor.h include/glad/glad.h \
+ include/KHR/khrplatform.h src/engine/media/audio/mixer.h \
+ src/engine/media/codec/decoder.h src/engine/render/text_renderer.h \
  /nix/store/zykjcxzj7mg1x325xxfnrymf50daqvgb-freetype-2.13.3-dev/include/freetype2/ft2build.h \
  /nix/store/zykjcxzj7mg1x325xxfnrymf50daqvgb-freetype-2.13.3-dev/include/freetype2/freetype/config/ftheader.h \
  /nix/store/zykjcxzj7mg1x325xxfnrymf50daqvgb-freetype-2.13.3-dev/include/freetype2/freetype/freetype.h \
@@ -38,6 +38,7 @@ src/engine/model/clip.h:
 src/engine/model/transform.h:
 src/engine/model/timeline.h:
 src/allocator.h:
+src/engine/model/animation.h:
 src/engine/model/project.h:
 src/engine/render/compositor.h:
 include/glad/glad.h:

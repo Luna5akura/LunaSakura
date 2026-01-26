@@ -14,7 +14,7 @@ typedef struct {
     char* font_path;
     u32 font_size;
     struct { u8 r, g, b, a; } color;
-   
+  
     // 缓存上次计算的包围盒
     float cached_width;
     float cached_height;

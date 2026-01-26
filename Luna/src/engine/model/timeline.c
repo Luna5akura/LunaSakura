@@ -17,7 +17,7 @@ Timeline* timeline_create(Allocator* allocator, uint32_t width, uint32_t height,
     Timeline* tl = MEM_ALLOC(allocator, Timeline, 1);
     if (!tl) return NULL;
     memset(tl, 0, sizeof(Timeline));
-   
+  
     // 保存分配器上下文
     tl->allocator = *allocator;
     tl->width = width;
@@ -28,22 +28,34 @@ Timeline* timeline_create(Allocator* allocator, uint32_t width, uint32_t height,
     // 使用 MEM_ALLOC
     tl->tracks = MEM_ALLOC(allocator, Track, tl->track_capacity);
     memset(tl->tracks, 0, sizeof(Track) * tl->track_capacity);
-   
+  
     return tl;
 }
 
 void timeline_free(Timeline* tl) {
     if (!tl) return;
     Allocator* a = &tl->allocator; // 获取保存的分配器
-   
+  
     for (int i = 0; i < (int)tl->track_count; i++) {
         Track* track = &tl->tracks[i];
+        for (uint32_t j = 0; j < track->clip_count; j++) {
+            TimelineClip* tc = &track->clips[j];
+            // 新增：释放动画
+            free_animation(&tc->anim.x, a);
+            free_animation(&tc->anim.y, a);
+            free_animation(&tc->anim.scale_x, a);
+            free_animation(&tc->anim.scale_y, a);
+            free_animation(&tc->anim.rotation, a);
+            free_animation(&tc->anim.opacity, a);
+            free_animation(&tc->anim.volume, a);
+            free_animation(&tc->anim.font_size, a);
+        }
         if (track->clips) {
             // 使用 MEM_FREE_ARRAY
             MEM_FREE_ARRAY(a, TimelineClip, track->clips, track->clip_capacity);
         }
     }
-   
+  
     MEM_FREE_ARRAY(a, Track, tl->tracks, tl->track_capacity);
     MEM_FREE(a, Timeline, tl); // 释放自身，此时 a 指针失效，但函数也结束了
 }
@@ -56,26 +68,26 @@ i32 timeline_add_track(Timeline* tl) {
         u32 new_capacity = MEM_GROW_CAPACITY(tl->track_capacity);
         tl->tracks = MEM_GROW_ARRAY(a, Track, tl->tracks, tl->track_capacity, new_capacity);
         if (!tl->tracks) return -1;
-    
+   
         // Zero out new slots
         memset(tl->tracks + tl->track_count, 0, (new_capacity - tl->track_count) * sizeof(Track));
         tl->track_capacity = new_capacity;
     }
-   
+  
     // Allocate new track
     Track* track = &tl->tracks[tl->track_count];
     track->id = tl->track_count;
     track->flags = 1; // visible by default (bit 0)
     snprintf(track->name, sizeof(track->name), "Track %d", track->id + 1);
-   
+  
     track->clip_capacity = 8; // Initial capacity for clips
     track->clips = MEM_ALLOC(a, TimelineClip, track->clip_capacity);
     memset(track->clips, 0, sizeof(TimelineClip) * track->clip_capacity);
-   
+  
     track->clip_count = 0;
     track->last_lookup_index = 0;
     track->max_end_time = 0.0;
-   
+  
     return (i32)tl->track_count++;
 }
 
@@ -84,8 +96,20 @@ void timeline_remove_track(Timeline* tl, i32 track_index) {
     if (track_index < 0 || track_index >= (i32)tl->track_count) return;
     // Free the track clips
     Track* track = &tl->tracks[track_index];
+    for (uint32_t j = 0; j < track->clip_count; j++) {
+        TimelineClip* tc = &track->clips[j];
+        // 新增：释放动画
+        free_animation(&tc->anim.x, a);
+        free_animation(&tc->anim.y, a);
+        free_animation(&tc->anim.scale_x, a);
+        free_animation(&tc->anim.scale_y, a);
+        free_animation(&tc->anim.rotation, a);
+        free_animation(&tc->anim.opacity, a);
+        free_animation(&tc->anim.volume, a);
+        free_animation(&tc->anim.font_size, a);
+    }
     if (track->clips) MEM_FREE_ARRAY(a, TimelineClip, track->clips, track->clip_capacity);
-   
+  
     // Shift remaining tracks
     for (i32 i = track_index; i < (i32)tl->track_count - 1; i++) {
         tl->tracks[i] = tl->tracks[i + 1];
@@ -112,7 +136,7 @@ i32 timeline_add_clip(Timeline* tl, i32 track_index, Clip* media, double start_t
     Allocator* a = &tl->allocator;
     if (track_index < 0 || track_index >= (i32)tl->track_count) return -1;
     Track* track = &tl->tracks[track_index];
-   
+  
     // Resize clips if needed
     if (track->clip_count >= track->clip_capacity) {
         u32 new_cap = track->clip_capacity * 2;
@@ -122,7 +146,7 @@ i32 timeline_add_clip(Timeline* tl, i32 track_index, Clip* media, double start_t
         memset(track->clips + track->clip_count, 0, (new_cap - track->clip_count) * sizeof(TimelineClip));
         track->clip_capacity = new_cap;
     }
-   
+  
     // Create Instance
     TimelineClip clip;
     memset(&clip, 0, sizeof(TimelineClip));
@@ -130,7 +154,7 @@ i32 timeline_add_clip(Timeline* tl, i32 track_index, Clip* media, double start_t
     clip.timeline_start = start_time;
     clip.timeline_duration = media->duration; // Default: full length
     clip.source_in = 0.0;
-   
+  
     // Default Transform
     clip.transform.scale_x = (float)media->default_scale_x;
     clip.transform.scale_y = (float)media->default_scale_y;
@@ -139,10 +163,21 @@ i32 timeline_add_clip(Timeline* tl, i32 track_index, Clip* media, double start_t
     clip.transform.opacity = (float)media->default_opacity;
     clip.transform.rotation = (float)media->default_rotation;
     clip.transform.z_index = 0;
+  
+    // 新增：初始化动画
+    init_animation(&clip.anim.x, a, media->default_x);
+    init_animation(&clip.anim.y, a, media->default_y);
+    init_animation(&clip.anim.scale_x, a, media->default_scale_x);
+    init_animation(&clip.anim.scale_y, a, media->default_scale_y);
+    init_animation(&clip.anim.rotation, a, media->default_rotation);
+    init_animation(&clip.anim.opacity, a, media->default_opacity);
+    init_animation(&clip.anim.volume, a, media->volume);
+    init_animation(&clip.anim.font_size, a, (media->type == CLIP_TYPE_TEXT ? (double)media->text.font_size : 0.0));
+  
     // Sorted Insertion (Insertion Sort / Binary Search)
     i32 left = 0, right = track->clip_count - 1;
     i32 insert_idx = track->clip_count;
-   
+  
     while (left <= right) {
         i32 mid = left + (right - left) / 2;
         if (start_time < track->clips[mid].timeline_start) {
@@ -152,17 +187,17 @@ i32 timeline_add_clip(Timeline* tl, i32 track_index, Clip* media, double start_t
             left = mid + 1;
         }
     }
-   
+  
     // Shift data
     if (insert_idx < (i32)track->clip_count) {
         memmove(&track->clips[insert_idx + 1],
                 &track->clips[insert_idx],
                 (track->clip_count - insert_idx) * sizeof(TimelineClip));
     }
-   
+  
     track->clips[insert_idx] = clip;
     track->clip_count++;
-   
+  
     double end = get_clip_end_time(&clip);
     if (end > track->max_end_time) track->max_end_time = end;
     timeline_update_duration(tl);
@@ -173,13 +208,24 @@ void timeline_remove_clip(Timeline* tl, i32 track_index, i32 clip_index) {
     if (track_index < 0 || track_index >= (i32)tl->track_count) return;
     Track* track = &tl->tracks[track_index];
     if (clip_index < 0 || clip_index >= (i32)track->clip_count) return;
+    Allocator* a = &tl->allocator;
+    TimelineClip* tc = &track->clips[clip_index];
+    // 新增：释放动画
+    free_animation(&tc->anim.x, a);
+    free_animation(&tc->anim.y, a);
+    free_animation(&tc->anim.scale_x, a);
+    free_animation(&tc->anim.scale_y, a);
+    free_animation(&tc->anim.rotation, a);
+    free_animation(&tc->anim.opacity, a);
+    free_animation(&tc->anim.volume, a);
+    free_animation(&tc->anim.font_size, a);
     // Shift remaining clips
     memmove(&track->clips[clip_index],
             &track->clips[clip_index + 1],
             (track->clip_count - clip_index - 1) * sizeof(TimelineClip));
-           
+          
     track->clip_count--;
-   
+  
     // Recalculate max_end_time
     track->max_end_time = 0.0;
     for (i32 j = 0; j < (i32)track->clip_count; j++) {
@@ -200,7 +246,7 @@ TimelineClip* timeline_get_clip_at(Track* track, double time) {
         TimelineClip* clip = &track->clips[i];
         // Since sorted, if clip starts after time, we can stop early
         if (time < clip->timeline_start) break;
-       
+      
         if (time >= clip->timeline_start && time < clip->timeline_start + clip->timeline_duration) {
             track->last_lookup_index = i;
             return clip;
@@ -214,6 +260,6 @@ TimelineClip* timeline_get_clip_at(Track* track, double time) {
             return clip;
         }
     }
-   
+  
     return NULL;
 }
