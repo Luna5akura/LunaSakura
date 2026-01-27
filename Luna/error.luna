@@ -1,42 +1,54 @@
-# test_comprehension.luna
+# error.luna
 
-print "--- 测试 1: 基础列表推导 ---"
-var source = [10, 20, 30]
-# 语法: [ 表达式 for 变量 in 可迭代对象 ]
-var doubled = [x * 2 for x in source]
-print doubled 
-# 预期输出: [20, 40, 60]
+# 添加自定义预设
+addUserPreset("smooth_spin", "bezier", 0.5)
 
-print "--- 测试 2: 结合 range() 函数 ---"
-# 生成 0 到 4 的平方
-var squares = [i * i for i in range(5)]
-print squares 
-# 预期输出: [0, 1, 4, 9, 16]
+# 1. 初始化
+var proj = Project(960, 540, 30)
+var tl = Timeline(960, 540, 30)
+proj.setTimeline(tl)
 
-print "--- 测试 3: 字符串迭代 ---"
-var chars = [c for c in "Luna"]
-print chars 
-# 预期输出: ["L", "u", "n", "a"]
+# 2. 背景视频
+print "Loading Video..."
+var video = Clip("test.mp4")
+var videoInst = nil
+if video != nil:
+    video.trim(0, 10)
+    videoInst = tl.add(0, video, 0)
+    print videoInst
+    # 测试: volume, x, opacity
+    videoInst.addKeyframe("volume", 0, 1.0, "linear")
+    videoInst.addKeyframeWithPreset("volume", 5, 0.2, "ease_out")
+    videoInst.addKeyframe("x", 0, 0, "hold")
+    videoInst.addKeyframe("x", 8, 300, "bezier", 0.4)
+    videoInst.addKeyframe("opacity", 0, 0.0, "linear")
+    videoInst.addKeyframeWithPreset("opacity", 3, 1.0, "ease_in")
+else:
+    print "Video loading failed."
 
-print "--- 测试 4: 作用域隔离 ---"
-var n = 999
-print "外部变量 n 原值: "
-print n
+# 3. 文字图层
+print "Creating Text Layer..."
+var textLayer = Text("Keyframe Test")
+var textInst = nil
+if textLayer != nil:
+    textLayer.setFont("arial.ttf")
+    textLayer.setSize(50)
+    textLayer.setColor(0, 255, 0)
+    textLayer.trim(0, 10)
+    textInst = tl.add(1, textLayer, 2)
+    print textInst
+    # 测试: font_size, rotation, y, scale_y
+    textInst.addKeyframe("font_size", 0, 50, "hold")
+    textInst.addKeyframe("font_size", 6, 100, "linear")
+    textInst.addKeyframe("rotation", 0, 0, "bezier", 0.6)
+    textInst.addKeyframeWithPreset("rotation", 7, 720, "smooth_spin")
+    textInst.addKeyframe("y", 0, 100, "linear")
+    textInst.addKeyframe("y", 5, 400, "ease_in_out")
+    textInst.addKeyframe("scale_y", 0, 1.0, "hold")
+    textInst.addKeyframe("scale_y", 4, 2.0, "bezier", 0.3)
+else:
+    print "Text layer failed."
 
-# 推导式内部也使用了变量名 n
-var list = [n for n in range(3)]
-
-print "生成的列表: "
-print list
-# 预期输出: [0, 1, 2]
-
-print "外部变量 n 现值 (应保持不变): "
-print n
-# 预期输出: 999 (如果输出 2 或其他值，说明作用域泄露了)
-
-print "--- 测试 5: 复杂表达式 ---"
-fun format(val):
-    return val
-
-var formatted = [format(x) for x in range(1, 4)]
-print formatted
+print "Timeline Duration: "
+print tl.duration
+proj.preview(0, 10)
