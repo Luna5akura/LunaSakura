@@ -18,6 +18,8 @@
 #include "engine/service/exporter.h"
 #include "engine/service/preview.h"
 #include "engine/service/transcoder.h"
+
+#include "effect/registry.h"   // 新增
 typedef struct {
     Project* active_project;
 } EngineContext;

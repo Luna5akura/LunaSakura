@@ -178,32 +178,61 @@ static void draw_clip_text(Compositor* comp, TimelineClip* tc) {
     Clip* clip = tc->media;
     TextRenderer* tr = comp->text_renderer;
     text_renderer_update(tr, clip);
+
     glUseProgram(comp->text_shader_program);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, text_renderer_get_texture(tr));
     glUniform1i(glGetUniformLocation(comp->text_shader_program, "textAtlas"), 0);
-    float r = clip->text.color.r / 255.0f;
-    float g = clip->text.color.g / 255.0f;
-    float b = clip->text.color.b / 255.0f;
-    float a = (clip->text.color.a / 255.0f) * tc->transform.opacity;
-    glUniform4f(glGetUniformLocation(comp->text_shader_program, "u_color"), r, g, b, a);
-    float start_x = tc->transform.x;
-    float rotation = tc->transform.rotation;
-    float start_y = tc->transform.y;
+
     GLint loc_model = glGetUniformLocation(comp->text_shader_program, "u_model");
-    GLint loc_uv = glGetUniformLocation(comp->text_shader_program, "u_uv_rect");
+    GLint loc_uv    = glGetUniformLocation(comp->text_shader_program, "u_uv_rect");
+    GLint loc_color = glGetUniformLocation(comp->text_shader_program, "u_color");
+
+    float start_x = tc->transform.x;
+    float start_y = tc->transform.y;
+    float rotation = tc->transform.rotation;
     float scale_x = tc->transform.scale_x;
     float scale_y = tc->transform.scale_y;
+
     float scaled_w = clip->text.cached_width * scale_x;
     float scaled_h = clip->text.cached_height * scale_y;
     float center_x = scaled_w / 2.0f;
     float center_y = scaled_h / 2.0f;
+
     mat4 group_model = mat4_identity();
     group_model = mat4_mult(mat4_translate(start_x + center_x, start_y + center_y), group_model);
     group_model = mat4_mult(mat4_rotate(rotation), group_model);
     group_model = mat4_mult(mat4_translate(-center_x, -center_y), group_model);
+
+    // === 先绘制描边（如果启用）===
+    if (clip->text.stroke_enabled && clip->text.stroke_width > 0.0f) {
+        float stroke_r = clip->text.stroke_color.r / 255.0f;
+        float stroke_g = clip->text.stroke_color.g / 255.0f;
+        float stroke_b = clip->text.stroke_color.b / 255.0f;
+        float stroke_a = (clip->text.stroke_color.a / 255.0f) * tc->transform.opacity;
+
+        glUniform4f(loc_color, stroke_r, stroke_g, stroke_b, stroke_a);
+
+        float offset = clip->text.stroke_width * 0.5f;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                if (dx == 0 && dy == 0) continue;
+                mat4 offset_model = mat4_mult(mat4_translate((float)dx * offset, (float)dy * offset), group_model);
+                layout_and_draw_text(comp, tc, loc_model, loc_uv, offset_model, scale_x, scale_y);
+            }
+        }
+    }
+
+    // === 再绘制填充文字（覆盖在描边上方）===
+    float fill_r = clip->text.color.r / 255.0f;
+    float fill_g = clip->text.color.g / 255.0f;
+    float fill_b = clip->text.color.b / 255.0f;
+    float fill_a = (clip->text.color.a / 255.0f) * tc->transform.opacity;
+
+    glUniform4f(loc_color, fill_r, fill_g, fill_b, fill_a);
     layout_and_draw_text(comp, tc, loc_model, loc_uv, group_model, scale_x, scale_y);
 }
+
 static void draw_clip_rect(Compositor* comp, RenderSource* src, TimelineClip* tc) {
     if (src->tex_y == 0) return;
     glUseProgram(comp->shader_program);

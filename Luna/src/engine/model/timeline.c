@@ -32,6 +32,21 @@ Timeline* timeline_create(Allocator* allocator, uint32_t width, uint32_t height,
     return tl;
 }
 
+static void effect_chain_free(Allocator* a, EffectInstance* chain) {
+    while (chain) {
+        EffectInstance* next = chain->next;
+        if (chain->data) {
+            // 通过 registry 查找处理器并调用 destroy（后续实现）
+            const EffectProcessor* proc = effect_registry_get(chain->name);
+            if (proc && proc->destroy) {
+                proc->destroy(a, chain->data);
+            }
+        }
+        MEM_FREE(a, EffectInstance, chain);
+        chain = next;
+    }
+}
+
 void timeline_free(Timeline* tl) {
     if (!tl) return;
     Allocator* a = &tl->allocator; // 获取保存的分配器
@@ -49,6 +64,7 @@ void timeline_free(Timeline* tl) {
             free_animation(&tc->anim.opacity, a);
             free_animation(&tc->anim.volume, a);
             free_animation(&tc->anim.font_size, a);
+            effect_chain_free(a, tc->effectChain);
         }
         if (track->clips) {
             // 使用 MEM_FREE_ARRAY
@@ -91,6 +107,8 @@ i32 timeline_add_track(Timeline* tl) {
     return (i32)tl->track_count++;
 }
 
+
+
 void timeline_remove_track(Timeline* tl, i32 track_index) {
     Allocator* a = &tl->allocator;
     if (track_index < 0 || track_index >= (i32)tl->track_count) return;
@@ -132,6 +150,7 @@ void timeline_update_duration(Timeline* tl) {
     tl->duration = max_duration;
 }
 
+
 i32 timeline_add_clip(Timeline* tl, i32 track_index, Clip* media, double start_time) {
     Allocator* a = &tl->allocator;
     if (track_index < 0 || track_index >= (i32)tl->track_count) return -1;
@@ -154,6 +173,7 @@ i32 timeline_add_clip(Timeline* tl, i32 track_index, Clip* media, double start_t
     clip.timeline_start = start_time;
     clip.timeline_duration = media->duration; // Default: full length
     clip.source_in = 0.0;
+    clip.effectChain = NULL;                    // 新增：初始化效果链
   
     // Default Transform
     clip.transform.scale_x = (float)media->default_scale_x;

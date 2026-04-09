@@ -2,7 +2,9 @@ build/src/engine/render/compositor.o: src/engine/render/compositor.c \
  src/engine/render/compositor.h include/glad/glad.h \
  include/KHR/khrplatform.h src/engine/model/timeline.h src/common.h \
  src/allocator.h src/engine/model/clip.h src/engine/model/transform.h \
- src/engine/model/animation.h src/engine/media/audio/mixer.h \
+ src/engine/model/animation.h src/engine/effect/filter_base.h \
+ src/core/vm/vm.h src/core/vm/error.h src/core/object.h src/core/chunk.h \
+ src/core/value.h src/core/table.h src/engine/media/audio/mixer.h \
  src/engine/media/codec/decoder.h src/engine/render/text_renderer.h \
  /nix/store/zykjcxzj7mg1x325xxfnrymf50daqvgb-freetype-2.13.3-dev/include/freetype2/ft2build.h \
  /nix/store/zykjcxzj7mg1x325xxfnrymf50daqvgb-freetype-2.13.3-dev/include/freetype2/freetype/config/ftheader.h \
@@ -19,9 +21,7 @@ build/src/engine/render/compositor.o: src/engine/render/compositor.c \
  /nix/store/zykjcxzj7mg1x325xxfnrymf50daqvgb-freetype-2.13.3-dev/include/freetype2/freetype/fterrors.h \
  /nix/store/zykjcxzj7mg1x325xxfnrymf50daqvgb-freetype-2.13.3-dev/include/freetype2/freetype/ftmoderr.h \
  /nix/store/zykjcxzj7mg1x325xxfnrymf50daqvgb-freetype-2.13.3-dev/include/freetype2/freetype/fterrdef.h \
- src/engine/render/gl_utils.h src/core/memory.h src/core/object.h \
- src/core/chunk.h src/core/value.h src/core/table.h src/core/vm/vm.h \
- src/core/vm/error.h
+ src/engine/render/gl_utils.h src/core/memory.h
 src/engine/render/compositor.h:
 include/glad/glad.h:
 include/KHR/khrplatform.h:
@@ -31,6 +31,13 @@ src/allocator.h:
 src/engine/model/clip.h:
 src/engine/model/transform.h:
 src/engine/model/animation.h:
+src/engine/effect/filter_base.h:
+src/core/vm/vm.h:
+src/core/vm/error.h:
+src/core/object.h:
+src/core/chunk.h:
+src/core/value.h:
+src/core/table.h:
 src/engine/media/audio/mixer.h:
 src/engine/media/codec/decoder.h:
 src/engine/render/text_renderer.h:
@@ -51,9 +58,3 @@ src/engine/render/text_renderer.h:
 /nix/store/zykjcxzj7mg1x325xxfnrymf50daqvgb-freetype-2.13.3-dev/include/freetype2/freetype/fterrdef.h:
 src/engine/render/gl_utils.h:
 src/core/memory.h:
-src/core/object.h:
-src/core/chunk.h:
-src/core/value.h:
-src/core/table.h:
-src/core/vm/vm.h:
-src/core/vm/error.h:

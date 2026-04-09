@@ -1,55 +1,13 @@
-# text.luna
+var p = Project(1280, 720, 30)
+var tl = Timeline(1280, 720, 30)
 
-# 添加自定义预设
-addUserPreset("smooth_fade", "bezier", 0.6)  # 平滑淡入/淡出预设
+var t = Text("Hello Luna!")
+t.setFont("arial.ttf")
+t.setSize(72)
+t.setColor(255, 255, 255)          # 填充白色
+t.setLetterSpacing(8.0)            # 新增：字符间距
+t.setStroke(true, 4.0, 255, 255, 0)   # 新增：黑色描边，宽度 4
 
-# 1. 初始化
-var proj = Project(960, 540, 30)
-var tl = Timeline(960, 540, 30)
-proj.setTimeline(tl)
-
-# 2. 背景视频
-print "Loading Video..."
-var video = Clip("test.mp4")
-if video != nil:
-    video.trim(0, 10)
-    video.setScale(1.0)
-    video.setRotation(45)
-    var videoInst = tl.add(0, video, 0)
-    videoInst.addKeyframe("volume", 0, 1.0, "linear")
-    videoInst.addKeyframeWithPreset("volume", 5, 0.5, "ease_out")  # 5秒渐弱到0.5
-    videoInst.addKeyframe("x", 0, 0, "hold")
-    videoInst.addKeyframe("x", 8, 200, "bezier", 0.4)  # 8秒移动到x=200
-
-# 3. 标题文字
-print "Creating Title..."
-var title = Text("LUNA ENGINE")
-title.setFont("arial.ttf")
-title.setSize(80)
-title.setColor(255, 200, 50) # 金黄色
-title.setPos(0, 1)
-title.trim(0, 5) # 显示前5秒
-var titleInst = tl.add(1, title, 0)
-# 测试关键帧: opacity 淡入, rotation 旋转, font_size 变化
-titleInst.addKeyframe("opacity", 0, 0, "linear")
-titleInst.addKeyframeWithPreset("opacity", 2, 1, "ease_in")  # 2秒淡入
-titleInst.addKeyframe("rotation", 0, 0, "linear")
-titleInst.addKeyframeWithPreset("rotation", 4, 90, "smooth_fade")  # 4秒旋转90度，使用自定义预设
-titleInst.addKeyframe("font_size", 0, 80, "hold")
-titleInst.addKeyframe("font_size", 3, 120, "bezier", 0.3)  # 3秒字体增大到120
-
-# 4. 字幕文字
-var sub = Text("Rendered with OpenGL & C")
-sub.setSize(30)
-sub.setPos(1, 211)
-sub.setOpacity(0.8)
-var subInst = tl.add(1, sub, 1)
-# 测试关键帧: y 位置移动, scale_y 缩放
-subInst.addKeyframe("y", 0, 211, "linear")
-subInst.addKeyframeWithPreset("y", 4, 300, "ease_in_out")  # 4秒向下移动到300
-subInst.addKeyframe("scale_y", 0, 1.0, "hold")
-subInst.addKeyframe("scale_y", 2, 1.5, "bezier", 0.5)  # 2秒Y轴放大到1.5
-
-print "Timeline Duration: "
-print tl.duration
-proj.preview()
+tl.add(0, t, 0.0)                  # 添加到时间线
+p.setTimeline(tl)
+p.preview(0, 5)                    # 预览 5 秒

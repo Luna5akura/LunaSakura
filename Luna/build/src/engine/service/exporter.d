@@ -1,10 +1,10 @@
 build/src/engine/service/exporter.o: src/engine/service/exporter.c \
  src/engine/service/exporter.h src/engine/model/timeline.h src/common.h \
  src/allocator.h src/engine/model/clip.h src/engine/model/transform.h \
- src/engine/model/animation.h src/engine/media/codec/encoder.h \
- src/core/memory.h src/core/object.h src/core/chunk.h src/core/value.h \
- src/core/table.h src/core/vm/vm.h src/core/vm/error.h \
- src/engine/engine.h src/engine/bridge/object.h \
+ src/engine/model/animation.h src/engine/effect/filter_base.h \
+ src/core/vm/vm.h src/core/vm/error.h src/core/object.h src/core/chunk.h \
+ src/core/value.h src/core/table.h src/engine/media/codec/encoder.h \
+ src/core/memory.h src/engine/engine.h src/engine/bridge/object.h \
  src/engine/model/project.h src/engine/render/compositor.h \
  include/glad/glad.h include/KHR/khrplatform.h \
  src/engine/media/audio/mixer.h src/engine/media/codec/decoder.h \
@@ -25,7 +25,7 @@ build/src/engine/service/exporter.o: src/engine/service/exporter.c \
  /nix/store/zykjcxzj7mg1x325xxfnrymf50daqvgb-freetype-2.13.3-dev/include/freetype2/freetype/ftmoderr.h \
  /nix/store/zykjcxzj7mg1x325xxfnrymf50daqvgb-freetype-2.13.3-dev/include/freetype2/freetype/fterrdef.h \
  src/engine/media/utils/probe.h src/engine/service/preview.h \
- src/engine/service/transcoder.h
+ src/engine/service/transcoder.h src/engine/effect/registry.h
 src/engine/service/exporter.h:
 src/engine/model/timeline.h:
 src/common.h:
@@ -33,14 +33,15 @@ src/allocator.h:
 src/engine/model/clip.h:
 src/engine/model/transform.h:
 src/engine/model/animation.h:
-src/engine/media/codec/encoder.h:
-src/core/memory.h:
+src/engine/effect/filter_base.h:
+src/core/vm/vm.h:
+src/core/vm/error.h:
 src/core/object.h:
 src/core/chunk.h:
 src/core/value.h:
 src/core/table.h:
-src/core/vm/vm.h:
-src/core/vm/error.h:
+src/engine/media/codec/encoder.h:
+src/core/memory.h:
 src/engine/engine.h:
 src/engine/bridge/object.h:
 src/engine/model/project.h:
@@ -68,3 +69,4 @@ src/engine/render/text_renderer.h:
 src/engine/media/utils/probe.h:
 src/engine/service/preview.h:
 src/engine/service/transcoder.h:
+src/engine/effect/registry.h:

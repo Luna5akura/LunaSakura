@@ -6,6 +6,7 @@
 #include "engine/model/clip.h"
 #include "transform.h"
 #include "animation.h"  // 新增
+#include "engine/effect/filter_base.h"
 
 // === 基础组件 ===
 typedef struct {
@@ -24,6 +25,7 @@ typedef struct {
         Animation volume;
         Animation font_size;  // 用于文字图层等
     } anim;
+    EffectInstance* effectChain;   // 新增：效果链
 } TimelineClip;
 
 typedef struct {

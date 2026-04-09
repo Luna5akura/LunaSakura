@@ -114,6 +114,9 @@ bool text_renderer_update(TextRenderer* tr, Clip* clip) {
     // 只有当字体有效时才设置大小和加载字形
     if (tr->face) {
         FT_Set_Pixel_Sizes(tr->face, 0, clip->text.font_size);
+
+        text_renderer_layout_text(tr, clip, &clip->text.cached_width, &clip->text.cached_height);
+        dirty = true;
         
         const char* p = clip->text.content;
         while (*p) {
@@ -151,4 +154,28 @@ GlyphInfo* text_renderer_get_glyph(TextRenderer* tr, char c) {
 
 GLuint text_renderer_get_texture(TextRenderer* tr) {
     return tr->atlas_id;
+}
+void text_renderer_layout_text(TextRenderer* tr, Clip* clip, float* out_width, float* out_height) {
+    if (!tr->face) {
+        *out_width = *out_height = 0.0f;
+        return;
+    }
+
+    float x = 0.0f;
+    float max_h = 0.0f;
+    const char* p = clip->text.content;
+
+    while (*p) {
+        u32 code = (u32)*p;
+        load_glyph_to_atlas(tr, code);  // 确保字形已加载
+
+        GlyphInfo* g = text_renderer_get_glyph(tr, *p);
+        x += g->advance + clip->text.letter_spacing;  // 新增：应用字符间距
+        if (g->height > max_h) max_h = g->height;
+
+        p++;
+    }
+
+    *out_width = x;
+    *out_height = max_h;
 }

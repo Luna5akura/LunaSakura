@@ -4,7 +4,8 @@
 #include <string.h>
 #include "core/memory.h"
 #include "core/vm/vm.h"
-#include "engine/engine.h" // 包含 bridge/object.h (其中定义了 ObjClip, ObjTimeline 等)
+#include "engine/engine.h"
+#include "engine/effect/registry.h"   // 新增
 // --- 宏定义：简化操作 ---
 // 获取当前实例 (this)，在 Native Init 中，this 位于 args[-1]
 #define GET_SELF (AS_INSTANCE(args[-1]))
@@ -128,6 +129,13 @@ Value textInit(VM* vm, i32 argCount, Value* args) {
     // 注意：这里的 font path 必须存在，否则渲染会失败。
     // 在实际项目中，可以使用内嵌字体或相对路径。
     objClip->clip = clip_create_text(content, "arial.ttf", 32, 255, 255, 255);
+    objClip->clip->text.letter_spacing = 0.0f;
+    objClip->clip->text.stroke_enabled = false;
+    objClip->clip->text.stroke_width = 2.0f;
+    objClip->clip->text.stroke_color.r = 0;
+    objClip->clip->text.stroke_color.g = 0;
+    objClip->clip->text.stroke_color.b = 0;
+    objClip->clip->text.stroke_color.a = 255;
   
     Clip* inner = objClip->clip;
     // 2. Bind
@@ -273,6 +281,38 @@ Value textSetColor(VM* vm, i32 argCount, Value* args) {
     }
     return NIL_VAL;
 }
+
+Value textSetLetterSpacing(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjClip* objClip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
+    if (!objClip || argCount != 1) return NIL_VAL;
+    objClip->clip->text.letter_spacing = AS_NUMBER(args[0]);
+    SET_PROP(thisObj, "letter_spacing", objClip->clip->text.letter_spacing);
+    return NIL_VAL;
+}
+
+Value textSetStroke(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjClip* objClip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
+    if (!objClip || argCount != 5) {  // 改为 5 个参数（enabled, width, r, g, b）
+        fprintf(stderr, "Usage: setStroke(enabled: bool, width: number, r: number, g: number, b: number)\n");
+        return NIL_VAL;
+    }
+
+    if (objClip->clip->type == CLIP_TYPE_TEXT) {
+        objClip->clip->text.stroke_enabled = AS_BOOL(args[0]);
+        objClip->clip->text.stroke_width   = AS_NUMBER(args[1]);
+        objClip->clip->text.stroke_color.r = (u8)AS_NUMBER(args[2]);
+        objClip->clip->text.stroke_color.g = (u8)AS_NUMBER(args[3]);
+        objClip->clip->text.stroke_color.b = (u8)AS_NUMBER(args[4]);
+        objClip->clip->text.stroke_color.a = 255;  // 描边默认不透明
+    }
+
+    SET_PROP(thisObj, "stroke_enabled", objClip->clip->text.stroke_enabled);
+    SET_PROP(thisObj, "stroke_width",   objClip->clip->text.stroke_width);
+    return NIL_VAL;
+}
+
 // --- Timeline 类实现 ---
 // Timeline(width, height, fps)
 Value timelineInit(VM* vm, i32 argCount, Value* args) {
@@ -532,6 +572,7 @@ static void registerCommonMethods(VM* vm, ObjClass* klass) {
 static void registerClipMethods(VM* vm, ObjClass* klass) {
     registerCommonMethods(vm, klass);
     defineNativeMethod(vm, klass, "setVolume", clipSetVolume);
+    effect_bindings_register(vm);
 }
 // Text 独有
 static void registerTextMethods(VM* vm, ObjClass* klass) {
@@ -539,6 +580,8 @@ static void registerTextMethods(VM* vm, ObjClass* klass) {
     defineNativeMethod(vm, klass, "setFont", textSetFont);
     defineNativeMethod(vm, klass, "setSize", textSetSize);
     defineNativeMethod(vm, klass, "setColor", textSetColor);
+    defineNativeMethod(vm, klass, "setLetterSpacing", textSetLetterSpacing);
+    defineNativeMethod(vm, klass, "setStroke", textSetStroke);
 }
 static void registerTimelineMethods(VM* vm, ObjClass* klass) {
     defineNativeMethod(vm, klass, "add", timelineAdd);

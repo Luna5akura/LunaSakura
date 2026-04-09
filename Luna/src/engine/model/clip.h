@@ -12,10 +12,16 @@ typedef enum {
 typedef struct {
     char* content;
     char* font_path;
-    u32 font_size;
-    struct { u8 r, g, b, a; } color;
-  
-    // 缓存上次计算的包围盒
+    u32   font_size;
+    struct { u8 r, g, b, a; } color;          // 填充颜色
+
+    // === 新增 AE 风格属性 ===
+    float letter_spacing;                     // 字符间距（tracking），单位：像素，默认为 0.0
+    bool  stroke_enabled;                     // 是否启用描边
+    float stroke_width;                       // 描边宽度（像素）
+    struct { u8 r, g, b, a; } stroke_color;  // 描边颜色
+
+    // 缓存
     float cached_width;
     float cached_height;
 } TextData;

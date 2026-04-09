@@ -42,3 +42,4 @@ bool text_renderer_update(TextRenderer* tr, Clip* clip);
 // 辅助函数：获取内部信息
 GlyphInfo* text_renderer_get_glyph(TextRenderer* tr, char c);
 GLuint text_renderer_get_texture(TextRenderer* tr);
+void text_renderer_layout_text(TextRenderer* tr, Clip* clip, float* out_width, float* out_height);
