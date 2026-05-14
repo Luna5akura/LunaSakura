@@ -22,8 +22,11 @@
 #define DROP(n) (SP -= (n))
 #define READ_BYTE() (*(IP++))
 #define READ_SHORT() (IP += 2, (u16)((IP[-2] << 8) | IP[-1]))
+#define READ_LONG_INDEX() (IP += 3, (u32)(IP[-3] | ((u32)IP[-2] << 8) | ((u32)IP[-1] << 16)))
 #define READ_CONSTANT() (FRAME->closure->function->chunk.constants.values[READ_BYTE()])
+#define READ_CONSTANT_LONG() (FRAME->closure->function->chunk.constants.values[READ_LONG_INDEX()])
 #define READ_STRING() AS_STRING(READ_CONSTANT())
+#define READ_STRING_LONG() AS_STRING(READ_CONSTANT_LONG())
 #define RETURN_ERROR() return false
 #define SYNC_VM() do { \
     vm->stackTop = SP; \
@@ -33,6 +36,18 @@
     FRAME = &vm->frames[vm->frameCount - 1]; \
     IP = FRAME->ip; \
 } while(0)
+
+static INLINE bool lookup_method_cached(ObjClass* klass, ObjString* name, Value* out_method) {
+    if (klass->cachedMethodValid && klass->cachedMethodName == name) {
+        *out_method = klass->cachedMethodValue;
+        return true;
+    }
+    if (!tableGet(&klass->methods, OBJ_VAL(name), out_method)) return false;
+    klass->cachedMethodName = name;
+    klass->cachedMethodValue = *out_method;
+    klass->cachedMethodValid = true;
+    return true;
+}
 // --- Opcodes Implementation ---
 static INLINE bool invoke_binary_op(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr, ObjString* name) {
     Value a = PEEK(1); // Receiver
@@ -45,7 +60,7 @@ static INLINE bool invoke_binary_op(VM* vm, CallFrame** framePtr, Value** spPtr,
     // 查找方法 (先在字段中找，再在类方法中找)
     if (tableGet(&instance->fields, OBJ_VAL(name), &method)) {
         // Found in fields
-    } else if (tableGet(&instance->klass->methods, OBJ_VAL(name), &method)) {
+    } else if (lookup_method_cached(instance->klass, name, &method)) {
         // Found in class
     } else {
         return false;
@@ -97,9 +112,28 @@ static INLINE bool op_get_global(VM* vm, CallFrame** framePtr, Value** spPtr, u8
     }
     return true;
 }
+static INLINE bool op_get_global_long(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
+    ObjString* name = READ_STRING_LONG();
+    Value value;
+    if (!tableGet(&vm->globals, OBJ_VAL(name), &value)) {
+        SYNC_VM();
+        if (!runtimeError(vm, "Undefined variable '%s'.", name->chars)) RETURN_ERROR();
+        LOAD_FRAME();
+    } else {
+        PUSH(value);
+    }
+    return true;
+}
 static INLINE bool op_define_global(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
     ObjString* name = READ_STRING();
     SYNC_VM(); // 同步栈指针
+    tableSet(vm, &vm->globals, OBJ_VAL(name), PEEK(0));
+    DROP(1);
+    return true;
+}
+static INLINE bool op_define_global_long(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
+    ObjString* name = READ_STRING_LONG();
+    SYNC_VM();
     tableSet(vm, &vm->globals, OBJ_VAL(name), PEEK(0));
     DROP(1);
     return true;
@@ -112,6 +146,17 @@ static INLINE bool op_set_global(VM* vm, CallFrame** framePtr, Value** spPtr, u8
     if (tableSet(vm, &vm->globals, OBJ_VAL(name), PEEK(0))) {
         tableDelete(&vm->globals, OBJ_VAL(name));
         // runtimeError 会再次 SYNC，但也无妨
+        SYNC_VM();
+        if (!runtimeError(vm, "Undefined variable '%s'.", name->chars)) RETURN_ERROR();
+        LOAD_FRAME();
+    }
+    return true;
+}
+static INLINE bool op_set_global_long(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
+    ObjString* name = READ_STRING_LONG();
+    SYNC_VM();
+    if (tableSet(vm, &vm->globals, OBJ_VAL(name), PEEK(0))) {
+        tableDelete(&vm->globals, OBJ_VAL(name));
         SYNC_VM();
         if (!runtimeError(vm, "Undefined variable '%s'.", name->chars)) RETURN_ERROR();
         LOAD_FRAME();
@@ -153,6 +198,25 @@ static INLINE bool op_get_property(VM* vm, CallFrame** framePtr, Value** spPtr, 
     }
     return true;
 }
+static INLINE bool op_get_property_long(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
+    if (!IS_INSTANCE(PEEK(0))) {
+        SYNC_VM();
+        if (!runtimeError(vm, "Only instances have properties.")) RETURN_ERROR();
+        LOAD_FRAME();
+    } else {
+        ObjInstance* instance = AS_INSTANCE(POP());
+        ObjString* name = READ_STRING_LONG();
+        Value value;
+        if (tableGet(&instance->fields, OBJ_VAL(name), &value)) {
+            PUSH(value);
+        } else {
+            SYNC_VM();
+            if (!bindMethod(vm, instance->klass, name, OBJ_VAL(instance))) RETURN_ERROR();
+            SP = vm->stackTop;
+        }
+    }
+    return true;
+}
 static INLINE bool op_set_property(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
     if (!IS_INSTANCE(PEEK(1))) {
         SYNC_VM();
@@ -167,8 +231,34 @@ static INLINE bool op_set_property(VM* vm, CallFrame** framePtr, Value** spPtr, 
     }
     return true;
 }
+static INLINE bool op_set_property_long(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
+    if (!IS_INSTANCE(PEEK(1))) {
+        SYNC_VM();
+        if (!runtimeError(vm, "Only instances have fields.")) RETURN_ERROR();
+        LOAD_FRAME();
+    } else {
+        ObjInstance* instance = AS_INSTANCE(PEEK(1));
+        tableSet(vm, &instance->fields, OBJ_VAL(READ_STRING_LONG()), PEEK(0));
+        Value value = POP();
+        DROP(1);
+        PUSH(value);
+    }
+    return true;
+}
 static INLINE bool op_get_super(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
     ObjString* name = READ_STRING();
+    ObjClass* superclass = AS_CLASS(POP());
+    Value receiver = POP();
+    SYNC_VM();
+    if (!bindMethod(vm, superclass, name, receiver)) {
+        LOAD_FRAME();
+        RETURN_ERROR();
+    }
+    SP = vm->stackTop;
+    return true;
+}
+static INLINE bool op_get_super_long(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
+    ObjString* name = READ_STRING_LONG();
     ObjClass* superclass = AS_CLASS(POP());
     Value receiver = POP();
     SYNC_VM();
@@ -266,7 +356,7 @@ static INLINE bool op_negate(VM* vm, CallFrame** framePtr, Value** spPtr, u8** i
         ObjInstance* instance = AS_INSTANCE(a);
         Value method;
         if (tableGet(&instance->fields, OBJ_VAL(vm->opNegString), &method) ||
-            tableGet(&instance->klass->methods, OBJ_VAL(vm->opNegString), &method)) {
+            lookup_method_cached(instance->klass, vm->opNegString, &method)) {
             SYNC_VM();
             if (!callValue(vm, method, 0)) RETURN_ERROR();
             LOAD_FRAME();
@@ -361,6 +451,7 @@ static INLINE bool op_call_kw(VM* vm, CallFrame** framePtr, Value** spPtr, u8** 
     Value callee = PEEK(argCount + kwCount * 2);
     ObjFunction* func = NULL;
     ObjClosure* closure = NULL;
+    ObjNative* native = NULL;
   
     if (IS_CLOSURE(callee)) {
         closure = AS_CLOSURE(callee);
@@ -370,10 +461,40 @@ static INLINE bool op_call_kw(VM* vm, CallFrame** framePtr, Value** spPtr, u8** 
         if (IS_CLOSURE(bound->method)) {
             closure = AS_CLOSURE(bound->method);
             func = closure->function;
+        } else if (IS_NATIVE(bound->method)) {
+            native = (ObjNative*)AS_OBJ(bound->method);
         } else {
             if(!runtimeError(vm, "Keyword arguments only supported for declared functions.")) RETURN_ERROR();
             LOAD_FRAME();
             SP = vm->stackTop; // [安全同步]
+            return true;
+        }
+    } else if (IS_CLASS(callee)) {
+        ObjClass* klass = AS_CLASS(callee);
+        Value initializer;
+        Value* calleeSlot = vm->stackTop - (kwCount * 2) - argCount - 1;
+        *calleeSlot = OBJ_VAL(newInstance(vm, klass));
+        if (tableGet(&klass->methods, OBJ_VAL(vm->initString), &initializer)) {
+            if (IS_CLOSURE(initializer)) {
+                closure = AS_CLOSURE(initializer);
+                func = closure->function;
+            } else if (IS_NATIVE(initializer)) {
+                native = (ObjNative*)AS_OBJ(initializer);
+                callee = initializer;
+            } else {
+                if (!runtimeError(vm, "Initializer must be callable.")) RETURN_ERROR();
+                LOAD_FRAME();
+                SP = vm->stackTop;
+                return true;
+            }
+        } else if (argCount != 0 || kwCount != 0) {
+            if(!runtimeError(vm, "Expected 0 arguments for initializer but got %d.", argCount + kwCount)) RETURN_ERROR();
+            LOAD_FRAME();
+            SP = vm->stackTop;
+            return true;
+        } else {
+            LOAD_FRAME();
+            SP = vm->stackTop;
             return true;
         }
     } else {
@@ -383,11 +504,14 @@ static INLINE bool op_call_kw(VM* vm, CallFrame** framePtr, Value** spPtr, u8** 
         return true;
     }
   
-    // 准备参数（重排栈）
-    if (!prepareKeywordCall(vm, func, argCount, kwCount)) RETURN_ERROR();
-  
     FRAME->ip = IP;
-    if (!call(vm, closure, func->arity)) RETURN_ERROR();
+    if (closure) {
+        if (!prepareKeywordCall(vm, func, argCount, kwCount)) RETURN_ERROR();
+        if (!call(vm, closure, func->arity)) RETURN_ERROR();
+    } else if (native) {
+        if (!prepareKeywordNativeCall(vm, native, argCount, kwCount)) RETURN_ERROR();
+        if (!callValue(vm, callee, native->arity)) RETURN_ERROR();
+    }
     LOAD_FRAME();
     SP = vm->stackTop; // [关键修复] 同步栈指针
     return true;
@@ -413,7 +537,7 @@ static INLINE bool op_invoke(VM* vm, CallFrame** framePtr, Value** spPtr, u8** i
             if (!callValue(vm, value, argCount)) RETURN_ERROR();
         } else {
             // 2. Method
-            if (!tableGet(&instance->klass->methods, OBJ_VAL(name), &value)) {
+            if (!lookup_method_cached(instance->klass, name, &value)) {
                 SYNC_VM();
                 if (!runtimeError(vm, "Undefined property '%s'.", name->chars)) RETURN_ERROR();
                 LOAD_FRAME();
@@ -436,6 +560,47 @@ static INLINE bool op_invoke(VM* vm, CallFrame** framePtr, Value** spPtr, u8** i
     return true;
 }
 
+static INLINE bool op_invoke_long(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
+    ObjString* name = READ_STRING_LONG();
+    i32 argCount = READ_BYTE();
+    Value receiver = PEEK(argCount);
+    
+    if (!IS_INSTANCE(receiver)) {
+        SYNC_VM();
+        if (!runtimeError(vm, "Only instances have methods.")) RETURN_ERROR();
+        LOAD_FRAME();
+        SP = vm->stackTop;
+    } else {
+        ObjInstance* instance = AS_INSTANCE(receiver);
+        Value value;
+        if (tableGet(&instance->fields, OBJ_VAL(name), &value)) {
+            SP[-argCount - 1] = value;
+            SYNC_VM();
+            if (!callValue(vm, value, argCount)) RETURN_ERROR();
+        } else {
+            if (!lookup_method_cached(instance->klass, name, &value)) {
+                SYNC_VM();
+                if (!runtimeError(vm, "Undefined property '%s'.", name->chars)) RETURN_ERROR();
+                LOAD_FRAME();
+                SP = vm->stackTop;
+            } else {
+                if (IS_CLOSURE(value) && argCount == AS_CLOSURE(value)->function->arity) {
+                    SYNC_VM();
+                    if (!call(vm, AS_CLOSURE(value), argCount)) RETURN_ERROR();
+                } else {
+                    ObjBoundMethod* bound = newBoundMethod(vm, receiver, value);
+                    SP[-argCount - 1] = OBJ_VAL(bound);
+                    SYNC_VM();
+                    if (!callValue(vm, OBJ_VAL(bound), argCount)) RETURN_ERROR();
+                }
+            }
+        }
+        LOAD_FRAME();
+        SP = vm->stackTop;
+    }
+    return true;
+}
+
 static INLINE bool op_invoke_kw(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
     ObjString* name = READ_STRING();
     u8 argCount = READ_BYTE();
@@ -453,47 +618,125 @@ static INLINE bool op_invoke_kw(VM* vm, CallFrame** framePtr, Value** spPtr, u8*
         ObjInstance* instance = AS_INSTANCE(receiver);
         Value value;
         bool found = false;
+        ObjNative* native = NULL;
       
         if (tableGet(&instance->fields, OBJ_VAL(name), &value)) {
             *receiverPtr = value;
-            if (!IS_CLOSURE(value)) {
+            if (!IS_CLOSURE(value) && !IS_NATIVE(value)) {
                 if(!runtimeError(vm, "Can only call functions.")) RETURN_ERROR();
                 LOAD_FRAME(); 
                 SP = vm->stackTop; // [安全同步]
                 return true;
             }
+            if (IS_NATIVE(value)) native = (ObjNative*)AS_OBJ(value);
             found = true;
         } else {
-            if (!tableGet(&instance->klass->methods, OBJ_VAL(name), &value)) {
+            if (!lookup_method_cached(instance->klass, name, &value)) {
                 if(!runtimeError(vm, "Undefined property '%s'.", name->chars)) RETURN_ERROR();
                 LOAD_FRAME(); 
                 SP = vm->stackTop; // [安全同步]
                 return true;
             }
-            if (!IS_CLOSURE(value)) {
-                if(!runtimeError(vm, "Method must be a closure.")) RETURN_ERROR();
+            if (!IS_CLOSURE(value) && !IS_NATIVE(value)) {
+                if(!runtimeError(vm, "Method must be callable.")) RETURN_ERROR();
                 LOAD_FRAME(); 
                 SP = vm->stackTop; // [安全同步]
                 return true;
             }
-            ObjBoundMethod* bound = newBoundMethod(vm, receiver, value);
-            *receiverPtr = OBJ_VAL(bound);
+            if (IS_NATIVE(value)) {
+                ObjBoundMethod* bound = newBoundMethod(vm, receiver, value);
+                *receiverPtr = OBJ_VAL(bound);
+                native = (ObjNative*)AS_OBJ(value);
+            } else {
+                ObjBoundMethod* bound = newBoundMethod(vm, receiver, value);
+                *receiverPtr = OBJ_VAL(bound);
+            }
             found = true;
         }
         
         if (found) {
-            ObjFunction* func = AS_CLOSURE(value)->function;
-            if (!prepareKeywordCall(vm, func, argCount, kwCount)) RETURN_ERROR();
             FRAME->ip = IP;
-            
             if (IS_CLOSURE(value)) {
+                ObjFunction* func = AS_CLOSURE(value)->function;
+                if (!prepareKeywordCall(vm, func, argCount, kwCount)) RETURN_ERROR();
                 if (!call(vm, AS_CLOSURE(value), func->arity)) RETURN_ERROR();
             } else {
-                if (!callValue(vm, *receiverPtr, func->arity)) RETURN_ERROR();
+                if (!prepareKeywordNativeCall(vm, native, argCount, kwCount)) RETURN_ERROR();
+                if (!callValue(vm, *receiverPtr, native->arity)) RETURN_ERROR();
             }
         }
         LOAD_FRAME();
         SP = vm->stackTop; // [关键修复] 同步栈指针
+    }
+    return true;
+}
+
+static INLINE bool op_invoke_kw_long(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
+    ObjString* name = READ_STRING_LONG();
+    u8 argCount = READ_BYTE();
+    u8 kwCount = READ_BYTE();
+    SYNC_VM();
+  
+    Value* receiverPtr = vm->stackTop - (kwCount * 2) - argCount - 1;
+    Value receiver = *receiverPtr;
+  
+    if (!IS_INSTANCE(receiver)) {
+        if(!runtimeError(vm, "Only instances have methods.")) RETURN_ERROR();
+        LOAD_FRAME();
+        SP = vm->stackTop;
+    } else {
+        ObjInstance* instance = AS_INSTANCE(receiver);
+        Value value;
+        bool found = false;
+        ObjNative* native = NULL;
+      
+        if (tableGet(&instance->fields, OBJ_VAL(name), &value)) {
+            *receiverPtr = value;
+            if (!IS_CLOSURE(value) && !IS_NATIVE(value)) {
+                if(!runtimeError(vm, "Can only call functions.")) RETURN_ERROR();
+                LOAD_FRAME();
+                SP = vm->stackTop;
+                return true;
+            }
+            if (IS_NATIVE(value)) native = (ObjNative*)AS_OBJ(value);
+            found = true;
+        } else {
+            if (!lookup_method_cached(instance->klass, name, &value)) {
+                if(!runtimeError(vm, "Undefined property '%s'.", name->chars)) RETURN_ERROR();
+                LOAD_FRAME();
+                SP = vm->stackTop;
+                return true;
+            }
+            if (!IS_CLOSURE(value) && !IS_NATIVE(value)) {
+                if(!runtimeError(vm, "Method must be callable.")) RETURN_ERROR();
+                LOAD_FRAME();
+                SP = vm->stackTop;
+                return true;
+            }
+            if (IS_NATIVE(value)) {
+                ObjBoundMethod* bound = newBoundMethod(vm, receiver, value);
+                *receiverPtr = OBJ_VAL(bound);
+                native = (ObjNative*)AS_OBJ(value);
+            } else {
+                ObjBoundMethod* bound = newBoundMethod(vm, receiver, value);
+                *receiverPtr = OBJ_VAL(bound);
+            }
+            found = true;
+        }
+        
+        if (found) {
+            FRAME->ip = IP;
+            if (IS_CLOSURE(value)) {
+                ObjFunction* func = AS_CLOSURE(value)->function;
+                if (!prepareKeywordCall(vm, func, argCount, kwCount)) RETURN_ERROR();
+                if (!call(vm, AS_CLOSURE(value), func->arity)) RETURN_ERROR();
+            } else {
+                if (!prepareKeywordNativeCall(vm, native, argCount, kwCount)) RETURN_ERROR();
+                if (!callValue(vm, *receiverPtr, native->arity)) RETURN_ERROR();
+            }
+        }
+        LOAD_FRAME();
+        SP = vm->stackTop;
     }
     return true;
 }
@@ -505,7 +748,7 @@ static INLINE bool op_super_invoke(VM* vm, CallFrame** framePtr, Value** spPtr, 
     Value receiver = PEEK(argCount);
     Value method;
     
-    if (!tableGet(&superclass->methods, OBJ_VAL(name), &method)) {
+    if (!lookup_method_cached(superclass, name, &method)) {
         SYNC_VM();
         if (!runtimeError(vm, "Undefined property '%s'.", name->chars)) RETURN_ERROR();
         LOAD_FRAME();
@@ -521,6 +764,33 @@ static INLINE bool op_super_invoke(VM* vm, CallFrame** framePtr, Value** spPtr, 
         }
         LOAD_FRAME();
         SP = vm->stackTop; // [关键修复] 同步栈指针
+    }
+    return true;
+}
+
+static INLINE bool op_super_invoke_long(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
+    ObjString* name = READ_STRING_LONG();
+    i32 argCount = READ_BYTE();
+    ObjClass* superclass = AS_CLASS(POP());
+    Value receiver = PEEK(argCount);
+    Value method;
+    
+    if (!lookup_method_cached(superclass, name, &method)) {
+        SYNC_VM();
+        if (!runtimeError(vm, "Undefined property '%s'.", name->chars)) RETURN_ERROR();
+        LOAD_FRAME();
+        SP = vm->stackTop;
+    } else {
+        SYNC_VM();
+        if (IS_CLOSURE(method)) {
+            if (!call(vm, AS_CLOSURE(method), argCount)) RETURN_ERROR();
+        } else {
+            ObjBoundMethod* bound = newBoundMethod(vm, receiver, method);
+            vm->stackTop[-argCount - 1] = OBJ_VAL(bound);
+            if (!callValue(vm, OBJ_VAL(bound), argCount)) RETURN_ERROR();
+        }
+        LOAD_FRAME();
+        SP = vm->stackTop;
     }
     return true;
 }
@@ -541,26 +811,69 @@ static INLINE bool op_super_invoke_kw(VM* vm, CallFrame** framePtr, Value** spPt
     Value receiver = *receiverPtr;
     Value method;
     
-    if (!tableGet(&superclass->methods, OBJ_VAL(name), &method)) {
+    if (!lookup_method_cached(superclass, name, &method)) {
         if(!runtimeError(vm, "Undefined property '%s'.", name->chars)) RETURN_ERROR();
         LOAD_FRAME();
         SP = vm->stackTop; // [安全同步]
-    } else if (!IS_CLOSURE(method)) {
-        if(!runtimeError(vm, "Super method must be a closure.")) RETURN_ERROR();
+    } else if (!IS_CLOSURE(method) && !IS_NATIVE(method)) {
+        if(!runtimeError(vm, "Super method must be callable.")) RETURN_ERROR();
         LOAD_FRAME();
         SP = vm->stackTop; // [安全同步]
     } else {
         ObjBoundMethod* bound = newBoundMethod(vm, receiver, method);
         *receiverPtr = OBJ_VAL(bound);
-        
-        ObjFunction* func = AS_CLOSURE(method)->function;
-        if (!prepareKeywordCall(vm, func, argCount, kwCount)) RETURN_ERROR();
-        
         FRAME->ip = IP;
-        if (!callValue(vm, OBJ_VAL(bound), func->arity)) RETURN_ERROR();
+        if (IS_CLOSURE(method)) {
+            ObjFunction* func = AS_CLOSURE(method)->function;
+            if (!prepareKeywordCall(vm, func, argCount, kwCount)) RETURN_ERROR();
+            if (!callValue(vm, OBJ_VAL(bound), func->arity)) RETURN_ERROR();
+        } else {
+            ObjNative* native = (ObjNative*)AS_OBJ(method);
+            if (!prepareKeywordNativeCall(vm, native, argCount, kwCount)) RETURN_ERROR();
+            if (!callValue(vm, OBJ_VAL(bound), native->arity)) RETURN_ERROR();
+        }
         
         LOAD_FRAME();
         SP = vm->stackTop; // [关键修复] 同步栈指针
+    }
+    return true;
+}
+
+static INLINE bool op_super_invoke_kw_long(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
+    ObjString* name = READ_STRING_LONG();
+    u8 argCount = READ_BYTE();
+    u8 kwCount = READ_BYTE();
+    
+    ObjClass* superclass = AS_CLASS(POP());
+    SYNC_VM();
+
+    Value* receiverPtr = vm->stackTop - (kwCount * 2) - argCount - 1;
+    Value receiver = *receiverPtr;
+    Value method;
+    
+    if (!lookup_method_cached(superclass, name, &method)) {
+        if(!runtimeError(vm, "Undefined property '%s'.", name->chars)) RETURN_ERROR();
+        LOAD_FRAME();
+        SP = vm->stackTop;
+    } else if (!IS_CLOSURE(method) && !IS_NATIVE(method)) {
+        if(!runtimeError(vm, "Super method must be callable.")) RETURN_ERROR();
+        LOAD_FRAME();
+        SP = vm->stackTop;
+    } else {
+        ObjBoundMethod* bound = newBoundMethod(vm, receiver, method);
+        *receiverPtr = OBJ_VAL(bound);
+        FRAME->ip = IP;
+        if (IS_CLOSURE(method)) {
+            ObjFunction* func = AS_CLOSURE(method)->function;
+            if (!prepareKeywordCall(vm, func, argCount, kwCount)) RETURN_ERROR();
+            if (!callValue(vm, OBJ_VAL(bound), func->arity)) RETURN_ERROR();
+        } else {
+            ObjNative* native = (ObjNative*)AS_OBJ(method);
+            if (!prepareKeywordNativeCall(vm, native, argCount, kwCount)) RETURN_ERROR();
+            if (!callValue(vm, OBJ_VAL(bound), native->arity)) RETURN_ERROR();
+        }
+        LOAD_FRAME();
+        SP = vm->stackTop;
     }
     return true;
 }
@@ -732,6 +1045,7 @@ static INLINE bool op_inherit(VM* vm, CallFrame** framePtr, Value** spPtr, u8** 
         ObjClass* subclass = AS_CLASS(PEEK(0));
         tableAddAll(vm, &AS_CLASS(superclass)->methods, &subclass->methods);
         subclass->superclass = AS_CLASS(superclass);
+        subclass->cachedMethodValid = false;
         DROP(1); // [关键修复]：必须弹出子类，保持栈平衡！
     }
     return true;
@@ -739,7 +1053,11 @@ static INLINE bool op_inherit(VM* vm, CallFrame** framePtr, Value** spPtr, u8** 
 static INLINE bool op_method(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
     Value method = PEEK(0);
     ObjClass* klass = AS_CLASS(PEEK(1));
-    tableSet(vm, &klass->methods, OBJ_VAL(READ_STRING()), method);
+    ObjString* name = READ_STRING();
+    tableSet(vm, &klass->methods, OBJ_VAL(name), method);
+    klass->cachedMethodName = name;
+    klass->cachedMethodValue = method;
+    klass->cachedMethodValid = true;
     POP();
     return true;
 }

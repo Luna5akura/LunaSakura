@@ -70,7 +70,10 @@ static inline void freeBody(VM* vm, Obj* object) {
             ObjFunction* function = (ObjFunction*)object;
             freeChunk(vm, &function->chunk);
             if (function->paramNames) {
-                FREE_ARRAY(vm, ObjString*, function->paramNames, function->arity);
+                FREE_ARRAY(vm, ObjString*, function->paramNames, function->paramCapacity);
+            }
+            if (function->paramLookup) {
+                FREE_ARRAY(vm, ParamLookupEntry, function->paramLookup, function->paramLookupCapacity);
             }
             FREE(vm, ObjFunction, object);
             break;
@@ -107,6 +110,12 @@ static inline void freeBody(VM* vm, Obj* object) {
             break;
         }
         case OBJ_NATIVE:
+            if (((ObjNative*)object)->paramNames) {
+                FREE_ARRAY(vm, ObjString*, ((ObjNative*)object)->paramNames, ((ObjNative*)object)->paramCapacity);
+            }
+            if (((ObjNative*)object)->paramLookup) {
+                FREE_ARRAY(vm, ParamLookupEntry, ((ObjNative*)object)->paramLookup, ((ObjNative*)object)->paramLookupCapacity);
+            }
             FREE(vm, ObjNative, object);
             break;
     }
@@ -203,6 +212,17 @@ static void blackenObject(VM* vm, Obj* object) {
             MARK_OBJ(klass->name);
             markTable(vm, &klass->methods);
             if (klass->superclass) MARK_OBJ(klass->superclass);
+            if (klass->cachedMethodName) MARK_OBJ(klass->cachedMethodName);
+            if (klass->cachedMethodValid) MARK_VAL(klass->cachedMethodValue);
+            break;
+        }
+        case OBJ_NATIVE: {
+            ObjNative* native = (ObjNative*)object;
+            if (native->paramNames) {
+                for (i32 j = 0; j < native->arity; j++) {
+                    MARK_OBJ(native->paramNames[j]);
+                }
+            }
             break;
         }
         
@@ -230,7 +250,6 @@ static void blackenObject(VM* vm, Obj* object) {
             break;
         }
 
-        case OBJ_NATIVE:
         case OBJ_STRING:
             break;
     }
@@ -290,12 +309,11 @@ static inline void blackenObjectInline(VM* vm, Obj* object) {
 // 增量标记：每次处理固定片段（e.g., 100个灰对象）
 #define INCREMENTAL_SLICE 100
 static void traceReferencesIncremental(VM* vm) {
-    Obj** stack = vm->grayStack;
     int remaining = vm->grayCount;
     while (remaining > 0) {
         int slice = remaining > INCREMENTAL_SLICE ? INCREMENTAL_SLICE : remaining;
         for (int i = 0; i < slice; i++) {
-            Obj* object = stack[--vm->grayCount];
+            Obj* object = vm->grayStack[--vm->grayCount];
             blackenObjectInline(vm, object);
         }
         remaining -= slice;
@@ -340,7 +358,7 @@ void collectGarbage(VM* vm) {
 #endif
     markRoots(vm);
     traceReferences(vm);
-    tableRemoveWhite(&vm->strings);
+    tableRemoveWhite(vm, &vm->strings);
     sweep(vm);
     size_t after = vm->bytesAllocated;
     const size_t MIN_HEAP_SIZE = 1024 * 1024;

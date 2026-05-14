@@ -1,0 +1,28 @@
+var width = 640
+var height = 360
+var fps = 24
+var duration = 6
+
+var proj = Project(width, height, fps)
+var tl = Timeline(width, height, fps)
+proj.setTimeline(tl)
+
+var base = Solid(width, height, 0, 0, 0, 255)
+var baseInst = tl.add(0, base, 0)
+baseInst.setDuration(duration)
+
+var fractal = FractalNoise(scale=72, contrast=1.35, brightness=0.05, octaves=5, amount=1.0, offsetX=0, offsetY=0)
+baseInst.addEffect(fractal)
+fractal.setNumber("scale", 72)
+fractal.setNumber("contrast", 1.35)
+fractal.setNumber("brightness", 0.05)
+fractal.setNumber("octaves", 5)
+fractal.setNumber("amount", 1.0)
+fractal.setNumber("offsetX", 0)
+fractal.setNumber("offsetY", 0)
+
+fractal.addNumberKeyframe("evolution", 0.0, 0.0, "linear")
+fractal.setNumberKeyframe("evolution", duration, 90.0, "linear")
+
+print tl.getDuration()
+proj.preview(0, duration)

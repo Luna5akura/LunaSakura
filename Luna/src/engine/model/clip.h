@@ -6,8 +6,18 @@
 
 typedef enum {
     CLIP_TYPE_MEDIA,
-    CLIP_TYPE_TEXT
+    CLIP_TYPE_TEXT,
+    CLIP_TYPE_IMAGE,
+    CLIP_TYPE_SOLID,
+    CLIP_TYPE_ADJUSTMENT,
+    CLIP_TYPE_GROUP,
+    CLIP_TYPE_PRECOMP
 } ClipType;
+
+typedef struct {
+    u32 source_width;
+    u32 source_height;
+} ImageData;
 
 typedef struct {
     char* content;
@@ -26,6 +36,25 @@ typedef struct {
     float cached_height;
 } TextData;
 
+typedef struct {
+    struct { u8 r, g, b, a; } color;
+} SolidData;
+
+typedef struct {
+    u8 blend_mode;
+    u8 mask_mode;
+    bool affects_whole_frame;
+    bool mask_invert;
+    double feather;
+    u32 mask_source_clip_id;
+} AdjustmentData;
+
+typedef struct Timeline Timeline;
+
+typedef struct {
+    Timeline* timeline;
+} NestedTimelineData;
+
 typedef struct Clip {
     void* user_data;
     ClipType type;
@@ -41,8 +70,12 @@ typedef struct Clip {
     bool has_audio;
     i32 audio_channels;
     i32 audio_sample_rate;
+    ImageData image;
     // --- TEXT 属性 ---
     TextData text;
+    SolidData solid;
+    AdjustmentData adjustment;
+    NestedTimelineData nested_timeline;
     // --- 变换属性 ---
     double default_scale_x;
     double default_scale_y;
@@ -57,6 +90,11 @@ typedef struct Clip {
 } Clip;
 
 Clip* clip_create_media(const char* path);
+Clip* clip_create_image(const char* path, u32 width, u32 height);
 // r,g,b range: 0-255
 Clip* clip_create_text(const char* content, const char* font_path, u32 size, u8 r, u8 g, u8 b);
+Clip* clip_create_solid(u32 width, u32 height, u8 r, u8 g, u8 b, u8 a);
+Clip* clip_create_adjustment(u32 width, u32 height);
+Clip* clip_create_group(u32 width, u32 height, double fps);
+Clip* clip_create_precomp(u32 width, u32 height, double fps);
 void clip_free(Clip* clip);

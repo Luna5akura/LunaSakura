@@ -14,8 +14,11 @@ typedef enum {
     OP_GET_LOCAL,
     OP_SET_LOCAL,
     OP_GET_GLOBAL,
+    OP_GET_GLOBAL_LONG,
     OP_SET_GLOBAL,
+    OP_SET_GLOBAL_LONG,
     OP_DEFINE_GLOBAL,
+    OP_DEFINE_GLOBAL_LONG,
     OP_GET_UPVALUE,
     OP_SET_UPVALUE,
     OP_EQUAL,
@@ -49,12 +52,19 @@ typedef enum {
     OP_INHERIT,
     OP_METHOD,
     OP_GET_PROPERTY,
+    OP_GET_PROPERTY_LONG,
     OP_SET_PROPERTY,
+    OP_SET_PROPERTY_LONG,
     OP_GET_SUPER,
+    OP_GET_SUPER_LONG,
     OP_INVOKE,
+    OP_INVOKE_LONG,
     OP_INVOKE_KW,
+    OP_INVOKE_KW_LONG,
     OP_SUPER_INVOKE,
+    OP_SUPER_INVOKE_LONG,
     OP_SUPER_INVOKE_KW,
+    OP_SUPER_INVOKE_KW_LONG,
     OP_TRY,
     OP_POP_HANDLER
 } OpCode;
@@ -68,6 +78,11 @@ typedef struct {
     u32 capacity;
     LineStart* lines;
 } LineInfo;
+
+typedef struct {
+    u32 hash;
+    i32 index;
+} ConstantLookupEntry;
 // --- Bytecode Chunk ---
 typedef struct {
     // --- Hot Fields (频繁访问) ---
@@ -76,6 +91,9 @@ typedef struct {
     u8* codeLimit;  // [新增] 指向数组结束位置 (代替 capacity)
     
     ValueArray constants;
+    ConstantLookupEntry* constantLookup;
+    u32 constantLookupCapacity;
+    u32 constantLookupCount;
     
     // --- Cold / Compile-time Fields ---
     LineInfo lineInfo;

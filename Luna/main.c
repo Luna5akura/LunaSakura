@@ -28,13 +28,29 @@ void reset_active_project(VM* vm);
 
 
 static void main_mark_roots(VM* vm) {
-    // 1. 获取上下文
     EngineContext* ctx = (EngineContext*)vm->user_data;
-    
-    // // 2. 如果当前有活跃项目，且项目有时间轴，则标记时间轴
-    // if (ctx && ctx->active_project && ctx->active_project->timeline) {
-    //     timeline_mark(vm, ctx->active_project->timeline);
-    // }
+    int i;
+    if (!ctx) return;
+    if (ctx->active_project_obj) {
+        markObject(vm, (Obj*)ctx->active_project_obj);
+    }
+    if (ctx->handle_key) {
+        markObject(vm, (Obj*)ctx->handle_key);
+    }
+    if (ctx->clip_instance_class) {
+        markObject(vm, (Obj*)ctx->clip_instance_class);
+    }
+    if (ctx->timeline_class) {
+        markObject(vm, (Obj*)ctx->timeline_class);
+    }
+    if (ctx->effect_class) {
+        markObject(vm, (Obj*)ctx->effect_class);
+    }
+    for (i = 0; i < ENGINE_BINDING_PROP_CACHE_COUNT; i++) {
+        if (ctx->prop_cache[i]) {
+            markObject(vm, (Obj*)ctx->prop_cache[i]);
+        }
+    }
 }
 
 
@@ -86,7 +102,8 @@ int main(int argc, char* argv[]) {
     SDL_Window* window = SDL_CreateWindow("Luna Live Preview",
                                           SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                           win_w, win_h,
-                                          SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL);
+                                          SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE |
+                                          SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI);
 
     // 创建 GL Context
     SDL_GLContext gl_context = SDL_GL_CreateContext(window);
@@ -150,6 +167,7 @@ int main(int argc, char* argv[]) {
             vm_initialized = true;
 
             engine_ctx.active_project = NULL; 
+            engine_ctx.active_project_obj = NULL;
             
             // 2. 挂载到 VM
             vm.user_data = &engine_ctx;
@@ -223,12 +241,15 @@ int main(int argc, char* argv[]) {
 
         // --- B. SDL 事件 ---
         SDL_Event event;
+        int drawable_w = win_w;
+        int drawable_h = win_h;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) app_running = false;
             if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_RESIZED) {
                 win_w = event.window.data1;
                 win_h = event.window.data2;
-                glViewport(0, 0, win_w, win_h);
+                SDL_GL_GetDrawableSize(window, &drawable_w, &drawable_h);
+                glViewport(0, 0, drawable_w, drawable_h);
             }
             if (event.type == SDL_KEYDOWN) {
                 if (event.key.keysym.sym == SDLK_SPACE) paused = !paused;
@@ -274,11 +295,13 @@ int main(int argc, char* argv[]) {
             double min_time = current_pr->use_preview_range ? current_pr->preview_start : 0.0;
             if (current_time < min_time) current_time = min_time;
 
+            SDL_GL_GetDrawableSize(window, &drawable_w, &drawable_h);
+
             // 调用合成器渲染
             compositor_render(comp, current_time);
             
             // 显示到屏幕
-            compositor_blit_to_screen(comp, win_w, win_h);
+            compositor_blit_to_screen(comp, drawable_w, drawable_h);
         
         } else {
             // 错误/空闲状态：深红色背景

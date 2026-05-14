@@ -22,6 +22,22 @@ Clip* clip_create_media(const char* path) {
     return c;
 }
 
+Clip* clip_create_image(const char* path, u32 width, u32 height) {
+    Clip* c = malloc(sizeof(Clip));
+    memset(c, 0, sizeof(Clip));
+    c->type = CLIP_TYPE_IMAGE;
+    if (path) c->path = strdup(path);
+    c->duration = 5.0;
+    c->has_video = true;
+    c->has_audio = false;
+    c->width = width;
+    c->height = height;
+    c->image.source_width = width;
+    c->image.source_height = height;
+    init_defaults(c);
+    return c;
+}
+
 Clip* clip_create_text(const char* content, const char* font_path, u32 size, u8 r, u8 g, u8 b) {
     Clip* c = malloc(sizeof(Clip));
     memset(c, 0, sizeof(Clip));
@@ -35,6 +51,64 @@ Clip* clip_create_text(const char* content, const char* font_path, u32 size, u8 
     c->duration = 5.0; // 默认 5 秒
     init_defaults(c);
     return c;
+}
+
+Clip* clip_create_solid(u32 width, u32 height, u8 r, u8 g, u8 b, u8 a) {
+    Clip* c = malloc(sizeof(Clip));
+    memset(c, 0, sizeof(Clip));
+    c->type = CLIP_TYPE_SOLID;
+    c->duration = 5.0;
+    c->has_video = true;
+    c->has_audio = false;
+    c->width = width;
+    c->height = height;
+    c->solid.color.r = r;
+    c->solid.color.g = g;
+    c->solid.color.b = b;
+    c->solid.color.a = a;
+    init_defaults(c);
+    return c;
+}
+
+Clip* clip_create_adjustment(u32 width, u32 height) {
+    Clip* c = malloc(sizeof(Clip));
+    memset(c, 0, sizeof(Clip));
+    c->type = CLIP_TYPE_ADJUSTMENT;
+    c->duration = 5.0;
+    c->has_video = false;
+    c->has_audio = false;
+    c->width = width;
+    c->height = height;
+    c->adjustment.blend_mode = 0;
+    c->adjustment.mask_mode = 0;
+    c->adjustment.affects_whole_frame = true;
+    c->adjustment.mask_invert = false;
+    c->adjustment.feather = 0.0;
+    c->adjustment.mask_source_clip_id = 0;
+    init_defaults(c);
+    return c;
+}
+
+static Clip* clip_create_nested_base(ClipType type, u32 width, u32 height, double fps) {
+    Clip* c = malloc(sizeof(Clip));
+    memset(c, 0, sizeof(Clip));
+    c->type = type;
+    c->duration = 5.0;
+    c->has_video = true;
+    c->has_audio = false;
+    c->width = width;
+    c->height = height;
+    init_defaults(c);
+    c->fps = fps;
+    return c;
+}
+
+Clip* clip_create_group(u32 width, u32 height, double fps) {
+    return clip_create_nested_base(CLIP_TYPE_GROUP, width, height, fps);
+}
+
+Clip* clip_create_precomp(u32 width, u32 height, double fps) {
+    return clip_create_nested_base(CLIP_TYPE_PRECOMP, width, height, fps);
 }
 
 void clip_free(Clip* clip) {

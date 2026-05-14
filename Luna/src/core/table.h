@@ -1,3 +1,5 @@
+#pragma once
+
 // src/core/table.h
 
 #include "value.h"
@@ -12,7 +14,8 @@ typedef struct {
 
 // --- Hash Table ---
 typedef struct {
-    u32 count;      // 包含 活跃条目 + 墓碑 (Tombstones) 的总数
+    u32 count;      // 活跃条目数
+    u32 tombstones; // 墓碑数
     u32 capacity;   // 总容量 (必须是 2 的幂)
     Entry* entries;
 } Table;
@@ -26,10 +29,11 @@ bool tableGet(Table* table, Value key, Value* value);
 bool tableSet(VM* vm, Table* table, Value key, Value value);
 bool tableDelete(Table* table, Value key);
 void tableAddAll(VM* vm, Table* from, Table* to);
+void tableCompact(VM* vm, Table* table);
 
 // --- String Interning ---
 ObjString* tableFindString(Table* table, const char* chars, u32 length, u32 hash);
 
 // --- GC Helpers ---
 void markTable(VM* vm, Table* table);
-void tableRemoveWhite(Table* table); // 用于弱引用表（如字符串池）的清理
+void tableRemoveWhite(VM* vm, Table* table); // 用于弱引用表（如字符串池）的清理

@@ -20,7 +20,7 @@ Value clip_add_effect(VM* vm, i32 argCount, Value* args) {
 }
 
 void effect_bindings_register(VM* vm) {
+    (void)vm;
     // 将 addEffect 方法注册到 Clip 类
     // （在 bind_video.c 中调用）
-    printf("[Effects] Registry bindings registered.\n");
 }

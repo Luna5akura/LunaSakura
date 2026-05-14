@@ -29,8 +29,12 @@ void parseFunctionParameters(FunctionType type) {
             defineVariable(0);
 
             ObjFunction* f = current->function;
-            f->paramNames = (ObjString**)reallocate(compilingVM, f->paramNames, 
-                sizeof(ObjString*) * f->arity, sizeof(ObjString*) * (f->arity + 1));
+            if (f->arity + 1 > f->paramCapacity) {
+                i32 oldCapacity = f->paramCapacity;
+                f->paramCapacity = GROW_CAPACITY(oldCapacity);
+                f->paramNames = (ObjString**)reallocate(compilingVM, f->paramNames,
+                    sizeof(ObjString*) * oldCapacity, sizeof(ObjString*) * f->paramCapacity);
+            }
             
             f->paramNames[f->arity] = nameStr;
             f->arity++;
@@ -308,7 +312,7 @@ static void classDeclaration() {
 }
 
 static void funDeclaration() {
-    u8 global = identifierConstant(&parser.previous);
+    u32 global = identifierConstant(&parser.previous);
     declareVariable();
     if (current->scopeDepth > 0) current->locals[current->localCount - 1].depth = current->scopeDepth;
     function(TYPE_FUNCTION);
@@ -318,7 +322,7 @@ static void funDeclaration() {
 static void varDeclaration() {
     consume(TOKEN_IDENTIFIER, "Expect var name.");
     Token name = parser.previous;
-    u8 global = identifierConstant(&name);
+    u32 global = identifierConstant(&name);
     if (match(TOKEN_EQUAL)) expression(); else emitByte(OP_NIL);
     consumeLineEnd();
     defineVariable(global);

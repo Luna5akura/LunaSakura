@@ -17,3 +17,4 @@ bool bindKeywordArgs(VM* vm, ObjFunction* function, int argCount, int kwCount);
 
 // 准备带关键字的调用 (参数重排与填充)
 bool prepareKeywordCall(VM* vm, ObjFunction* func, int argCount, int kwCount);
+bool prepareKeywordNativeCall(VM* vm, ObjNative* native, int argCount, int kwCount);

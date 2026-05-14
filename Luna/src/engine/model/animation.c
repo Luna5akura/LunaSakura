@@ -45,12 +45,37 @@ static int find_insert_index(const Animation* anim, double time) {
     return left;
 }
 
-void add_keyframe(Animation* anim, Allocator* allocator, double time, double value, KeyframeType type, double weight) {
-    if (anim->count >= anim->capacity) {
-        uint32_t new_cap = anim->capacity * 2;
-        anim->keyframes = (Keyframe*)allocator->fn(allocator->ctx, anim->keyframes, sizeof(Keyframe) * anim->capacity, sizeof(Keyframe) * new_cap);
-        anim->capacity = new_cap;
+static int find_exact_index(const Animation* anim, double time) {
+    int left = 0;
+    int right = (int)anim->count - 1;
+    while (left <= right) {
+        int mid = left + (right - left) / 2;
+        double mid_time = anim->keyframes[mid].time;
+        if (time < mid_time) {
+            right = mid - 1;
+        } else if (time > mid_time) {
+            left = mid + 1;
+        } else {
+            return mid;
+        }
     }
+    return -1;
+}
+
+static void ensure_capacity(Animation* anim, Allocator* allocator) {
+    if (anim->count < anim->capacity) return;
+    uint32_t new_cap = anim->capacity * 2;
+    anim->keyframes = (Keyframe*)allocator->fn(
+        allocator->ctx,
+        anim->keyframes,
+        sizeof(Keyframe) * anim->capacity,
+        sizeof(Keyframe) * new_cap
+    );
+    anim->capacity = new_cap;
+}
+
+void add_keyframe(Animation* anim, Allocator* allocator, double time, double value, KeyframeType type, double weight) {
+    ensure_capacity(anim, allocator);
     int insert_idx = find_insert_index(anim, time);
     if (insert_idx < (int)anim->count) {
         memmove(&anim->keyframes[insert_idx + 1], &anim->keyframes[insert_idx], (anim->count - insert_idx) * sizeof(Keyframe));
@@ -60,6 +85,83 @@ void add_keyframe(Animation* anim, Allocator* allocator, double time, double val
     anim->keyframes[insert_idx].type = type;
     anim->keyframes[insert_idx].bezier_weight = weight;
     anim->count++;
+}
+
+void set_keyframe(Animation* anim, Allocator* allocator, double time, double value, KeyframeType type, double weight) {
+    int exact_idx = find_exact_index(anim, time);
+    if (exact_idx >= 0) {
+        anim->keyframes[exact_idx].value = value;
+        anim->keyframes[exact_idx].type = type;
+        anim->keyframes[exact_idx].bezier_weight = weight;
+        return;
+    }
+    add_keyframe(anim, allocator, time, value, type, weight);
+}
+
+bool remove_keyframe(Animation* anim, double time) {
+    int idx = find_exact_index(anim, time);
+    if (idx < 0) return false;
+    if (idx < (int)anim->count - 1) {
+        memmove(
+            &anim->keyframes[idx],
+            &anim->keyframes[idx + 1],
+            (anim->count - (uint32_t)idx - 1) * sizeof(Keyframe)
+        );
+    }
+    anim->count--;
+    return true;
+}
+
+void clear_keyframes(Animation* anim) {
+    anim->count = 0;
+}
+
+uint32_t get_keyframe_count(const Animation* anim) {
+    return anim->count;
+}
+
+const Keyframe* get_keyframe_at(const Animation* anim, uint32_t index) {
+    if (index >= anim->count) return NULL;
+    return &anim->keyframes[index];
+}
+
+const Keyframe* find_keyframe(const Animation* anim, double time) {
+    int idx = find_exact_index(anim, time);
+    if (idx < 0) return NULL;
+    return &anim->keyframes[idx];
+}
+
+void shift_keyframe_times(Animation* anim, double delta) {
+    for (uint32_t i = 0; i < anim->count; i++) {
+        anim->keyframes[i].time += delta;
+    }
+}
+
+void scale_keyframe_times(Animation* anim, double factor) {
+    for (uint32_t i = 0; i < anim->count; i++) {
+        anim->keyframes[i].time *= factor;
+    }
+}
+
+void copy_keyframes(Animation* dst, Allocator* allocator, const Animation* src) {
+    if (dst->keyframes) {
+        allocator->fn(allocator->ctx, dst->keyframes, sizeof(Keyframe) * dst->capacity, 0);
+        dst->keyframes = NULL;
+    }
+
+    dst->default_value = src->default_value;
+    dst->count = src->count;
+    dst->capacity = src->count > 4 ? src->count : 4;
+    dst->keyframes = (Keyframe*)allocator->fn(
+        allocator->ctx,
+        NULL,
+        0,
+        sizeof(Keyframe) * dst->capacity
+    );
+
+    if (src->count > 0) {
+        memcpy(dst->keyframes, src->keyframes, sizeof(Keyframe) * src->count);
+    }
 }
 
 static const KeyframePreset* find_preset(const char* name) {
@@ -83,15 +185,26 @@ void add_keyframe_with_preset(Animation* anim, Allocator* allocator, double time
 }
 
 void add_user_preset(Allocator* allocator, const char* name, KeyframeType type, double weight) {
+    (void)allocator;
     if (user_preset_count >= user_preset_capacity) {
         int new_cap = user_preset_capacity ? user_preset_capacity * 2 : 4;
-        user_presets = (KeyframePreset*)allocator->fn(allocator->ctx, user_presets, sizeof(KeyframePreset) * user_preset_capacity, sizeof(KeyframePreset) * new_cap);
+        user_presets = (KeyframePreset*)realloc(user_presets, sizeof(KeyframePreset) * new_cap);
         user_preset_capacity = new_cap;
     }
     user_presets[user_preset_count].name = strdup(name);  // 注意：需管理内存，实际生产需释放
     user_presets[user_preset_count].type = type;
     user_presets[user_preset_count].weight = weight;
     user_preset_count++;
+}
+
+void reset_user_presets(void) {
+    for (int i = 0; i < user_preset_count; i++) {
+        free((void*)user_presets[i].name);
+    }
+    free(user_presets);
+    user_presets = NULL;
+    user_preset_count = 0;
+    user_preset_capacity = 0;
 }
 
 static double cubic_bezier_y(double t, double p1x, double p1y, double p2x, double p2y) {

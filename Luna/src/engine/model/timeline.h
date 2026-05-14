@@ -10,10 +10,12 @@
 
 // === 基础组件 ===
 typedef struct {
+    u32 id;
     Clip* media;
     double timeline_start;
     double timeline_duration;
     double source_in;
+    u8 flags; // bit 0: visible
     Transform transform;
     struct {  // 新增动画系统
         Animation x;
@@ -52,6 +54,7 @@ typedef struct Timeline {
     Allocator allocator;
     u32 track_count;
     u32 track_capacity;
+    u32 next_clip_id;
 } Timeline;
 
 // === API ===
@@ -63,3 +66,9 @@ i32 timeline_add_clip(Timeline* tl, i32 track_index, Clip* media, double start_t
 void timeline_update_duration(Timeline* tl);
 void timeline_remove_clip(Timeline* tl, i32 track_index, i32 clip_index);
 TimelineClip* timeline_get_clip_at(Track* track, double time);
+TimelineClip* timeline_get_clip(Timeline* tl, i32 track_index, i32 clip_index);
+i32 timeline_get_clip_count(Timeline* tl, i32 track_index);
+TimelineClip* timeline_find_clip_by_id(Timeline* tl, u32 clip_id, i32* out_track_index, i32* out_clip_index);
+bool timeline_remove_clip_by_id(Timeline* tl, u32 clip_id);
+bool timeline_move_clip_by_id(Timeline* tl, u32 clip_id, i32 to_track_index, double new_start_time);
+u32 timeline_duplicate_clip_by_id(Timeline* tl, u32 clip_id, i32 to_track_index, double new_start_time);

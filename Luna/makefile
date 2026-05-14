@@ -19,20 +19,46 @@ LDFLAGS += $(shell pkg-config --libs $(ALL_LIBS)) -lm -pthread
 
 # 4. 项目配置
 TARGET = luna
+TEST_TARGET = luna_tests
+PERF_TARGET = luna_perf
 BUILD_DIR = build
 
 SRCS := main.c $(shell find src -name '*.c')
 OBJS := $(SRCS:%.c=$(BUILD_DIR)/%.o)
 DEPS := $(OBJS:.o=.d)
+TEST_SRCS := tests/test_runner.c $(shell find src -name '*.c')
+TEST_OBJS := $(TEST_SRCS:%.c=$(BUILD_DIR)/%.o)
+TEST_DEPS := $(TEST_OBJS:.o=.d)
+PERF_SRCS := tests/perf_runner.c $(shell find src -name '*.c')
+PERF_OBJS := $(PERF_SRCS:%.c=$(BUILD_DIR)/%.o)
+PERF_DEPS := $(PERF_OBJS:.o=.d)
 
 # 5. 规则
 all: $(TARGET)
+
+test: $(TEST_TARGET)
+	@./$(TEST_TARGET)
+
+perf: $(PERF_TARGET)
+	@./$(PERF_TARGET)
 
 $(TARGET): $(OBJS)
 	@echo "Linking $(TARGET)..."
 	@mkdir -p $(dir $@)
 	@$(CC) $(OBJS) -o $@ $(LDFLAGS)
 	@echo "Build successful! Run with: ./$(TARGET)"
+
+$(TEST_TARGET): $(TEST_OBJS)
+	@echo "Linking $(TEST_TARGET)..."
+	@mkdir -p $(dir $@)
+	@$(CC) $(TEST_OBJS) -o $@ $(LDFLAGS)
+	@echo "Test build successful! Run with: ./$(TEST_TARGET)"
+
+$(PERF_TARGET): $(PERF_OBJS)
+	@echo "Linking $(PERF_TARGET)..."
+	@mkdir -p $(dir $@)
+	@$(CC) $(PERF_OBJS) -o $@ $(LDFLAGS)
+	@echo "Performance build successful! Run with: ./$(PERF_TARGET)"
 
 # 编译规则
 $(BUILD_DIR)/%.o: %.c
@@ -42,6 +68,8 @@ $(BUILD_DIR)/%.o: %.c
 
 # 引入自动生成的依赖关系
 -include $(DEPS)
+-include $(TEST_DEPS)
+-include $(PERF_DEPS)
 
 clean:
 	@echo "Cleaning build directory..."
@@ -50,4 +78,4 @@ clean:
 run: all
 	@./$(TARGET)
 
-.PHONY: all clean run
+.PHONY: all clean run test perf

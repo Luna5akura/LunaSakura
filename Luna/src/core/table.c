@@ -8,6 +8,7 @@
 
 void initTable(Table* table) {
     table->count = 0;
+    table->tombstones = 0;
     table->capacity = 0;
     table->entries = NULL;
 }
@@ -47,6 +48,7 @@ static void adjustCapacity(VM* vm, Table* table, u32 capacity) {
     }
 
     table->count = 0;
+    table->tombstones = 0;
     u32 mask = capacity - 1;
 
     for (u32 i = 0; i < table->capacity; i++) {
@@ -67,6 +69,10 @@ static void adjustCapacity(VM* vm, Table* table, u32 capacity) {
     table->capacity = capacity;
 }
 
+static bool shouldCompact(Table* table) {
+    return table->capacity >= 8 && table->tombstones > table->count && table->tombstones >= 16;
+}
+
 // --- Operations ---
 
 bool tableGet(Table* table, Value key, Value* value) {
@@ -80,15 +86,20 @@ bool tableGet(Table* table, Value key, Value* value) {
 }
 
 bool tableSet(VM* vm, Table* table, Value key, Value value) {
-    if (table->count + 1 > table->capacity * TABLE_MAX_LOAD) {
+    if (table->count + table->tombstones + 1 > table->capacity * TABLE_MAX_LOAD) {
         u32 capacity = GROW_CAPACITY(table->capacity);
         adjustCapacity(vm, table, capacity);
+    } else if (shouldCompact(table)) {
+        adjustCapacity(vm, table, table->capacity);
     }
 
     Entry* entry = findEntry(table->entries, table->capacity, key);
     bool isNewKey = IS_NIL(entry->key);
-    if (isNewKey && IS_NIL(entry->value)) {
+    if (isNewKey) {
         table->count++;
+        if (!IS_NIL(entry->value)) {
+            table->tombstones--;
+        }
     }
 
     entry->key = key;
@@ -103,6 +114,8 @@ bool tableDelete(Table* table, Value key) {
     if (IS_NIL(entry->key)) return false;
     entry->key = NIL_VAL;
     entry->value = BOOL_VAL(true); // Tombstone 标记
+    table->count--;
+    table->tombstones++;
     return true;
 }
 
@@ -113,6 +126,11 @@ void tableAddAll(VM* vm, Table* from, Table* to) {
             tableSet(vm, to, entry->key, entry->value);
         }
     }
+}
+
+void tableCompact(VM* vm, Table* table) {
+    if (!table || table->capacity == 0 || !shouldCompact(table)) return;
+    adjustCapacity(vm, table, table->capacity);
 }
 
 // --- String Interning ---
@@ -150,7 +168,7 @@ void markTable(VM* vm, Table* table) {
     }
 }
 
-void tableRemoveWhite(Table* table) {
+void tableRemoveWhite(VM* vm, Table* table) {
     u32 capacity = table->capacity;
     Entry* entries = table->entries;
     
@@ -160,6 +178,9 @@ void tableRemoveWhite(Table* table) {
         if (IS_OBJ(entry->key) && !AS_OBJ(entry->key)->isMarked) {
             entry->key = NIL_VAL;
             entry->value = BOOL_VAL(true);
+            table->count--;
+            table->tombstones++;
         }
     }
+    tableCompact(vm, table);
 }

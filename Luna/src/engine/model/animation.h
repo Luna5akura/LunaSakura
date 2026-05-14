@@ -15,7 +15,7 @@ typedef struct {
     double bezier_weight;  // 贝塞尔权重（0-1，影响曲线强度）
 } Keyframe;
 
-typedef struct {
+typedef struct Animation {
     Keyframe* keyframes;
     uint32_t count;
     uint32_t capacity;
@@ -47,6 +47,25 @@ void free_animation(Animation* anim, Allocator* allocator);
 // 添加关键帧（按时间排序插入）
 void add_keyframe(Animation* anim, Allocator* allocator, double time, double value, KeyframeType type, double weight);
 
+// 设置关键帧：同时间点则覆盖，否则新增
+void set_keyframe(Animation* anim, Allocator* allocator, double time, double value, KeyframeType type, double weight);
+
+// 删除指定时间点的关键帧
+bool remove_keyframe(Animation* anim, double time);
+
+// 清空全部关键帧
+void clear_keyframes(Animation* anim);
+
+// 查询关键帧
+uint32_t get_keyframe_count(const Animation* anim);
+const Keyframe* get_keyframe_at(const Animation* anim, uint32_t index);
+const Keyframe* find_keyframe(const Animation* anim, double time);
+
+// 批量编辑
+void shift_keyframe_times(Animation* anim, double delta);
+void scale_keyframe_times(Animation* anim, double factor);
+void copy_keyframes(Animation* dst, Allocator* allocator, const Animation* src);
+
 // 使用预设添加关键帧
 void add_keyframe_with_preset(Animation* anim, Allocator* allocator, double time, double value, const char* preset_name);
 
@@ -55,3 +74,4 @@ double evaluate_animation(const Animation* anim, double time);
 
 // 添加用户自定义预设
 void add_user_preset(Allocator* allocator, const char* name, KeyframeType type, double weight);
+void reset_user_presets(void);

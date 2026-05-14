@@ -18,6 +18,17 @@ u32 identifierConstant(Token* name) {
     return makeConstant(OBJ_VAL(copyString(compilingVM, name->start, name->length)));
 }
 
+static void emitGlobalOperandInstruction(u8 shortOp, u8 longOp, u32 operand) {
+    if (operand <= UINT8_MAX) {
+        emitBytes(shortOp, (u8)operand);
+        return;
+    }
+    emitByte(longOp);
+    emitByte((u8)(operand & 0xFF));
+    emitByte((u8)((operand >> 8) & 0xFF));
+    emitByte((u8)((operand >> 16) & 0xFF));
+}
+
 void addLocal(Token name) {
     if (current->localCount == U8_COUNT) {
         error("Too many locals.");
@@ -91,17 +102,7 @@ void defineVariable(u32 global) {
         current->locals[current->localCount - 1].depth = current->scopeDepth;
         return;
     }
-    if (global > 255) {
-        // 假设你定义了 OP_DEFINE_GLOBAL_LONG
-        // 如果没定义，至少要报错，而不是截断
-        // emitByte(OP_DEFINE_GLOBAL_LONG);
-        // emitByte((global >> 0) & 0xff);
-        // emitByte((global >> 8) & 0xff);
-        // emitByte((global >> 16) & 0xff);
-        error("Too many globals (limit 255). Implement OP_DEFINE_GLOBAL_LONG to fix.");
-    } else {
-        emitBytes(OP_DEFINE_GLOBAL, (u8)global);
-    }
+    emitGlobalOperandInstruction(OP_DEFINE_GLOBAL, OP_DEFINE_GLOBAL_LONG, global);
 }
 
 void namedVariable(Token name, bool canAssign) {
@@ -134,19 +135,9 @@ void namedVariable(Token name, bool canAssign) {
         
         if (canAssign && match(TOKEN_EQUAL)) {
             expression();
-            if (globalArg > 255) {
-                 // 需要指令集支持 OP_SET_GLOBAL_LONG
-                 error("Global variable index too large.");
-            } else {
-                emitBytes(OP_SET_GLOBAL, (u8)globalArg);
-            }
+            emitGlobalOperandInstruction(OP_SET_GLOBAL, OP_SET_GLOBAL_LONG, globalArg);
         } else {
-            if (globalArg > 255) {
-                // 需要指令集支持 OP_GET_GLOBAL_LONG
-                error("Global variable index too large.");
-            } else {
-                emitBytes(OP_GET_GLOBAL, (u8)globalArg);
-            }
+            emitGlobalOperandInstruction(OP_GET_GLOBAL, OP_GET_GLOBAL_LONG, globalArg);
         }
     }
 }

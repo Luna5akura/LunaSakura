@@ -95,6 +95,7 @@ void initCompiler(Compiler* compiler, VM* vm, FunctionType type) {
 ObjFunction* endCompiler() {
     emitReturn();
     ObjFunction* function = current->function;
+    buildFunctionParamLookup(compilingVM, function);
  
 #ifdef DEBUG_PRINT_CODE
     if (!parser.hadError) {
@@ -139,6 +140,9 @@ bool compile(VM* vm, const char* source, Chunk* chunk) {
         function->chunk.code = NULL;
         function->chunk.constants.values = NULL;
         function->chunk.lineInfo.lines = NULL;
+        function->chunk.constantLookup = NULL;
+        function->chunk.constantLookupCapacity = 0;
+        function->chunk.constantLookupCount = 0;
     }
     compilingVM = NULL;
     return !parser.hadError;

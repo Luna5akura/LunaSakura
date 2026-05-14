@@ -17,6 +17,10 @@ typedef struct sObjInstance ObjInstance;
 typedef struct sObjBoundMethod ObjBoundMethod;
 typedef struct sObjClosure ObjClosure;
 typedef struct sObjUpvalue ObjUpvalue;
+typedef struct {
+    ObjString* key;
+    u8 index;
+} ParamLookupEntry;
 // --- Object Types ---
 typedef enum {
     OBJ_STRING,
@@ -67,12 +71,20 @@ struct sObjFunction {
     ObjString** paramNames; // [新增] 参数名称数组，用于关键字匹配
 
     i32 paramCapacity; 
+    ParamLookupEntry* paramLookup;
+    u32 paramLookupCapacity;
 };
 // --- Native Function ---
 typedef Value (*NativeFn)(VM* vm, i32 argCount, Value* args);
 struct sObjNative {
     Obj obj;
     NativeFn function;
+    i32 arity;
+    i32 minArity;
+    ObjString** paramNames;
+    i32 paramCapacity;
+    ParamLookupEntry* paramLookup;
+    u32 paramLookupCapacity;
 };
 // --- Upvalue Object ---
 struct sObjUpvalue {
@@ -111,6 +123,9 @@ struct sObjClass {
     ObjString* name;
     struct sObjClass* superclass;
     Table methods;
+    ObjString* cachedMethodName;
+    Value cachedMethodValue;
+    bool cachedMethodValid;
 };
 struct sObjInstance {
     Obj obj;
@@ -159,12 +174,15 @@ ObjList* newList(VM* vm);
 ObjDict* newDict(VM* vm);
 ObjFunction* newFunction(VM* vm);
 ObjNative* newNative(VM* vm, NativeFn function);
+ObjNative* newNativeWithSignature(VM* vm, NativeFn function, i32 arity, i32 minArity, const char* const* paramNames);
 ObjClosure* newClosure(VM* vm, ObjFunction* function);
 ObjUpvalue* newUpvalue(VM* vm, Value* slot);
 ObjForeign* newForeign(VM* vm, size_t size, const ForeignClassMethods* methods);
 ObjClass* newClass(VM* vm, ObjString* name);
 ObjInstance* newInstance(VM* vm, ObjClass* klass);
 ObjBoundMethod* newBoundMethod(VM* vm, Value receiver, Value method);
+void buildFunctionParamLookup(VM* vm, ObjFunction* function);
+void buildNativeParamLookup(VM* vm, ObjNative* native);
 
 void printObject(Value value);
 // 类型检查辅助函数

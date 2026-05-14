@@ -9,6 +9,9 @@ void initChunk(Chunk* chunk) {
     chunk->codeTop = NULL;
     chunk->codeLimit = NULL;
     initValueArray(&chunk->constants);
+    chunk->constantLookup = NULL;
+    chunk->constantLookupCapacity = 0;
+    chunk->constantLookupCount = 0;
 
     chunk->lineInfo.count = 0;
     chunk->lineInfo.capacity = 0;
@@ -23,8 +26,73 @@ void freeChunk(VM* vm, Chunk* chunk) {
     
     FREE_ARRAY(vm, u8, chunk->code, capacity);
     FREE_ARRAY(vm, LineStart, chunk->lineInfo.lines, chunk->lineInfo.capacity);
+    FREE_ARRAY(vm, ConstantLookupEntry, chunk->constantLookup, chunk->constantLookupCapacity);
     freeValueArray(vm, &chunk->constants);
     initChunk(chunk);
+}
+
+static void initConstantLookupEntries(ConstantLookupEntry* entries, u32 start, u32 end) {
+    for (u32 i = start; i < end; i++) {
+        entries[i].hash = 0;
+        entries[i].index = -1;
+    }
+}
+
+static void adjustConstantLookup(VM* vm, Chunk* chunk, u32 capacity) {
+    ConstantLookupEntry* entries = ALLOCATE(vm, ConstantLookupEntry, capacity);
+    initConstantLookupEntries(entries, 0, capacity);
+
+    if (chunk->constantLookup && chunk->constants.count > 0) {
+        u32 mask = capacity - 1;
+        for (u32 i = 0; i < chunk->constantLookupCapacity; i++) {
+            ConstantLookupEntry entry = chunk->constantLookup[i];
+            if (entry.index < 0) continue;
+            u32 slot = entry.hash & mask;
+            while (entries[slot].index >= 0) {
+                slot = (slot + 1) & mask;
+            }
+            entries[slot] = entry;
+        }
+        FREE_ARRAY(vm, ConstantLookupEntry, chunk->constantLookup, chunk->constantLookupCapacity);
+    }
+
+    chunk->constantLookup = entries;
+    chunk->constantLookupCapacity = capacity;
+}
+
+static i32 findConstantIndex(Chunk* chunk, Value value, u32 hash) {
+    if (chunk->constantLookupCount == 0 || chunk->constantLookupCapacity == 0) return -1;
+    u32 mask = chunk->constantLookupCapacity - 1;
+    u32 slot = hash & mask;
+    for (;;) {
+        ConstantLookupEntry* entry = &chunk->constantLookup[slot];
+        if (entry->index < 0) return -1;
+        if (entry->hash == hash && valuesEqual(chunk->constants.values[entry->index], value)) {
+            return entry->index;
+        }
+        slot = (slot + 1) & mask;
+    }
+}
+
+static void insertConstantIndex(VM* vm, Chunk* chunk, Value value, u32 hash, i32 index) {
+    if (chunk->constantLookupCount + 1 > chunk->constantLookupCapacity * 3 / 4) {
+        u32 capacity = chunk->constantLookupCapacity == 0 ? 8 : GROW_CAPACITY(chunk->constantLookupCapacity);
+        adjustConstantLookup(vm, chunk, capacity);
+    }
+
+    u32 mask = chunk->constantLookupCapacity - 1;
+    u32 slot = hash & mask;
+    while (chunk->constantLookup[slot].index >= 0) {
+        if (chunk->constantLookup[slot].hash == hash &&
+            valuesEqual(chunk->constants.values[chunk->constantLookup[slot].index], value)) {
+            return;
+        }
+        slot = (slot + 1) & mask;
+    }
+
+    chunk->constantLookup[slot].hash = hash;
+    chunk->constantLookup[slot].index = index;
+    chunk->constantLookupCount++;
 }
 
 // Cold Path: Code Expansion
@@ -55,19 +123,18 @@ void flushLineBuffer(VM* vm, Chunk* chunk, i32 newLine) {
 }
 
 i32 addConstant(VM* vm, Chunk* chunk, Value value) {
-    // Number(double), Bool, Nil 等都是值类型，扩容触发 GC 也不会被回收
+    u32 hash = valueHash(value);
     bool isObject = IS_OBJ(value);
     if (isObject) push(vm, value);
-    // 避免重复添加相同的常量，减少 constants 数组扩容频率（扩容会触发 reallocate -> 可能触发 GC）
-    for (int i = 0; i < chunk->constants.count; i++) {
-        // 直接比较 u64，速度极快
-        if (chunk->constants.values[i] == value) {
+    {
+        i32 existing = findConstantIndex(chunk, value, hash);
+        if (existing >= 0) {
             if (isObject) pop(vm);
-            return i;
+            return existing;
         }
     }
     writeValueArray(vm, &chunk->constants, value);
-    
+    insertConstantIndex(vm, chunk, value, hash, (i32)chunk->constants.count - 1);
     if (isObject) pop(vm);
     return (i32)chunk->constants.count - 1;
 }
@@ -111,11 +178,13 @@ static i32 constantInstruction(const char* name, Chunk* chunk, i32 offset) {
 }
 
 static i32 constantLongInstruction(const char* name, Chunk* chunk, i32 offset) {
-    u32 constant = chunk->code[offset + 1] | (chunk->code[offset + 2] << 8);
+    u32 constant = chunk->code[offset + 1]
+                 | ((u32)chunk->code[offset + 2] << 8)
+                 | ((u32)chunk->code[offset + 3] << 16);
     printf("%-16s %4d '", name, constant);
     printValue(chunk->constants.values[constant]);
     printf("'\n");
-    return offset + 3;
+    return offset + 4;
 }
 
 static i32 jumpInstruction(const char* name, i32 sign, Chunk* chunk, i32 offset) {
@@ -132,6 +201,17 @@ static i32 invokeInstruction(const char* name, Chunk* chunk, i32 offset) {
     printValue(chunk->constants.values[constant]);
     printf("'\n");
     return offset + 3;
+}
+
+static i32 invokeLongInstruction(const char* name, Chunk* chunk, i32 offset) {
+    u32 constant = chunk->code[offset + 1]
+                 | ((u32)chunk->code[offset + 2] << 8)
+                 | ((u32)chunk->code[offset + 3] << 16);
+    u8 argCount = chunk->code[offset + 4];
+    printf("%-16s (%d args) %4d '", name, argCount, constant);
+    printValue(chunk->constants.values[constant]);
+    printf("'\n");
+    return offset + 5;
 }
 
 i32 disassembleInstruction(Chunk* chunk, i32 offset) {
@@ -153,8 +233,12 @@ i32 disassembleInstruction(Chunk* chunk, i32 offset) {
         case OP_GET_LOCAL:      return byteInstruction("OP_GET_LOCAL", chunk, offset);
         case OP_SET_LOCAL:      return byteInstruction("OP_SET_LOCAL", chunk, offset);
         case OP_GET_GLOBAL:     return constantInstruction("OP_GET_GLOBAL", chunk, offset);
+        case OP_GET_GLOBAL_LONG:return constantLongInstruction("OP_GET_GLOBAL_LONG", chunk, offset);
         case OP_DEFINE_GLOBAL:  return constantInstruction("OP_DEFINE_GLOBAL", chunk, offset);
+        case OP_DEFINE_GLOBAL_LONG:
+                                return constantLongInstruction("OP_DEFINE_GLOBAL_LONG", chunk, offset);
         case OP_SET_GLOBAL:     return constantInstruction("OP_SET_GLOBAL", chunk, offset);
+        case OP_SET_GLOBAL_LONG:return constantLongInstruction("OP_SET_GLOBAL_LONG", chunk, offset);
         case OP_GET_UPVALUE:    return byteInstruction("OP_GET_UPVALUE", chunk, offset);
         case OP_SET_UPVALUE:    return byteInstruction("OP_SET_UPVALUE", chunk, offset);
         case OP_EQUAL:          return simpleInstruction("OP_EQUAL", offset);
@@ -215,8 +299,39 @@ i32 disassembleInstruction(Chunk* chunk, i32 offset) {
         case OP_INHERIT:        return simpleInstruction("OP_INHERIT", offset);
         case OP_METHOD:         return constantInstruction("OP_METHOD", chunk, offset);
         case OP_GET_PROPERTY:   return constantInstruction("OP_GET_PROPERTY", chunk, offset);
+        case OP_GET_PROPERTY_LONG:
+                                return constantLongInstruction("OP_GET_PROPERTY_LONG", chunk, offset);
         case OP_SET_PROPERTY:   return constantInstruction("OP_SET_PROPERTY", chunk, offset);
+        case OP_SET_PROPERTY_LONG:
+                                return constantLongInstruction("OP_SET_PROPERTY_LONG", chunk, offset);
         case OP_GET_SUPER:      return constantInstruction("OP_GET_SUPER", chunk, offset);
+        case OP_GET_SUPER_LONG:
+                                return constantLongInstruction("OP_GET_SUPER_LONG", chunk, offset);
+        case OP_INVOKE_LONG:    return invokeLongInstruction("OP_INVOKE_LONG", chunk, offset);
+        case OP_INVOKE_KW_LONG: {
+            u32 constant = chunk->code[offset + 1]
+                         | ((u32)chunk->code[offset + 2] << 8)
+                         | ((u32)chunk->code[offset + 3] << 16);
+            u8 argCount = chunk->code[offset + 4];
+            u8 kwCount = chunk->code[offset + 5];
+            printf("%-16s %d args, %d kws %4d '", "OP_INVOKE_KW_LONG", argCount, kwCount, constant);
+            printValue(chunk->constants.values[constant]);
+            printf("'\n");
+            return offset + 6;
+        }
+        case OP_SUPER_INVOKE_LONG:
+                                return invokeLongInstruction("OP_SUPER_INVOKE_LONG", chunk, offset);
+        case OP_SUPER_INVOKE_KW_LONG: {
+            u32 constant = chunk->code[offset + 1]
+                         | ((u32)chunk->code[offset + 2] << 8)
+                         | ((u32)chunk->code[offset + 3] << 16);
+            u8 argCount = chunk->code[offset + 4];
+            u8 kwCount = chunk->code[offset + 5];
+            printf("%-16s %d args, %d kws %4d '", "OP_SUPER_INVOKE_KW_LONG", argCount, kwCount, constant);
+            printValue(chunk->constants.values[constant]);
+            printf("'\n");
+            return offset + 6;
+        }
             
         default:
             printf("Unknown opcode %d\n", instruction);

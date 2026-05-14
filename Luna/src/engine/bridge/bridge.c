@@ -3,6 +3,7 @@
 #include "object.h"
 #include "core/memory.h" // 这里包含真正的 memory 实现
 #include "core/vm/vm.h" // 这里包含 VM 定义
+#include "engine/effect/filter_base.h"
 #include "engine/model/timeline.h"
 static void* vm_realloc_wrapper(void* ctx, void* ptr, size_t old_size, size_t new_size) {
     VM* vm = (VM*)ctx;
@@ -51,7 +52,10 @@ ObjTimeline* newTimeline(VM* vm, uint32_t width, uint32_t height, double fps) {
     return obj;
 }
 static void clipMark(VM* vm, Obj* obj) {
-    // 如果 Clip 结构体未来需要引用其他 Obj (如滤镜列表)，则通过 oClip->clip 访问并标记
+    ObjClip* oClip = (ObjClip*)obj;
+    if (oClip->timelineObj) {
+        markObject(vm, (Obj*)oClip->timelineObj);
+    }
 }
 static void clipFree(VM* vm, Obj* obj) {
     ObjClip* oClip = (ObjClip*)obj;
@@ -59,6 +63,7 @@ static void clipFree(VM* vm, Obj* obj) {
         clip_free(oClip->clip);
         oClip->clip = NULL;
     }
+    oClip->timelineObj = NULL;
 }
 const ForeignClassMethods ClipMethods = {
     "clip",
@@ -68,8 +73,9 @@ const ForeignClassMethods ClipMethods = {
 };
 ObjClip* newClip(VM* vm, ObjString* path) {
     ObjClip* obj = (ObjClip*)newForeign(vm, sizeof(ObjClip), &ClipMethods);
-    obj->clip = clip_create_media(path->chars);
+    obj->clip = clip_create_media(path ? path->chars : NULL);
     obj->clip->user_data = obj;
+    obj->timelineObj = NULL;
     return obj;
 }
 static void projectMark(VM* vm, Obj* obj) {
@@ -94,6 +100,7 @@ const ForeignClassMethods ProjectMethods = {
 ObjProject* newProject(VM* vm, u32 width, u32 height, double fps) {
     ObjProject* obj = (ObjProject*)newForeign(vm, sizeof(ObjProject), &ProjectMethods);
     obj->project = ALLOCATE(vm, Project, 1);
+    obj->timelineObj = NULL;
     obj->project->width = width;
     obj->project->height = height;
     obj->project->fps = fps;
@@ -105,11 +112,17 @@ ObjProject* newProject(VM* vm, u32 width, u32 height, double fps) {
 }
 // 新增: TimelineClip Mark/Free
 static void timelineClipMark(VM* vm, Obj* obj) {
-    // 如果需要标记内部引用，目前无
+    ObjTimelineClip* oTc = (ObjTimelineClip*)obj;
+    if (oTc->timelineObj) {
+        markObject(vm, (Obj*)oTc->timelineObj);
+    }
 }
 static void timelineClipFree(VM* vm, Obj* obj) {
+    (void)vm;
     ObjTimelineClip* oTc = (ObjTimelineClip*)obj;
-    oTc->clip = NULL;  // 不释放 TimelineClip*，因为它属于 Timeline
+    oTc->clip_id = 0;
+    oTc->timeline = NULL;
+    oTc->timelineObj = NULL;
     oTc->allocator = NULL;
 }
 const ForeignClassMethods TimelineClipMethods = {
@@ -118,9 +131,65 @@ const ForeignClassMethods TimelineClipMethods = {
     timelineClipFree,
     timelineClipMark
 };
-ObjTimelineClip* newTimelineClip(VM* vm, TimelineClip* tc, Allocator* allocator) {
+ObjTimelineClip* newTimelineClip(VM* vm, TimelineClip* tc, ObjTimeline* timeline_obj, Timeline* timeline, Allocator* allocator) {
     ObjTimelineClip* obj = (ObjTimelineClip*)newForeign(vm, sizeof(ObjTimelineClip), &TimelineClipMethods);
-    obj->clip = tc;
+    obj->clip_id = tc->id;
+    obj->timeline = timeline;
+    obj->timelineObj = timeline_obj;
     obj->allocator = allocator;
+    return obj;
+}
+
+static void effectHandleMark(VM* vm, Obj* obj) {
+    ObjEffectHandle* effect = (ObjEffectHandle*)obj;
+    if (effect->timelineObj) {
+        markObject(vm, (Obj*)effect->timelineObj);
+    }
+    if (effect->effect && effect->effect->processor && effect->effect->processor->mark) {
+        effect->effect->processor->mark(vm, effect->effect->data);
+    }
+}
+
+static void effectHandleFree(VM* vm, Obj* obj) {
+    ObjEffectHandle* effect = (ObjEffectHandle*)obj;
+    if (effect->owns_effect && effect->effect) {
+        Allocator allocator;
+        init_allocator(&allocator, vm);
+        effect_instance_destroy(&allocator, effect->effect);
+    }
+    effect->clip_id = 0;
+    effect->timeline = NULL;
+    effect->timelineObj = NULL;
+    effect->effect = NULL;
+    effect->allocator = NULL;
+    effect->owns_effect = false;
+}
+
+const ForeignClassMethods EffectHandleMethods = {
+    "effect_handle",
+    NULL,
+    effectHandleFree,
+    effectHandleMark
+};
+
+ObjEffectHandle* newEffectHandle(VM* vm, TimelineClip* tc, ObjTimeline* timeline_obj, Timeline* timeline, EffectInstance* effect, Allocator* allocator) {
+    ObjEffectHandle* obj = (ObjEffectHandle*)newForeign(vm, sizeof(ObjEffectHandle), &EffectHandleMethods);
+    obj->clip_id = tc->id;
+    obj->timeline = timeline;
+    obj->timelineObj = timeline_obj;
+    obj->effect = effect;
+    obj->allocator = allocator;
+    obj->owns_effect = false;
+    return obj;
+}
+
+ObjEffectHandle* newStandaloneEffectHandle(VM* vm, EffectInstance* effect) {
+    ObjEffectHandle* obj = (ObjEffectHandle*)newForeign(vm, sizeof(ObjEffectHandle), &EffectHandleMethods);
+    obj->clip_id = 0;
+    obj->timeline = NULL;
+    obj->timelineObj = NULL;
+    obj->effect = effect;
+    obj->allocator = NULL;
+    obj->owns_effect = true;
     return obj;
 }

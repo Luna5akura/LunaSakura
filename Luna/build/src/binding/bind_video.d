@@ -25,7 +25,7 @@ build/src/binding/bind_video.o: src/binding/bind_video.c \
  /nix/store/zykjcxzj7mg1x325xxfnrymf50daqvgb-freetype-2.13.3-dev/include/freetype2/freetype/fterrdef.h \
  src/engine/media/utils/probe.h src/engine/service/exporter.h \
  src/engine/service/preview.h src/engine/service/transcoder.h \
- src/engine/effect/registry.h
+ src/engine/effect/registry.h src/engine/media/utils/image_loader.h
 src/core/memory.h:
 src/core/object.h:
 src/core/chunk.h:
@@ -69,3 +69,4 @@ src/engine/service/exporter.h:
 src/engine/service/preview.h:
 src/engine/service/transcoder.h:
 src/engine/effect/registry.h:
+src/engine/media/utils/image_loader.h:

@@ -1,0 +1,87 @@
+var width = 640
+var height = 360
+var fps = 24
+var duration = 6
+var block = 30
+
+var proj = Project(width, height, fps)
+var tl = Timeline(width, height, fps)
+proj.setTimeline(tl)
+
+# 下层：纯色底板，先挂渐变，再走置换、色调分离，最后马赛克
+var base = Solid(width, height, 255, 255, 255, 255)
+var baseInst = tl.add(0, base, 0)
+baseInst.setDuration(duration)
+
+var ramp = GradientRamp(startX=0.0, startY=0.0, endX=1.0, endY=1.0, blend=1.0)
+baseInst.addEffect(ramp)
+ramp.setNumber("startX", 0.0)
+ramp.setNumber("startY", 0.0)
+ramp.setNumber("endX", 1.0)
+ramp.setNumber("endY", 1.0)
+ramp.setNumber("blend", 1.0)
+
+# 起始色循环：红 -> 绿 -> 蓝 -> 红
+ramp.addColorKeyframe("startColor", 0.0, 255, 0, 0, 255, "linear")
+ramp.setColorKeyframe("startColor", 2.0, 0, 255, 0, 255, "linear")
+ramp.setColorKeyframe("startColor", 4.0, 0, 0, 255, 255, "linear")
+ramp.setColorKeyframe("startColor", 6.0, 255, 0, 0, 255, "linear")
+
+# 结束色循环：黄 -> 品红 -> 青 -> 黄
+ramp.addColorKeyframe("endColor", 0.0, 255, 255, 0, 255, "linear")
+ramp.setColorKeyframe("endColor", 2.0, 255, 0, 255, 255, "linear")
+ramp.setColorKeyframe("endColor", 4.0, 0, 255, 255, 255, "linear")
+ramp.setColorKeyframe("endColor", 6.0, 255, 255, 0, 255, "linear")
+
+# 置换图源：单独的分形杂色层，本身不显示，只作为 DisplacementMap 的 source
+var noiseSource = Solid(width, height, 0, 0, 0, 255)
+var noiseInst = tl.add(1, noiseSource, 0)
+noiseInst.setDuration(duration)
+noiseInst.setVisible(false)
+
+var fractal = FractalNoise(scale=72, contrast=1.35, brightness=0.05, octaves=5, amount=1.0, invert=false)
+noiseInst.addEffect(fractal)
+fractal.setNumber("scale", 72)
+fractal.setNumber("contrast", 1.35)
+fractal.setNumber("brightness", 0.05)
+fractal.setNumber("octaves", 5)
+fractal.setNumber("amount", 1.0)
+fractal.addNumberKeyframe("evolution", 0.0, 0.0, "linear")
+fractal.setNumberKeyframe("evolution", duration, 90.0, "linear")
+fractal.setBool("invert", false)
+
+var displacement = DisplacementMap(scaleX=20, scaleY=20, amount=1.0, offsetX=0, offsetY=0, useLuma=true)
+baseInst.addEffect(displacement)
+displacement.setSource(noiseInst)
+displacement.setBool("useLuma", true)
+displacement.setNumber("scaleX", 20)
+displacement.setNumber("scaleY", 20)
+displacement.setNumber("amount", 1.0)
+displacement.setNumber("offsetX", 0)
+displacement.setNumber("offsetY", 0)
+
+var posterize = Posterize(levels=6, amount=1.0)
+baseInst.addEffect(posterize)
+posterize.setNumber("levels", 6)
+posterize.setNumber("amount", 1.0)
+
+var mosaic = Mosaic(blockSize=block, sharpColors=true)
+baseInst.addEffect(mosaic)
+mosaic.setNumber("blockSize", block)
+mosaic.setBool("sharpColors", true)
+
+# 上层：透明底板，只绘制黑色网格
+var overlay = Solid(width, height, 0, 0, 0, 0)
+var overlayInst = tl.add(2, overlay, 0)
+overlayInst.setDuration(duration)
+
+var grid = Grid(sizeX=width / block, sizeY=height / block, lineWidth=0.25, opacity=1.0, color=[0, 0, 0, 255])
+overlayInst.addEffect(grid)
+grid.setNumber("sizeX", width / block)
+grid.setNumber("sizeY", height / block)
+grid.setNumber("lineWidth", 0.25)
+grid.setNumber("opacity", 1.0)
+grid.setColor("color", 0, 0, 0, 255)
+
+print tl.getDuration()
+proj.preview(0, duration)

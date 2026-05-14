@@ -6,6 +6,7 @@
 #include "call_utils.h"
 #include "core/compiler/compiler.h"
 #include "core/memory.h"
+#include "engine/model/animation.h"
 
 // --- Helper Functions ---
 void closeUpvalues(VM* vm, Value* last) {
@@ -66,10 +67,11 @@ void initVM(VM* vm) {
     vm->handlerCount = 0;
 }
 void freeVM(VM* vm) {
+    reset_user_presets();
     freeTable(vm, &vm->globals);
     freeTable(vm, &vm->strings);
     vm->initString = NULL;
-    vm->objects = NULL;
+    freeObjects(vm);
     if (vm->grayStack) {
         free(vm->grayStack);
         vm->grayStack = NULL;
@@ -92,19 +94,22 @@ static InterpretResult run(VM* vm) {
     // Computed Goto 标签数组
     static void* dispatchTable[] = {
         &&OP_CONSTANT, &&OP_CONSTANT_LONG, &&OP_NIL, &&OP_TRUE, &&OP_FALSE,
-        &&OP_POP, &&OP_GET_LOCAL, &&OP_SET_LOCAL, &&OP_GET_GLOBAL, &&OP_SET_GLOBAL,
-        &&OP_DEFINE_GLOBAL, &&OP_GET_UPVALUE, &&OP_SET_UPVALUE, &&OP_EQUAL,
+        &&OP_POP, &&OP_GET_LOCAL, &&OP_SET_LOCAL, &&OP_GET_GLOBAL, &&OP_GET_GLOBAL_LONG,
+        &&OP_SET_GLOBAL, &&OP_SET_GLOBAL_LONG, &&OP_DEFINE_GLOBAL, &&OP_DEFINE_GLOBAL_LONG,
+        &&OP_GET_UPVALUE, &&OP_SET_UPVALUE, &&OP_EQUAL,
         &&OP_NOT_EQUAL, &&OP_GREATER, &&OP_GREATER_EQUAL, &&OP_LESS, &&OP_LESS_EQUAL,
         &&OP_ADD, &&OP_SUBTRACT, &&OP_MULTIPLY, &&OP_DIVIDE, &&OP_NOT, &&OP_NEGATE,
         &&OP_PRINT, &&OP_JUMP, &&OP_JUMP_IF_FALSE, &&OP_LOOP, &&OP_CALL, &&OP_CALL_KW,
         &&OP_CHECK_DEFAULT,&&OP_ITER_INIT, &&OP_ITER_NEXT,&&OP_LIST_APPEND,&&OP_BUILD_LIST, &&OP_BUILD_DICT, &&OP_CLOSURE,
         &&OP_CLOSE_UPVALUE, &&OP_RETURN, &&OP_CLASS, &&OP_INHERIT, &&OP_METHOD,
-        &&OP_GET_PROPERTY, &&OP_SET_PROPERTY, &&OP_GET_SUPER, &&OP_INVOKE,
-        &&OP_INVOKE_KW, &&OP_SUPER_INVOKE, &&OP_SUPER_INVOKE_KW, &&OP_TRY,
+        &&OP_GET_PROPERTY, &&OP_GET_PROPERTY_LONG, &&OP_SET_PROPERTY, &&OP_SET_PROPERTY_LONG,
+        &&OP_GET_SUPER, &&OP_GET_SUPER_LONG, &&OP_INVOKE, &&OP_INVOKE_LONG,
+        &&OP_INVOKE_KW, &&OP_INVOKE_KW_LONG, &&OP_SUPER_INVOKE, &&OP_SUPER_INVOKE_LONG,
+        &&OP_SUPER_INVOKE_KW, &&OP_SUPER_INVOKE_KW_LONG, &&OP_TRY,
         &&OP_POP_HANDLER, &&OP_UNKNOWN // 默认标签
     };
 
-#define DISPATCH() goto *dispatchTable[*ip++ % (sizeof(dispatchTable)/sizeof(void*))]
+#define DISPATCH() goto *dispatchTable[*ip++]
 
     for (;;) {
 #ifdef DEBUG_TRACE_EXECUTION
@@ -135,14 +140,20 @@ static InterpretResult run(VM* vm) {
         OP_GET_LOCAL: op_get_local(vm, &frame, &sp, &ip); continue;
         OP_SET_LOCAL: op_set_local(vm, &frame, &sp, &ip); continue;
         OP_GET_GLOBAL: if (!op_get_global(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
-        OP_DEFINE_GLOBAL: op_define_global(vm, &frame, &sp, &ip); continue;
+        OP_GET_GLOBAL_LONG: if (!op_get_global_long(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_SET_GLOBAL: if (!op_set_global(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
+        OP_SET_GLOBAL_LONG: if (!op_set_global_long(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
+        OP_DEFINE_GLOBAL: op_define_global(vm, &frame, &sp, &ip); continue;
+        OP_DEFINE_GLOBAL_LONG: op_define_global_long(vm, &frame, &sp, &ip); continue;
         OP_GET_UPVALUE: op_get_upvalue(vm, &frame, &sp, &ip); continue;
         OP_SET_UPVALUE: op_set_upvalue(vm, &frame, &sp, &ip); continue;
         OP_CLOSE_UPVALUE: op_close_upvalue(vm, &frame, &sp, &ip); continue;
         OP_GET_PROPERTY: if (!op_get_property(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
+        OP_GET_PROPERTY_LONG: if (!op_get_property_long(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_SET_PROPERTY: if (!op_set_property(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
+        OP_SET_PROPERTY_LONG: if (!op_set_property_long(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_GET_SUPER: if (!op_get_super(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
+        OP_GET_SUPER_LONG: if (!op_get_super_long(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_EQUAL: { Value b = *(--sp); Value a = *(--sp); *sp++ = BOOL_VAL(valuesEqual(a, b)); continue; }
         OP_NOT_EQUAL: { Value b = *(--sp); Value a = *(--sp); *sp++ = BOOL_VAL(!valuesEqual(a, b)); continue; }
         OP_GREATER: if (!op_greater(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
@@ -162,9 +173,13 @@ static InterpretResult run(VM* vm) {
         OP_CALL: if (!op_call(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_CALL_KW: if (!op_call_kw(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_INVOKE: if (!op_invoke(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
+        OP_INVOKE_LONG: if (!op_invoke_long(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_INVOKE_KW: if (!op_invoke_kw(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
+        OP_INVOKE_KW_LONG: if (!op_invoke_kw_long(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_SUPER_INVOKE: if (!op_super_invoke(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
+        OP_SUPER_INVOKE_LONG: if (!op_super_invoke_long(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_SUPER_INVOKE_KW: if (!op_super_invoke_kw(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
+        OP_SUPER_INVOKE_KW_LONG: if (!op_super_invoke_kw_long(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_CHECK_DEFAULT: continue;
         OP_ITER_INIT: if (!op_iter_init(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_ITER_NEXT: if (!op_iter_next(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;

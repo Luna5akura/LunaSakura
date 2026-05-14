@@ -4,6 +4,29 @@
 #include "compiler_internal.h"
 #include "core/memory.h"
 
+static void emitConstantOperandInstruction(u8 shortOp, u8 longOp, u32 operand) {
+    if (operand <= UINT8_MAX) {
+        emitBytes(shortOp, (u8)operand);
+        return;
+    }
+
+    emitByte(longOp);
+    emitByte((u8)(operand & 0xFF));
+    emitByte((u8)((operand >> 8) & 0xFF));
+    emitByte((u8)((operand >> 16) & 0xFF));
+}
+
+static void emitInvokeInstruction(u8 shortOp, u8 longOp, u32 name, u8 argCount) {
+    emitConstantOperandInstruction(shortOp, longOp, name);
+    emitByte(argCount);
+}
+
+static void emitInvokeKwInstruction(u8 shortOp, u8 longOp, u32 name, u8 argCount, u8 kwCount) {
+    emitConstantOperandInstruction(shortOp, longOp, name);
+    emitByte(argCount);
+    emitByte(kwCount);
+}
+
 // --- Primitives ---
 static void number(bool canAssign) {
     UNUSED(canAssign);
@@ -114,26 +137,23 @@ static void call(bool canAssign) {
 
 static void dot(bool canAssign) {
     consume(TOKEN_IDENTIFIER, "Expect property name after '.'.");
-    u8 name = identifierConstant(&parser.previous);
+    u32 name = identifierConstant(&parser.previous);
 
     if (canAssign && match(TOKEN_EQUAL)) {
         expression();
-        emitBytes(OP_SET_PROPERTY, name);
+        emitConstantOperandInstruction(OP_SET_PROPERTY, OP_SET_PROPERTY_LONG, name);
     } else if (match(TOKEN_LEFT_PAREN)) {
         u8 argCount = 0;
         u8 kwCount = 0;
         argumentList(&argCount, &kwCount);
 
         if (kwCount > 0) {
-            emitBytes(OP_INVOKE_KW, name); 
-            emitByte(argCount);
-            emitByte(kwCount);
+            emitInvokeKwInstruction(OP_INVOKE_KW, OP_INVOKE_KW_LONG, name, argCount, kwCount);
         } else {
-            emitBytes(OP_INVOKE, name);
-            emitByte(argCount);
+            emitInvokeInstruction(OP_INVOKE, OP_INVOKE_LONG, name, argCount);
         }
     } else {
-        emitBytes(OP_GET_PROPERTY, name);
+        emitConstantOperandInstruction(OP_GET_PROPERTY, OP_GET_PROPERTY_LONG, name);
     }
 }
 
@@ -157,7 +177,7 @@ static void super_(bool canAssign) {
  
     consume(TOKEN_DOT, "Expect '.' after 'super'.");
     consume(TOKEN_IDENTIFIER, "Expect superclass method name.");
-    u8 name = identifierConstant(&parser.previous);
+    u32 name = identifierConstant(&parser.previous);
  
     namedVariable(syntheticToken("this"), false);
     
@@ -168,16 +188,13 @@ static void super_(bool canAssign) {
         namedVariable(syntheticToken("super"), false);
         
         if (kwCount > 0) {
-            emitBytes(OP_SUPER_INVOKE_KW, name);
-            emitByte(argCount);
-            emitByte(kwCount);
+            emitInvokeKwInstruction(OP_SUPER_INVOKE_KW, OP_SUPER_INVOKE_KW_LONG, name, argCount, kwCount);
         } else {
-            emitBytes(OP_SUPER_INVOKE, name);
-            emitByte(argCount);
+            emitInvokeInstruction(OP_SUPER_INVOKE, OP_SUPER_INVOKE_LONG, name, argCount);
         }
     } else {
         namedVariable(syntheticToken("super"), false);
-        emitBytes(OP_GET_SUPER, name);
+        emitConstantOperandInstruction(OP_GET_SUPER, OP_GET_SUPER_LONG, name);
     }
 }
 
@@ -390,10 +407,9 @@ static void lambda(bool canAssign) {
     f->minArity = paramCount; // 假设 Lambda 没有默认参数，minArity = arity
     
     if (paramCount > 0) {
-        // 将临时数组的所有权转移给 function，并收缩多余容量
-        f->paramNames = (ObjString**)reallocate(compilingVM, tempParams, 
-            sizeof(ObjString*) * paramCapacity, 
-            sizeof(ObjString*) * paramCount);
+        // 直接转移所有权，避免一次额外 shrink realloc。
+        f->paramNames = tempParams;
+        f->paramCapacity = paramCapacity;
     } else {
         // 如果没有参数，paramNames 应为 NULL
         // 如果 tempParams 分配过内存（极少见情况），需要释放
@@ -401,6 +417,7 @@ static void lambda(bool canAssign) {
             reallocate(compilingVM, tempParams, sizeof(ObjString*) * paramCapacity, 0);
         }
         f->paramNames = NULL;
+        f->paramCapacity = 0;
     }
 
     if (match(TOKEN_LEFT_BRACE)) {

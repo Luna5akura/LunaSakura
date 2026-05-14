@@ -24,22 +24,22 @@ void export_timeline(VM* vm, Timeline* tl, const char* output_filename) {
     i32 total_frames = (i32)(tl->duration * tl->fps);
     double step = 1.0 / tl->fps;
     
-    // 准备 buffer
-    size_t buf_size = tl->width * tl->height * 4;
-    u8* pixels = malloc(buf_size);
-    
     // 3. 渲染循环
     for (i32 i = 0; i < total_frames; i++) {
         double t = i * step;
+        u8* pixels;
       
         // A. 渲染到 FBO
         compositor_render(comp, t);
       
-        // B. 读取并翻转像素 (封装在 compositor 中)
-        compositor_read_pixels(comp, pixels);
+        // B. 直接复用未翻转的 GPU 读回缓冲，交给 encoder 使用负 stride 读取
+        pixels = compositor_get_cpu_buffer_raw(comp);
+        if (!pixels) break;
         
-        // C. 编码 (Encoder 内部处理 RGB -> YUV)
-        encoder_encode_rgb(enc, pixels, tl->width * 4);
+        // C. 编码 (GL 读回是底朝上，传入最后一行并使用负 stride 避免额外翻转)
+        encoder_encode_rgb(enc,
+                           pixels + (size_t)(tl->height - 1) * (size_t)(tl->width * 4),
+                           -(tl->width * 4));
       
         if (i % 30 == 0) {
             printf("\r[Export] Frame %d / %d (%.1f%%)", i, total_frames, (double)i/total_frames*100.0);
@@ -52,6 +52,5 @@ void export_timeline(VM* vm, Timeline* tl, const char* output_filename) {
     // 4. 清理
     encoder_finish(enc);
     compositor_free(vm, comp);
-    free(pixels);
     printf("[Export] Done.\n");
 }

@@ -5,6 +5,52 @@
 #include "core/memory.h"
 #include "core/compiler/compiler.h" 
 
+static int findParamIndexFast(ObjFunction* function, ObjString* name) {
+    if (!function) return -1;
+    if (function->paramLookup && function->paramLookupCapacity > 0) {
+        u32 mask = function->paramLookupCapacity - 1;
+        u32 slot = name->hash & mask;
+        for (;;) {
+            ParamLookupEntry* entry = &function->paramLookup[slot];
+            if (entry->key == NULL) return -1;
+            if (entry->key == name) return (int)entry->index;
+            slot = (slot + 1) & mask;
+        }
+    }
+
+    for (int j = 0; j < function->arity; j++) {
+        if (function->paramNames[j] == name ||
+           (function->paramNames[j]->hash == name->hash &&
+            memcmp(function->paramNames[j]->chars, name->chars, name->length) == 0)) {
+            return j;
+        }
+    }
+    return -1;
+}
+
+static int findNativeParamIndexFast(ObjNative* native, ObjString* name) {
+    if (!native) return -1;
+    if (native->paramLookup && native->paramLookupCapacity > 0) {
+        u32 mask = native->paramLookupCapacity - 1;
+        u32 slot = name->hash & mask;
+        for (;;) {
+            ParamLookupEntry* entry = &native->paramLookup[slot];
+            if (entry->key == NULL) return -1;
+            if (entry->key == name) return (int)entry->index;
+            slot = (slot + 1) & mask;
+        }
+    }
+
+    for (int j = 0; j < native->arity; j++) {
+        if (native->paramNames[j] == name ||
+           (native->paramNames[j]->hash == name->hash &&
+            memcmp(native->paramNames[j]->chars, name->chars, name->length) == 0)) {
+            return j;
+        }
+    }
+    return -1;
+}
+
 bool call(VM* vm, ObjClosure* closure, i32 argCount) {
     if (UNLIKELY(argCount != closure->function->arity)) {
         if (!runtimeError(vm, "Expected %d arguments but got %d.", closure->function->arity, argCount)) return false;
@@ -34,15 +80,7 @@ bool bindKeywordArgs(VM* vm, ObjFunction* function, int argCount, int kwCount) {
         }
         ObjString* name = AS_STRING(keyVal);
        
-        int paramIndex = -1;
-        for (int j = 0; j < function->arity; j++) {
-            if (function->paramNames[j] == name ||
-               (function->paramNames[j]->hash == name->hash &&
-                memcmp(function->paramNames[j]->chars, name->chars, name->length) == 0)) {
-                paramIndex = j;
-                break;
-            }
-        }
+        int paramIndex = findParamIndexFast(function, name);
        
         if (paramIndex == -1) {
             return runtimeError(vm, "Unexpected keyword argument '%s'.", name->chars);
@@ -89,8 +127,13 @@ bool callValue(VM* vm, Value callee, i32 argCount) {
                 return true;
             }
             case OBJ_NATIVE: {
-                NativeFn native = AS_NATIVE(callee);
-                Value result = native(vm, argCount, vm->stackTop - argCount);
+                ObjNative* native = (ObjNative*)AS_OBJ(callee);
+                if (native->arity >= 0 && (argCount < native->minArity || argCount > native->arity)) {
+                    if (!runtimeError(vm, "Expected %d-%d arguments but got %d.",
+                                      native->minArity, native->arity, argCount)) return false;
+                    return true;
+                }
+                Value result = native->function(vm, argCount, vm->stackTop - argCount);
                 vm->stackTop -= argCount + 1;
                 push(vm, result);
                 return true;
@@ -104,7 +147,13 @@ bool callValue(VM* vm, Value callee, i32 argCount) {
 
 bool bindMethod(VM* vm, ObjClass* klass, ObjString* name, Value receiver) {
     Value method;
-    if (!tableGet(&klass->methods, OBJ_VAL(name), &method)) {
+    if (klass->cachedMethodValid && klass->cachedMethodName == name) {
+        method = klass->cachedMethodValue;
+    } else if (tableGet(&klass->methods, OBJ_VAL(name), &method)) {
+        klass->cachedMethodName = name;
+        klass->cachedMethodValue = method;
+        klass->cachedMethodValid = true;
+    } else {
         if (!runtimeError(vm, "Undefined property '%s'.", name->chars)) return false;
         return true;
     }
@@ -135,15 +184,7 @@ bool prepareKeywordCall(VM* vm, ObjFunction* func, int argCount, int kwCount) {
         Value valVal = kwBase[i * 2 + 1]; 
         ObjString* name = AS_STRING(nameVal);
        
-        int paramIndex = -1;
-        for (int j = 0; j < func->arity; j++) {
-            if (func->paramNames[j] == name ||
-               (func->paramNames[j]->hash == name->hash &&
-                memcmp(func->paramNames[j]->chars, name->chars, name->length) == 0)) {
-                paramIndex = j;
-                break;
-            }
-        }
+        int paramIndex = findParamIndexFast(func, name);
         if (paramIndex == -1) {
             runtimeError(vm, "Unexpected keyword argument '%s'.", name->chars);
             return false;
@@ -166,5 +207,59 @@ bool prepareKeywordCall(VM* vm, ObjFunction* func, int argCount, int kwCount) {
         argsBase[i] = tempSlots[i];
     }
     vm->stackTop = argsBase + func->arity;
+    return true;
+}
+
+bool prepareKeywordNativeCall(VM* vm, ObjNative* native, int argCount, int kwCount) {
+    Value* argsBase;
+    Value* tempSlots;
+    Value* kwBase;
+
+    if (!native || native->arity < 0 || !native->paramNames) {
+        runtimeError(vm, "Keyword arguments only supported for declared native functions.");
+        return false;
+    }
+    if (argCount > native->arity) {
+        runtimeError(vm, "Expected at most %d arguments but got %d.", native->arity, argCount);
+        return false;
+    }
+
+    argsBase = vm->stackTop - (kwCount * 2) - argCount;
+    tempSlots = vm->stackTop;
+    for (int i = 0; i < native->arity; i++) {
+        tempSlots[i] = UNDEFINED_VAL;
+    }
+    for (int i = 0; i < argCount; i++) {
+        tempSlots[i] = argsBase[i];
+    }
+
+    kwBase = vm->stackTop - (kwCount * 2);
+    for (int i = 0; i < kwCount; i++) {
+        Value nameVal = kwBase[i * 2];
+        Value valVal = kwBase[i * 2 + 1];
+        ObjString* name = AS_STRING(nameVal);
+        int paramIndex = findNativeParamIndexFast(native, name);
+        if (paramIndex == -1) {
+            runtimeError(vm, "Unexpected keyword argument '%s'.", name->chars);
+            return false;
+        }
+        if (!IS_UNDEFINED(tempSlots[paramIndex])) {
+            runtimeError(vm, "Argument '%s' passed multiple times.", name->chars);
+            return false;
+        }
+        tempSlots[paramIndex] = valVal;
+    }
+
+    for (int i = 0; i < native->minArity; i++) {
+        if (IS_UNDEFINED(tempSlots[i])) {
+            runtimeError(vm, "Missing required argument '%s'.", native->paramNames[i]->chars);
+            return false;
+        }
+    }
+
+    for (int i = 0; i < native->arity; i++) {
+        argsBase[i] = tempSlots[i];
+    }
+    vm->stackTop = argsBase + native->arity;
     return true;
 }

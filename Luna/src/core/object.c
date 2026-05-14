@@ -2,6 +2,7 @@
 
 #include "memory.h"
 #include "vm/vm.h"
+#include <string.h>
 
 // === Allocation Helper ===
 static Obj* allocateObject(VM* vm, size_t size, ObjType type) {
@@ -33,6 +34,63 @@ static u32 hashString(const char* key, i32 length) {
         hash *= 16777619;
     }
     return hash;
+}
+
+static u32 next_param_lookup_capacity(i32 arity) {
+    u32 capacity = 8;
+    while (capacity < (u32)(arity * 2)) capacity <<= 1;
+    return capacity;
+}
+
+static void build_param_lookup_entries(ParamLookupEntry* entries, u32 capacity, ObjString** names, i32 arity) {
+    u32 mask = capacity - 1;
+    for (i32 i = 0; i < arity; i++) {
+        ObjString* key = names[i];
+        u32 slot = key->hash & mask;
+        while (entries[slot].key != NULL) {
+            slot = (slot + 1) & mask;
+        }
+        entries[slot].key = key;
+        entries[slot].index = (u8)i;
+    }
+}
+
+void buildFunctionParamLookup(VM* vm, ObjFunction* function) {
+    if (!function) return;
+    if (function->paramLookup) {
+        FREE_ARRAY(vm, ParamLookupEntry, function->paramLookup, function->paramLookupCapacity);
+        function->paramLookup = NULL;
+        function->paramLookupCapacity = 0;
+    }
+    if (function->arity <= 0 || !function->paramNames) return;
+
+    function->paramLookupCapacity = next_param_lookup_capacity(function->arity);
+    function->paramLookup = ALLOCATE(vm, ParamLookupEntry, function->paramLookupCapacity);
+    for (u32 i = 0; i < function->paramLookupCapacity; i++) {
+        function->paramLookup[i].key = NULL;
+        function->paramLookup[i].index = 0;
+    }
+
+    build_param_lookup_entries(function->paramLookup, function->paramLookupCapacity, function->paramNames, function->arity);
+}
+
+void buildNativeParamLookup(VM* vm, ObjNative* native) {
+    if (!native) return;
+    if (native->paramLookup) {
+        FREE_ARRAY(vm, ParamLookupEntry, native->paramLookup, native->paramLookupCapacity);
+        native->paramLookup = NULL;
+        native->paramLookupCapacity = 0;
+    }
+    if (native->arity <= 0 || !native->paramNames) return;
+
+    native->paramLookupCapacity = next_param_lookup_capacity(native->arity);
+    native->paramLookup = ALLOCATE(vm, ParamLookupEntry, native->paramLookupCapacity);
+    for (u32 i = 0; i < native->paramLookupCapacity; i++) {
+        native->paramLookup[i].key = NULL;
+        native->paramLookup[i].index = 0;
+    }
+
+    build_param_lookup_entries(native->paramLookup, native->paramLookupCapacity, native->paramNames, native->arity);
 }
 ObjString* copyString(VM* vm, const char* chars, i32 length) {
     u32 hash = hashString(chars, length);
@@ -101,12 +159,40 @@ ObjFunction* newFunction(VM* vm) {
     function->upvalueCount = 0;
     function->name = NULL;
     function->paramNames = NULL; // [重要修复] 必须初始化为 NULL，否则 reallocate 会崩溃
+    function->paramCapacity = 0;
+    function->paramLookup = NULL;
+    function->paramLookupCapacity = 0;
     initChunk(&function->chunk);
     return function;
 }
 ObjNative* newNative(VM* vm, NativeFn function) {
     ObjNative* native = (ObjNative*)allocateObject(vm, sizeof(ObjNative), OBJ_NATIVE);
     native->function = function;
+    native->arity = -1;
+    native->minArity = 0;
+    native->paramNames = NULL;
+    native->paramCapacity = 0;
+    native->paramLookup = NULL;
+    native->paramLookupCapacity = 0;
+    return native;
+}
+
+ObjNative* newNativeWithSignature(VM* vm, NativeFn function, i32 arity, i32 minArity, const char* const* paramNames) {
+    ObjNative* native = newNative(vm, function);
+    if (arity <= 0 || !paramNames) {
+        native->arity = arity;
+        native->minArity = minArity;
+        return native;
+    }
+
+    native->arity = arity;
+    native->minArity = minArity;
+    native->paramCapacity = arity;
+    native->paramNames = ALLOCATE(vm, ObjString*, native->paramCapacity);
+    for (i32 i = 0; i < arity; i++) {
+        native->paramNames[i] = copyString(vm, paramNames[i], (i32)strlen(paramNames[i]));
+    }
+    buildNativeParamLookup(vm, native);
     return native;
 }
 ObjClosure* newClosure(VM* vm, ObjFunction* function) {
@@ -133,6 +219,9 @@ ObjClass* newClass(VM* vm, ObjString* name) {
     klass->name = name;
     klass->superclass = NULL;
     initTable(&klass->methods);
+    klass->cachedMethodName = NULL;
+    klass->cachedMethodValue = NIL_VAL;
+    klass->cachedMethodValid = false;
     return klass;
 }
 ObjInstance* newInstance(VM* vm, ObjClass* klass) {

@@ -1,4 +1,5 @@
 #include "registry.h"
+#include <string.h>
 
 #define MAX_EFFECTS 64
 
@@ -18,7 +19,6 @@ void effect_registry_register(const EffectProcessor* proc) {
         return;
     }
     g_registeredEffects[g_effectCount++] = proc;
-    printf("[Effect] Registered: %s\n", proc->name);
 }
 
 const EffectProcessor* effect_registry_get(const char* name) {
