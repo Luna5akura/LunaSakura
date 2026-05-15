@@ -252,12 +252,15 @@ void evaluate_clip_transform_state(Compositor* comp, TimelineClip* tc, double ti
 bool resolve_clip_layout_recursive(Compositor* comp, TimelineClip* tc, double time, int depth, float* out_x, float* out_y, float* out_w, float* out_h);
 void ensure_effect_targets(Compositor* comp, int width, int height);
 void set_texture_sampling(GLuint texture, bool nearest);
-void draw_texture_transformed(Compositor* comp, GLuint texture, TimelineClip* tc, float width, float height, bool nearest_sampling);
+void draw_texture_transformed(Compositor* comp, GLuint texture, TimelineClip* tc, float width, float height,
+                              bool nearest_sampling, bool premultiplied);
 void draw_texture_fullframe(Compositor* comp, GLuint texture, bool nearest_sampling, float opacity);
 bool is_nested_timeline_clip(const Clip* clip);
 void render_nested_timeline_to_target(Compositor* comp, TimelineClip* tc, double clip_time, GLuint target_fbo);
-void render_clip_source_to_target(Compositor* comp, TimelineClip* tc, double clip_time, GLuint target_fbo);
-void render_clip_source_to_effect_target(Compositor* comp, TimelineClip* tc, double clip_time);
+void render_clip_source_to_target(Compositor* comp, TimelineClip* tc, double clip_time, GLuint target_fbo,
+                                  float offset_x, float offset_y);
+void render_clip_source_to_effect_target(Compositor* comp, TimelineClip* tc, double clip_time,
+                                         float offset_x, float offset_y);
 bool effect_chain_has_external_source_refs(EffectInstance* effect);
 void populate_effect_render_context(Compositor* comp, EffectRenderContext* ctx, GLuint input_texture, GLuint output_fbo);
 bool render_clip_effect_result_to_auxiliary(Compositor* comp, TimelineClip* tc, double clip_time, GLuint scratch_texture, GLuint scratch_fbo, bool* out_prefer_nearest);

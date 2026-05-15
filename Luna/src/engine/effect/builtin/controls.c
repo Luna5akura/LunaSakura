@@ -254,26 +254,26 @@ static bool color_control_set_color(void* instance, const char* key, double r, d
 }
 const EffectProcessor SLIDER_CONTROL_PROCESSOR = {
     "SliderControl", slider_control_create, slider_control_apply, single_number_control_destroy, NULL,
-    single_number_control_set_number, single_number_control_get_number, NULL, NULL, NULL, NULL, 0,
+    single_number_control_set_number, single_number_control_get_number, NULL, NULL, NULL, NULL, 0, NULL,
     slider_control_get_number_animation, NULL
 };
 const EffectProcessor ANGLE_CONTROL_PROCESSOR = {
     "AngleControl", slider_control_create, slider_control_apply, single_number_control_destroy, NULL,
-    single_number_control_set_number, single_number_control_get_number, NULL, NULL, NULL, NULL, 0,
+    single_number_control_set_number, single_number_control_get_number, NULL, NULL, NULL, NULL, 0, NULL,
     slider_control_get_number_animation, NULL
 };
 const EffectProcessor CHECKBOX_CONTROL_PROCESSOR = {
     "CheckboxControl", checkbox_control_create, checkbox_control_apply, checkbox_control_destroy, NULL,
-    checkbox_control_set_number, checkbox_control_get_number, checkbox_control_set_bool, checkbox_control_get_bool, NULL, NULL, 0,
+    checkbox_control_set_number, checkbox_control_get_number, checkbox_control_set_bool, checkbox_control_get_bool, NULL, NULL, 0, NULL,
     checkbox_control_get_number_animation, NULL
 };
 const EffectProcessor POINT_CONTROL_PROCESSOR = {
     "PointControl", point_control_create, point_control_apply, point_control_destroy, NULL,
-    point_control_set_number, point_control_get_number, NULL, NULL, NULL, NULL, 0,
+    point_control_set_number, point_control_get_number, NULL, NULL, NULL, NULL, 0, NULL,
     point_control_get_number_animation, NULL
 };
 const EffectProcessor COLOR_CONTROL_PROCESSOR = {
     "ColorControl", color_control_create, color_control_apply, color_control_destroy, NULL,
-    NULL, NULL, NULL, NULL, color_control_set_color, NULL, 0,
+    NULL, NULL, NULL, NULL, color_control_set_color, NULL, 0, NULL,
     NULL, color_control_get_color_animations_cb
 };

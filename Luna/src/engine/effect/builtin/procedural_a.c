@@ -324,16 +324,16 @@ static bool gradient_ramp_set_color(void* instance, const char* key, double r, d
 
 const EffectProcessor MOSAIC_PROCESSOR = {
     "Mosaic", mosaic_create, mosaic_apply, mosaic_destroy, NULL,
-    mosaic_set_number, mosaic_get_number, mosaic_set_bool, mosaic_get_bool, NULL, NULL, 0,
+    mosaic_set_number, mosaic_get_number, mosaic_set_bool, mosaic_get_bool, NULL, NULL, 0, NULL,
     mosaic_get_number_animation, NULL
 };
 const EffectProcessor GRID_PROCESSOR = {
     "Grid", grid_create, grid_apply, grid_destroy, NULL,
-    grid_set_number, grid_get_number, NULL, NULL, grid_set_color, NULL, 0,
+    grid_set_number, grid_get_number, NULL, NULL, grid_set_color, NULL, 0, NULL,
     grid_get_number_animation, grid_get_color_animations_cb
 };
 const EffectProcessor GRADIENT_RAMP_PROCESSOR = {
     "GradientRamp", gradient_ramp_create, gradient_ramp_apply, gradient_ramp_destroy, NULL,
-    gradient_ramp_set_number, gradient_ramp_get_number, NULL, NULL, gradient_ramp_set_color, NULL, 0,
+    gradient_ramp_set_number, gradient_ramp_get_number, NULL, NULL, gradient_ramp_set_color, NULL, 0, NULL,
     gradient_ramp_get_number_animation, gradient_ramp_get_color_animations_cb
 };

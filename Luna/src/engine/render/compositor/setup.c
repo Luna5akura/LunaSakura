@@ -30,6 +30,7 @@ void init_compositor_uniform_caches(Compositor* comp) {
     comp->glow_u_threshold = -1;
     comp->glow_u_softness = -1;
     comp->glow_u_color = -1;
+    comp->glow_u_mode = -1;
     comp->displacement_u_offset = -1;
     comp->displacement_u_horizontal_channel = -1;
     comp->displacement_u_vertical_channel = -1;
@@ -61,6 +62,8 @@ void cache_uniform_locations(Compositor* comp) {
     comp->image_uniforms.u_model = glGetUniformLocation(comp->image_shader_program, "u_model");
     comp->image_uniforms.u_opacity = glGetUniformLocation(comp->image_shader_program, "u_opacity");
     comp->image_uniforms.sampler0 = glGetUniformLocation(comp->image_shader_program, "tex_rgba");
+    comp->image_uniforms.u_flip_y = glGetUniformLocation(comp->image_shader_program, "u_flip_y");
+    comp->image_uniforms.u_premultiplied = glGetUniformLocation(comp->image_shader_program, "u_premultiplied");
 
     comp->color_uniforms.u_projection = glGetUniformLocation(comp->color_shader_program, "u_projection");
     comp->color_uniforms.u_model = glGetUniformLocation(comp->color_shader_program, "u_model");
@@ -86,6 +89,7 @@ void cache_uniform_locations(Compositor* comp) {
     comp->blur_uniforms.sampler0 = glGetUniformLocation(comp->blur_shader_program, "u_texture");
     comp->blur_uniforms.u_projection = glGetUniformLocation(comp->blur_shader_program, "u_texel_size");
     comp->blur_uniforms.u_opacity = glGetUniformLocation(comp->blur_shader_program, "u_radius");
+    comp->blur_uniforms.u_color = glGetUniformLocation(comp->blur_shader_program, "u_direction");
     comp->glow_uniforms.sampler0 = glGetUniformLocation(comp->glow_shader_program, "u_texture");
     comp->glow_u_texel_size = glGetUniformLocation(comp->glow_shader_program, "u_texel_size");
     comp->glow_u_radius = glGetUniformLocation(comp->glow_shader_program, "u_radius");
@@ -93,6 +97,7 @@ void cache_uniform_locations(Compositor* comp) {
     comp->glow_u_threshold = glGetUniformLocation(comp->glow_shader_program, "u_threshold");
     comp->glow_u_softness = glGetUniformLocation(comp->glow_shader_program, "u_softness");
     comp->glow_u_color = glGetUniformLocation(comp->glow_shader_program, "u_color");
+    comp->glow_u_mode = glGetUniformLocation(comp->glow_shader_program, "u_mode");
     comp->mosaic_uniforms.sampler0 = glGetUniformLocation(comp->mosaic_shader_program, "u_texture");
     comp->mosaic_uniforms.u_projection = glGetUniformLocation(comp->mosaic_shader_program, "u_block_size");
     comp->mosaic_uniforms.u_model = glGetUniformLocation(comp->mosaic_shader_program, "u_resolution");

@@ -1,0 +1,125 @@
+width = 1280
+height = 720
+fps = 30
+duration = 5
+
+proj = Project(width, height, fps)
+tl = Timeline(width, height, fps)
+proj.setTimeline(tl)
+
+bg = Solid(width, height, 12, 16, 24, 255)
+bgInst = tl.add(0, bg, 0)
+    .setDuration(duration)
+
+bgInst.addEffect(
+    GradientRamp(
+        startX=0.0,
+        startY=0.0,
+        endX=1.0,
+        endY=1.0,
+        blend=1.0
+    )
+).startColor.keyframes([
+    [0.0, [18, 24, 42, 255]],
+    [duration, [28, 38, 64, 255]]
+])
+
+plain = Text("PLAIN TEXT")
+    .setFont("assets/fonts/arial.ttf")
+    .setSize(64)
+    .setColor(255, 255, 255)
+    .setLetterSpacing(4)
+    .setPos(120, 120)
+
+plainInst = tl.add(1, plain, 0)
+    .setDuration(duration)
+
+glowText = Text("TEXT + GLOW")
+    .setFont("assets/fonts/arial.ttf")
+    .setSize(64)
+    .setColor(255, 255, 255)
+    .setLetterSpacing(4)
+    .setPos(120, 250)
+
+glowInst = tl.add(2, glowText, 0)
+    .setDuration(duration)
+
+glowInst.addEffect(
+    Glow(
+        radius=28,
+        intensity=1.2,
+        threshold=0.15,
+        softness=0.35,
+        color=[120, 210, 255, 255]
+    )
+)
+
+gradientText = Text("TEXT + GRADIENT")
+    .setFont("assets/fonts/arial.ttf")
+    .setSize(64)
+    .setColor(255, 255, 255)
+    .setLetterSpacing(4)
+    .setPos(120, 380)
+
+gradientInst = tl.add(3, gradientText, 0)
+    .setDuration(duration)
+
+gradientInst.addEffect(
+    GradientRamp(
+        startX=0.0,
+        startY=0.0,
+        endX=1.0,
+        endY=0.0,
+        blend=1.0
+    )
+).startColor.keyframes([
+    [0.0, [255, 180, 100, 255]],
+    [duration, [255, 120, 180, 255]]
+])
+
+gradientFx = gradientInst.getEffect(0)
+gradientFx.endColor.keyframes([
+    [0.0, [120, 220, 255, 255]],
+    [duration, [180, 255, 180, 255]]
+])
+
+comboText = Text("TEXT + GRADIENT + GLOW")
+    .setFont("assets/fonts/arial.ttf")
+    .setSize(64)
+    .setColor(255, 255, 255)
+    .setLetterSpacing(4)
+    .setPos(120, 510)
+
+comboInst = tl.add(4, comboText, 0)
+    .setDuration(duration)
+
+comboGradient = comboInst.addEffect(
+    GradientRamp(
+        startX=0.0,
+        startY=0.0,
+        endX=1.0,
+        endY=0.0,
+        blend=1.0
+    )
+)
+comboGradient.startColor.keyframes([
+    [0.0, [255, 170, 120, 255]],
+    [duration, [255, 130, 200, 255]]
+])
+comboGradient.endColor.keyframes([
+    [0.0, [120, 200, 255, 255]],
+    [duration, [170, 255, 210, 255]]
+])
+
+comboInst.addEffect(
+    Glow(
+        radius=30,
+        intensity=1.25,
+        threshold=0.16,
+        softness=0.38,
+        color=[255, 190, 170, 255]
+    )
+)
+
+print "diagnostic ready"
+proj.preview(0, duration)

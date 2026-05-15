@@ -1,6 +1,31 @@
 #include "internal.h"
+
+static void restore_timeline_projections(Compositor* comp) {
+    mat4 proj = mat4_ortho(0, comp->timeline->width, comp->timeline->height, 0, -1, 1);
+    glUseProgram(comp->shader_program);
+    glUniformMatrix4fv(comp->yuv_uniforms.u_projection, 1, GL_FALSE, proj.m);
+    glUseProgram(comp->image_shader_program);
+    glUniformMatrix4fv(comp->image_uniforms.u_projection, 1, GL_FALSE, proj.m);
+    glUseProgram(comp->color_shader_program);
+    glUniformMatrix4fv(comp->color_uniforms.u_projection, 1, GL_FALSE, proj.m);
+    glUseProgram(comp->text_shader_program);
+    glUniformMatrix4fv(comp->text_uniforms.u_projection, 1, GL_FALSE, proj.m);
+}
+
+static float effect_chain_padding(EffectInstance* effect, double time) {
+    float padding = 0.0f;
+    while (effect) {
+        if (effect->processor && effect->processor->get_padding) {
+            float current = effect->processor->get_padding(effect->data, time);
+            if (current > padding) padding = current;
+        }
+        effect = effect->next;
+    }
+    return padding;
+}
+
 void draw_texture_transformed(Compositor* comp, GLuint texture, TimelineClip* tc, float width, float height,
-                                     bool nearest_sampling) {
+                              bool nearest_sampling, bool premultiplied) {
     float scale_x = tc->transform.scale_x;
     float scale_y = tc->transform.scale_y;
     float rotation = tc->transform.rotation;
@@ -16,6 +41,9 @@ void draw_texture_transformed(Compositor* comp, GLuint texture, TimelineClip* tc
     set_texture_sampling(texture, nearest_sampling);
     glBindTexture(GL_TEXTURE_2D, texture);
     glUniform1i(comp->image_uniforms.sampler0, 0);
+    glUniform1i(comp->image_uniforms.u_flip_y, 1);
+    glUniform1i(comp->image_uniforms.u_premultiplied, premultiplied ? 1 : 0);
+    glBlendFunc(premultiplied ? GL_ONE : GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     model = mat4_mult(mat4_translate(tc->transform.x + center_x, tc->transform.y + center_y), model);
     model = mat4_mult(mat4_rotate(rotation), model);
     model = mat4_mult(mat4_translate(-center_x, -center_y), model);
@@ -27,6 +55,9 @@ void draw_texture_transformed(Compositor* comp, GLuint texture, TimelineClip* tc
     if (nearest_sampling) {
         set_texture_sampling(texture, false);
     }
+    glUniform1i(comp->image_uniforms.u_flip_y, 0);
+    glUniform1i(comp->image_uniforms.u_premultiplied, 0);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
 void draw_texture_fullframe(Compositor* comp, GLuint texture, bool nearest_sampling, float opacity) {
@@ -158,12 +189,13 @@ static void capture_composited_frame_for_adjustment(Compositor* comp) {
     capture_framebuffer_to_target(comp, comp->effect_source_fbo);
 }
 
-void render_clip_source_to_target(Compositor* comp, TimelineClip* tc, double clip_time, GLuint target_fbo) {
+void render_clip_source_to_target(Compositor* comp, TimelineClip* tc, double clip_time, GLuint target_fbo,
+                                  float offset_x, float offset_y) {
     TimelineClip local = *tc;
     mat4 proj;
 
-    local.transform.x = 0.0f;
-    local.transform.y = 0.0f;
+    local.transform.x = offset_x;
+    local.transform.y = offset_y;
     local.transform.scale_x = 1.0f;
     local.transform.scale_y = 1.0f;
     local.transform.rotation = 0.0f;
@@ -240,8 +272,9 @@ void render_clip_source_to_target(Compositor* comp, TimelineClip* tc, double cli
     }
 }
 
-void render_clip_source_to_effect_target(Compositor* comp, TimelineClip* tc, double clip_time) {
-    render_clip_source_to_target(comp, tc, clip_time, comp->effect_source_fbo);
+void render_clip_source_to_effect_target(Compositor* comp, TimelineClip* tc, double clip_time,
+                                         float offset_x, float offset_y) {
+    render_clip_source_to_target(comp, tc, clip_time, comp->effect_source_fbo, offset_x, offset_y);
 }
 
 bool effect_chain_has_external_source_refs(EffectInstance* effect) {
@@ -302,6 +335,7 @@ void populate_effect_render_context(Compositor* comp, EffectRenderContext* ctx,
     ctx->blur_u_texture = comp->blur_uniforms.sampler0;
     ctx->blur_u_texel_size = comp->blur_uniforms.u_projection;
     ctx->blur_u_radius = comp->blur_uniforms.u_opacity;
+    ctx->blur_u_direction = comp->blur_uniforms.u_color;
     ctx->glow_shader_program = comp->glow_shader_program;
     ctx->glow_u_texture = comp->glow_uniforms.sampler0;
     ctx->glow_u_texel_size = comp->glow_u_texel_size;
@@ -310,6 +344,7 @@ void populate_effect_render_context(Compositor* comp, EffectRenderContext* ctx,
     ctx->glow_u_threshold = comp->glow_u_threshold;
     ctx->glow_u_softness = comp->glow_u_softness;
     ctx->glow_u_color = comp->glow_u_color;
+    ctx->glow_u_mode = comp->glow_u_mode;
     ctx->fractal_u_texture = comp->fractal_uniforms.sampler0;
     ctx->fractal_u_resolution = comp->fractal_uniforms.u_projection;
     ctx->fractal_u_scale = comp->fractal_uniforms.u_model;
@@ -335,6 +370,8 @@ void populate_effect_render_context(Compositor* comp, EffectRenderContext* ctx,
     ctx->posterize_u_amount = comp->posterize_uniforms.u_opacity;
     ctx->width = comp->effect_width;
     ctx->height = comp->effect_height;
+    ctx->source_offset_x = 0.0f;
+    ctx->source_offset_y = 0.0f;
 }
 
 bool render_clip_effect_result_to_auxiliary(Compositor* comp, TimelineClip* tc, double clip_time,
@@ -350,7 +387,7 @@ bool render_clip_effect_result_to_auxiliary(Compositor* comp, TimelineClip* tc, 
     effect = tc->effectChain;
     if (!effect || effect_chain_has_external_source_refs(effect)) return false;
 
-    render_clip_source_to_target(comp, tc, clip_time, scratch_fbo);
+    render_clip_source_to_target(comp, tc, clip_time, scratch_fbo, 0.0f, 0.0f);
     input_texture = scratch_texture;
     output_texture = comp->effect_aux_texture;
     output_fbo = comp->effect_aux_fbo;
@@ -392,14 +429,19 @@ void render_clip_with_effects(Compositor* comp, TimelineClip* tc, double clip_ti
     EffectRenderContext ctx;
     bool prefer_nearest_output = false;
     bool has_adjustment_mask = false;
+    float source_width = 0.0f;
+    float source_height = 0.0f;
+    float padding = 0.0f;
 
     if (tc->media->type == CLIP_TYPE_ADJUSTMENT) {
         ensure_effect_targets(comp, (int)comp->timeline->width, (int)comp->timeline->height);
         capture_framebuffer_to_target(comp, comp->effect_base_fbo);
         capture_framebuffer_to_target(comp, comp->effect_source_fbo);
     } else {
-        ensure_effect_targets(comp, (int)tc->media->width, (int)tc->media->height);
-        render_clip_source_to_effect_target(comp, tc, clip_time);
+        padding = effect_chain_padding(tc->effectChain, clip_time);
+        get_clip_visual_size(comp, tc, &source_width, &source_height);
+        ensure_effect_targets(comp, (int)ceilf(source_width + padding * 2.0f), (int)ceilf(source_height + padding * 2.0f));
+        render_clip_source_to_effect_target(comp, tc, clip_time, padding, padding);
     }
     input_texture = comp->effect_source_texture;
 
@@ -415,7 +457,7 @@ void render_clip_with_effects(Compositor* comp, TimelineClip* tc, double clip_ti
                     double source_time = timeline_time - source_clip->timeline_start + source_clip->source_in;
                     if (!render_clip_effect_result_to_auxiliary(comp, source_clip, source_time,
                                                                 output_texture, output_fbo, NULL)) {
-                        render_clip_source_to_target(comp, source_clip, source_time, comp->effect_aux_fbo);
+                        render_clip_source_to_target(comp, source_clip, source_time, comp->effect_aux_fbo, 0.0f, 0.0f);
                     }
                     ctx.auxiliary_texture = comp->effect_aux_texture;
                     ctx.has_auxiliary_texture = true;
@@ -437,13 +479,14 @@ void render_clip_with_effects(Compositor* comp, TimelineClip* tc, double clip_ti
 
     glBindFramebuffer(GL_FRAMEBUFFER, comp->fbo);
     glViewport(0, 0, comp->timeline->width, comp->timeline->height);
+    restore_timeline_projections(comp);
     if (tc->media->type == CLIP_TYPE_ADJUSTMENT) {
         if (tc->media->adjustment.mask_source_clip_id != 0) {
             TimelineClip* mask_clip = timeline_find_clip_by_id(comp->timeline, tc->media->adjustment.mask_source_clip_id, NULL, NULL);
             if (mask_clip) {
                 double timeline_time = tc->timeline_start + clip_time - tc->source_in;
                 double mask_time = timeline_time - mask_clip->timeline_start + mask_clip->source_in;
-                render_clip_source_to_target(comp, mask_clip, mask_time, comp->effect_aux_fbo);
+                render_clip_source_to_target(comp, mask_clip, mask_time, comp->effect_aux_fbo, 0.0f, 0.0f);
                 has_adjustment_mask = true;
             }
         }
@@ -452,8 +495,14 @@ void render_clip_with_effects(Compositor* comp, TimelineClip* tc, double clip_ti
         composite_adjustment_layer(comp, tc, comp->effect_base_texture, input_texture,
                                    comp->effect_aux_texture, has_adjustment_mask, prefer_nearest_output);
     } else {
-        draw_texture_transformed(comp, input_texture, tc, (float)comp->effect_width, (float)comp->effect_height,
-                                 prefer_nearest_output);
+        TimelineClip composite_clip = *tc;
+        if (padding > 0.0f) {
+            composite_clip.transform.x -= padding * tc->transform.scale_x;
+            composite_clip.transform.y -= padding * tc->transform.scale_y;
+        }
+        draw_texture_transformed(comp, input_texture, &composite_clip,
+                                 (float)comp->effect_width, (float)comp->effect_height,
+                                 prefer_nearest_output, true);
     }
     if (prefer_nearest_output) {
         comp->preview_prefers_nearest = true;

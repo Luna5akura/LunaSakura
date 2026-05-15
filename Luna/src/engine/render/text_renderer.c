@@ -172,24 +172,60 @@ GLuint text_renderer_get_texture(TextRenderer* tr) {
 void text_renderer_layout_text(TextRenderer* tr, Clip* clip, float* out_width, float* out_height) {
     if (!tr->face) {
         *out_width = *out_height = 0.0f;
+        clip->text.cached_offset_x = 0.0f;
+        clip->text.cached_offset_y = 0.0f;
         return;
     }
 
-    float x = 0.0f;
-    float max_h = 0.0f;
+    float cursor_x = 0.0f;
+    float min_x = 0.0f;
+    float min_y = 0.0f;
+    float max_x = 0.0f;
+    float max_y = 0.0f;
+    bool has_bounds = false;
     const char* p = clip->text.content;
 
     while (*p) {
         u32 code = (u32)*p;
-        load_glyph_to_atlas(tr, code);  // 确保字形已加载
+        float glyph_x;
+        float glyph_y;
+        float glyph_right;
+        float glyph_bottom;
+        GlyphInfo* g;
 
-        GlyphInfo* g = text_renderer_get_glyph(tr, *p);
-        x += g->advance + clip->text.letter_spacing;  // 新增：应用字符间距
-        if (g->height > max_h) max_h = g->height;
+        load_glyph_to_atlas(tr, code);
+        g = text_renderer_get_glyph(tr, *p);
+        glyph_x = cursor_x + g->bearing_x;
+        glyph_y = (float)clip->text.font_size - g->bearing_y;
+        glyph_right = glyph_x + g->width;
+        glyph_bottom = glyph_y + g->height;
+        if (!has_bounds) {
+            min_x = glyph_x;
+            min_y = glyph_y;
+            max_x = glyph_right;
+            max_y = glyph_bottom;
+            has_bounds = true;
+        } else {
+            if (glyph_x < min_x) min_x = glyph_x;
+            if (glyph_y < min_y) min_y = glyph_y;
+            if (glyph_right > max_x) max_x = glyph_right;
+            if (glyph_bottom > max_y) max_y = glyph_bottom;
+        }
 
+        cursor_x += g->advance + clip->text.letter_spacing;
         p++;
     }
 
-    *out_width = x;
-    *out_height = max_h;
+    if (!has_bounds) {
+        *out_width = 0.0f;
+        *out_height = 0.0f;
+        clip->text.cached_offset_x = 0.0f;
+        clip->text.cached_offset_y = 0.0f;
+        return;
+    }
+
+    clip->text.cached_offset_x = min_x;
+    clip->text.cached_offset_y = min_y;
+    *out_width = max_x - min_x;
+    *out_height = max_y - min_y;
 }

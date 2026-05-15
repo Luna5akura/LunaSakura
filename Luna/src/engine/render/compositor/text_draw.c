@@ -42,6 +42,8 @@ void draw_clip_text(Compositor* comp, TimelineClip* tc, double anim_time) {
     float rotation = tc->transform.rotation;
     float scale_x = tc->transform.scale_x;
     float scale_y = tc->transform.scale_y;
+    float origin_x = clip->text.cached_offset_x;
+    float origin_y = clip->text.cached_offset_y;
 
     float scaled_w = clip->text.cached_width * scale_x;
     float scaled_h = clip->text.cached_height * scale_y;
@@ -82,8 +84,8 @@ void draw_clip_text(Compositor* comp, TimelineClip* tc, double anim_time) {
                 rendered_char = (char)code;
             }
             glyph = text_renderer_get_glyph(comp->text_renderer, rendered_char);
-            rel_x = x_cursor + glyph->bearing_x;
-            rel_y = clip->text.font_size - glyph->bearing_y;
+            rel_x = x_cursor + glyph->bearing_x - origin_x;
+            rel_y = clip->text.font_size - glyph->bearing_y - origin_y;
 
             if ((clip->text.stroke_enabled || style.stroke_width > 0.0f) && style.stroke_a > 0.0f) {
                 float offset = style.stroke_width * 0.5f;
@@ -112,4 +114,3 @@ void draw_clip_text(Compositor* comp, TimelineClip* tc, double anim_time) {
         if (metas) free(metas);
     }
 }
-

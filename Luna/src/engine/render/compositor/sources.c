@@ -47,6 +47,8 @@ void draw_clip_rgba(Compositor* comp, RenderSource* src, TimelineClip* tc) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, src->tex_rgba);
     glUniform1i(comp->image_uniforms.sampler0, 0);
+    glUniform1i(comp->image_uniforms.u_flip_y, 0);
+    glUniform1i(comp->image_uniforms.u_premultiplied, 0);
 
     scale_x = tc->transform.scale_x;
     scale_y = tc->transform.scale_y;

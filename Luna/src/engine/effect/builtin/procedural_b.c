@@ -348,17 +348,17 @@ static bool posterize_get_number(void* instance, const char* key, double* out_va
 
 const EffectProcessor FRACTAL_NOISE_PROCESSOR = {
     "FractalNoise", fractal_noise_create, fractal_noise_apply, fractal_noise_destroy, NULL,
-    fractal_noise_set_number, fractal_noise_get_number, fractal_noise_set_bool, fractal_noise_get_bool, NULL, NULL, 0,
+    fractal_noise_set_number, fractal_noise_get_number, fractal_noise_set_bool, fractal_noise_get_bool, NULL, NULL, 0, NULL,
     fractal_noise_get_number_animation, NULL
 };
 const EffectProcessor DISPLACEMENT_MAP_PROCESSOR = {
     "DisplacementMap", displacement_map_create, displacement_map_apply, displacement_map_destroy, NULL,
     displacement_map_set_number, displacement_map_get_number, displacement_map_set_bool, displacement_map_get_bool, NULL,
-    displacement_map_set_source_clip, displacement_map_get_source_clip,
+    displacement_map_set_source_clip, displacement_map_get_source_clip, NULL,
     displacement_map_get_number_animation, NULL
 };
 const EffectProcessor POSTERIZE_PROCESSOR = {
     "Posterize", posterize_create, posterize_apply, posterize_destroy, NULL,
-    posterize_set_number, posterize_get_number, NULL, NULL, NULL, NULL, 0,
+    posterize_set_number, posterize_get_number, NULL, NULL, NULL, NULL, 0, NULL,
     posterize_get_number_animation, NULL
 };

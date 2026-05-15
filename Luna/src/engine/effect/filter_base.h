@@ -36,6 +36,7 @@ typedef struct {
     int blur_u_texture;
     int blur_u_texel_size;
     int blur_u_radius;
+    int blur_u_direction;
     int glow_u_texture;
     int glow_u_texel_size;
     int glow_u_radius;
@@ -43,6 +44,7 @@ typedef struct {
     int glow_u_threshold;
     int glow_u_softness;
     int glow_u_color;
+    int glow_u_mode;
     int fractal_u_texture;
     int fractal_u_resolution;
     int fractal_u_scale;
@@ -84,6 +86,8 @@ typedef struct {
     unsigned int posterize_shader_program;
     int width;
     int height;
+    float source_offset_x;
+    float source_offset_y;
     bool prefer_nearest_output;
     bool has_auxiliary_texture;
 } EffectRenderContext;
@@ -138,6 +142,7 @@ typedef struct EffectProcessor {
     bool       (*set_color)(void* instance, const char* key, double r, double g, double b, double a);
     bool       (*set_source_clip)(void* instance, u32 clip_id);
     u32        (*get_source_clip)(void* instance);
+    float      (*get_padding)(void* instance, double time);
     struct Animation* (*get_number_animation)(void* instance, const char* key);
     bool       (*get_color_animations)(void* instance, const char* key,
                                        struct Animation** out_r,

@@ -105,7 +105,7 @@ static void render_clip(Compositor* comp, TimelineClip* tc, double time) {
         glBindFramebuffer(GL_FRAMEBUFFER, comp->fbo);
         glViewport(0, 0, comp->timeline->width, comp->timeline->height);
         draw_texture_transformed(comp, comp->effect_source_texture, tc,
-                                 (float)tc->media->width, (float)tc->media->height, false);
+                                 (float)tc->media->width, (float)tc->media->height, false, false);
     } else {
         RenderSource* src = get_source_safe(comp, tc->media);
         bool new_frame = decoder_update_video(src->decoder, clip_time);

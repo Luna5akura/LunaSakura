@@ -129,6 +129,8 @@ typedef struct {
     // 缓存
     float cached_width;
     float cached_height;
+    float cached_offset_x;
+    float cached_offset_y;
 
     TextAnimator* animators;
     u32 animator_count;

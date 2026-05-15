@@ -2,153 +2,169 @@ width = 1280
 height = 720
 fps = 30
 duration = 6
-gridBlock = 48
 
 proj = Project(width, height, fps)
 tl = Timeline(width, height, fps)
 proj.setTimeline(tl)
 
-# 背景底板：渐变 + 置换 + 轻网格
-bg = Solid(width, height, 245, 245, 245, 255)
-bgInst = tl.add(0, bg, 0)
+# 暗色底板 + 高级感彩色渐变背景
+base = Solid(width, height, 8, 10, 16, 255)
+baseInst = tl.add(0, base, 0)
     .setDuration(duration)
 
-ramp = bgInst.addEffect(
+bgRamp = baseInst.addEffect(
+    GradientRamp(
+        startX=0.08,
+        startY=0.12,
+        endX=0.92,
+        endY=0.9,
+        blend=1.0
+    )
+)
+bgRamp.startColor.keyframes([
+    [0.0, [20, 22, 46, 255]],
+    [6.0, [38, 18, 64, 255]],
+])
+bgRamp.endColor.keyframes([
+    [0.0, [10, 54, 74, 255]],
+    [6.0, [72, 28, 68, 255]],
+])
+
+softGlow = baseInst.addEffect(
+    Glow(
+        radius=24,
+        intensity=0.34,
+        threshold=0.18,
+        softness=0.42,
+        color=[104, 168, 255, 255]
+    )
+)
+
+# 主标题
+title = Text("Luna")
+    .setFont("assets/fonts/arial.ttf")
+    .setSize(156)
+    .setColor(255, 255, 255)
+    .setLetterSpacing(12)
+    .setStroke(true, 2, 8, 10, 20)
+    .setPos(254, 238)
+
+titleInst = tl.add(2, title, 0)
+    .setDuration(duration)
+
+titleRamp = titleInst.addEffect(
+    GradientRamp(
+        startX=0.0,
+        startY=0.1,
+        endX=1.0,
+        endY=0.9,
+        blend=1.0
+    )
+)
+titleRamp.startColor.keyframes([
+    [0.0, [255, 176, 118, 255]],
+    [3.0, [255, 118, 198, 255]],
+    [6.0, [255, 176, 118, 255]]
+])
+titleRamp.endColor.keyframes([
+    [0.0, [110, 218, 255, 255]],
+    [3.0, [140, 255, 204, 255]],
+    [6.0, [110, 218, 255, 255]]
+])
+
+titleGlow = titleInst.addEffect(
+    Glow(
+        radius=34,
+        intensity=1.15,
+        threshold=0.22,
+        softness=0.35,
+        color=[255, 180, 160, 255]
+    )
+)
+titleGlow.intensity.keyframes([
+    [0.0, 1.7],
+    [1.1, 1.15],
+    [6.0, 1.0]
+])
+
+titleInst.opacity.keyframes([
+    [0.0, 0.0],
+    [1.2, 1.0]
+])
+titleInst.y.keyframes([
+    [0.0, 270],
+    [1.2, 238]
+])
+
+# 副标题
+subtitle = Text("A programmable motion graphics language")
+    .setFont("assets/fonts/arial.ttf")
+    .setSize(34)
+    .setColor(236, 242, 248)
+    .setLetterSpacing(3)
+    .setPos(260, 418)
+
+subtitleInst = tl.add(3, subtitle, 0)
+    .setDuration(duration)
+
+subtitleRamp = subtitleInst.addEffect(
     GradientRamp(
         startX=0.0,
         startY=0.0,
         endX=1.0,
-        endY=1.0,
-        blend=1.0
+        endY=0.0,
+        blend=0.78
     )
 )
-ramp.startColor.keyframes([
-    [0.0, [255, 120, 84, 255]],
-    [3.0, [255, 82, 176, 255]],
-    [6.0, [255, 120, 84, 255]]
+subtitleRamp.startColor.keyframes([
+    [0.0, [188, 214, 255, 255]],
+    [3.0, [255, 186, 204, 255]],
+    [6.0, [188, 214, 255, 255]]
 ])
-ramp.endColor.keyframes([
-    [0.0, [56, 214, 255, 255]],
-    [3.0, [150, 255, 124, 255]],
-    [6.0, [56, 214, 255, 255]]
-])
-
-noiseSource = Solid(width, height, 0, 0, 0, 255)
-noiseInst = tl.add(1, noiseSource, 0)
-    .setDuration(duration)
-    .setVisible(false)
-
-fractal = noiseInst.addEffect(
-    FractalNoise(
-        scale=96,
-        contrast=1.55,
-        brightness=0.02,
-        octaves=5,
-        amount=1.0,
-        offsetX=0,
-        offsetY=0
-    )
-)
-fractal.evolution.keyframes([
-    [0.0, 0.0],
-    [duration, 70.0]
+subtitleRamp.endColor.keyframes([
+    [0.0, [186, 255, 225, 255]],
+    [3.0, [255, 216, 160, 255]],
+    [6.0, [186, 255, 225, 255]]
 ])
 
-displacement = bgInst.addEffect(
-    DisplacementMap(
-        scaleX=180,
-        scaleY=50,
-        amount=0.75,
-        offsetX=0,
-        offsetY=0,
-        useLuma=true
-    )
-)
-displacement.setSource(noiseInst)
+subtitleInst.opacity.keyframes([
+    [0.55, 0.0],
+    [1.55, 0.92]
+])
+subtitleInst.y.keyframes([
+    [0.55, 446],
+    [1.55, 418]
+])
 
-bgInst.addEffect(
-    Grid(
-        sizeX=width / gridBlock,
-        sizeY=height / gridBlock,
-        lineWidth=0.04,
-        opacity=0.22,
-        color=[12, 16, 24, 255]
-    )
-)
-
-# 标题组
-title = Text("Luna")
-    .setFont("assets/fonts/arial.ttf")
-    .setSize(150)
-    .setColor(255, 248, 240)
-    .setLetterSpacing(14)
-    .setStroke(true, 3, 10, 14, 20)
-    .setPos(270, 246)
-
-subtitle = Text("A programmable motion graphics language")
-    .setFont("assets/fonts/arial.ttf")
-    .setSize(34)
-    .setColor(245, 244, 242)
-    .setLetterSpacing(4)
-    .setPos(274, 418)
-
+# 尾部标语
 tag = Text("Script motion. Render ideas.")
     .setFont("assets/fonts/arial.ttf")
     .setSize(24)
-    .setColor(220, 228, 236)
+    .setColor(222, 228, 236)
     .setLetterSpacing(2)
-    .setPos(278, 474)
-
-titleInst = tl.add(2, title, 0)
-    .setDuration(duration)
-titleInst.opacity.keyframes([
-    [0.0, 0.0],
-    [0.8, 1.0]
-])
-titleInst.y.keyframes([
-    [0.0, 278],
-    [1.1, 246]
-])
-titleInst.addEffect(
-    Glow(
-        radius=26,
-        intensity=1.35,
-        threshold=0.45,
-        softness=0.24,
-        color=[255, 214, 176, 255]
-    )
-)
-
-subtitleInst = tl.add(3, subtitle, 0)
-    .setDuration(duration)
-subtitleInst.opacity.keyframes([
-    [0.6, 0.0],
-    [1.4, 1.0]
-])
-subtitleInst.y.keyframes([
-    [0.6, 448],
-    [1.4, 418]
-])
+    .setPos(264, 478)
 
 tagInst = tl.add(4, tag, 0)
     .setDuration(duration)
+
+tagGlow = tagInst.addEffect(
+    Glow(
+        radius=18,
+        intensity=0.52,
+        threshold=0.3,
+        softness=0.3,
+        color=[128, 196, 255, 255]
+    )
+)
+
 tagInst.opacity.keyframes([
     [1.1, 0.0],
-    [1.9, 0.78]
+    [2.1, 0.76]
 ])
 tagInst.y.keyframes([
     [1.1, 500],
-    [1.9, 474]
+    [2.1, 478]
 ])
-tagInst.addEffect(
-    Glow(
-        radius=14,
-        intensity=0.75,
-        threshold=0.52,
-        softness=0.2,
-        color=[188, 226, 255, 255]
-    )
-)
 
 print tl.getDuration()
 proj.preview(0, duration)

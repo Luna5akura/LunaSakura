@@ -17,6 +17,8 @@ typedef struct {
     int sampler2;
     int u_color;
     int u_uv_rect;
+    int u_flip_y;
+    int u_premultiplied;
 } ShaderUniformCache;
 
 typedef struct Compositor {
@@ -65,6 +67,7 @@ typedef struct Compositor {
     int glow_u_threshold;
     int glow_u_softness;
     int glow_u_color;
+    int glow_u_mode;
     int displacement_u_offset;
     int displacement_u_horizontal_channel;
     int displacement_u_vertical_channel;
