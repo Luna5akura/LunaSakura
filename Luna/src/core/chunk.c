@@ -293,11 +293,31 @@ i32 disassembleInstruction(Chunk* chunk, i32 offset) {
             }
             return offset;
         }
+        case OP_CLOSURE_LONG: {
+            offset++;
+            u32 constant = (u32)chunk->code[offset++];
+            constant |= (u32)chunk->code[offset++] << 8;
+            constant |= (u32)chunk->code[offset++] << 16;
+            printf("%-16s %4u ", "OP_CLOSURE_LONG", constant);
+            printValue(chunk->constants.values[constant]);
+            printf("\n");
+
+            ObjFunction* function = AS_FUNCTION(chunk->constants.values[constant]);
+            for (i32 j = 0; j < function->upvalueCount; j++) {
+                i32 isLocal = chunk->code[offset++];
+                i32 index = chunk->code[offset++];
+                printf("%04d      |                     %s %d\n",
+                       offset - 2, isLocal ? "local" : "upvalue", index);
+            }
+            return offset;
+        }
         case OP_CLOSE_UPVALUE:  return simpleInstruction("OP_CLOSE_UPVALUE", offset);
         case OP_RETURN:         return simpleInstruction("OP_RETURN", offset);
         case OP_CLASS:          return constantInstruction("OP_CLASS", chunk, offset);
+        case OP_CLASS_LONG:     return constantLongInstruction("OP_CLASS_LONG", chunk, offset);
         case OP_INHERIT:        return simpleInstruction("OP_INHERIT", offset);
         case OP_METHOD:         return constantInstruction("OP_METHOD", chunk, offset);
+        case OP_METHOD_LONG:    return constantLongInstruction("OP_METHOD_LONG", chunk, offset);
         case OP_GET_PROPERTY:   return constantInstruction("OP_GET_PROPERTY", chunk, offset);
         case OP_GET_PROPERTY_LONG:
                                 return constantLongInstruction("OP_GET_PROPERTY_LONG", chunk, offset);

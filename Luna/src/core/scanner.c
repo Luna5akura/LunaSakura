@@ -120,7 +120,6 @@ static TokenType identifierType(const char* start, i32 length) {
                 }
             }
             break;
-        case 'v': return checkKeyword(start + 1, length - 1, "ar", 2, TOKEN_VAR);
         case 'w': return checkKeyword(start + 1, length - 1, "hile", 4, TOKEN_WHILE);
     }
     return TOKEN_IDENTIFIER;
@@ -233,6 +232,11 @@ Token scanToken(Scanner* scanner) {
                 scanner->current++;
                 Token newlineTok = makeToken(TOKEN_NEWLINE, scanner->current - 1, scanner->current, scanner->line - 1);
                 if (scanner->parenDepth == 0) {
+                    const char* lookahead = scanner->current;
+                    while (*lookahead == ' ' || *lookahead == '\t') lookahead++;
+                    if (*lookahead == '.') {
+                        continue;
+                    }
                     scanner->isAtStartOfLine = true;
                     return newlineTok;
                 } else {

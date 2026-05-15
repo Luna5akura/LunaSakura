@@ -1,0 +1,53 @@
+addUserPreset("smooth_spin", "bezier", 0.5)
+
+proj = Project(960, 540, 30)
+tl = Timeline(960, 540, 30)
+proj.setTimeline(tl)
+
+print "Loading Video..."
+video = Clip("assets/media/test.mp4")
+videoInst = nil
+if video != nil:
+    video.trim(0, 10)
+    videoInst = tl.add(0, video, 0)
+    print videoInst
+    videoInst.volume.keyframes([[0, 1.0]])
+    videoInst.volume.withPreset(5, 0.2, "ease_out")
+    videoInst.x.keyframes([
+        [0, 0, "hold"],
+        [8, 300, "bezier", 0.4]
+    ])
+    videoInst.opacity.keyframes([[0, 0.0]])
+    videoInst.opacity.withPreset(3, 1.0, "ease_in")
+else:
+    print "Video loading failed."
+
+print "Creating Text Layer..."
+textLayer = Text("Keyframe Test")
+textInst = nil
+if textLayer != nil:
+    textLayer
+        .setFont("assets/fonts/arial.ttf")
+        .setSize(50)
+        .setColor(0, 255, 0)
+    textLayer.trim(0, 10)
+    textInst = tl.add(1, textLayer, 2)
+    print textInst
+    textInst.font_size.keyframes([
+        [0, 50, "hold"],
+        [6, 100]
+    ])
+    textInst.rotation.keyframes([[0, 0, "bezier", 0.6]])
+    textInst.rotation.withPreset(7, 720, "smooth_spin")
+    textInst.y.keyframes([[0, 100]])
+    textInst.y.withPreset(5, 400, "ease_in_out")
+    textInst.scale_y.keyframes([
+        [0, 1.0, "hold"],
+        [4, 2.0, "bezier", 0.3]
+    ])
+else:
+    print "Text layer failed."
+
+print "Timeline Duration: "
+print tl.duration
+proj.preview(0, 10)

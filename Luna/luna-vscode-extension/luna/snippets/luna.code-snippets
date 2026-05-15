@@ -1,0 +1,78 @@
+{
+  "Project Scaffold": {
+    "scope": "luna",
+    "prefix": "project",
+    "body": [
+      "width = ${1:640}",
+      "height = ${2:360}",
+      "fps = ${3:24}",
+      "",
+      "proj = Project(width, height, fps)",
+      "tl = Timeline(width, height, fps)",
+      "proj.setTimeline(tl)",
+      "",
+      "$0"
+    ],
+    "description": "Basic Luna project scaffold"
+  },
+  "Animated Property Keyframes": {
+    "scope": "luna",
+    "prefix": "keyframes",
+    "body": [
+      "${1:prop}.keyframes([",
+      "    [${2:0.0}, ${3:0.0}],",
+      "    [${4:1.0}, ${5:1.0}]",
+      "])"
+    ],
+    "description": "AnimatedProperty keyframes block"
+  },
+  "Color Keyframes": {
+    "scope": "luna",
+    "prefix": "colorkf",
+    "body": [
+      "${1:prop}.keyframes([",
+      "    [${2:0.0}, [255, 0, 0, 255]],",
+      "    [${3:1.0}, [0, 255, 255, 255]]",
+      "])"
+    ],
+    "description": "Color AnimatedProperty keyframes block"
+  },
+  "Effect Attachment": {
+    "scope": "luna",
+    "prefix": "effect",
+    "body": [
+      "${1:effect} = ${2:clipInst}.addEffect(${3:FractalNoise}(${4:scale=72}))"
+    ],
+    "description": "Attach an effect instance to a ClipInstance"
+  },
+  "Function": {
+    "scope": "luna",
+    "prefix": "fun",
+    "body": [
+      "fun ${1:name}(${2:args}):",
+      "    $0"
+    ],
+    "description": "Function definition"
+  },
+  "Class": {
+    "scope": "luna",
+    "prefix": "class",
+    "body": [
+      "class ${1:Name}:",
+      "    fun init(${2:args}):",
+      "        $0"
+    ],
+    "description": "Class definition"
+  },
+  "Try Except": {
+    "scope": "luna",
+    "prefix": "try",
+    "body": [
+      "try:",
+      "    ${1:# code}",
+      "except:",
+      "    $0"
+    ],
+    "description": "try / except block"
+  }
+}

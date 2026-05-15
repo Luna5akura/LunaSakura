@@ -2,6 +2,7 @@
   "comments": {
     "lineComment": "#"
   },
+  "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\<\\>\\/\\s]+)",
   "brackets": [
     ["(", ")"],
     ["[", "]"],
@@ -16,10 +17,17 @@
   "surroundingPairs": [
     { "open": "(", "close": ")" },
     { "open": "[", "close": "]" },
+    { "open": "{", "close": "}" },
     { "open": "\"", "close": "\"" }
   ],
   "indentationRules": {
-    "increaseIndentPattern": "^.*:\\s*$",
-    "decreaseIndentPattern": "^\\s*(else|elif|catch|finally)\\b.*$"
+    "increaseIndentPattern": "^((?!#).)*:\\s*$",
+    "decreaseIndentPattern": "^\\s*(else|except)\\b.*:\\s*$"
+  },
+  "folding": {
+    "markers": {
+      "start": "^\\s*#region\\b",
+      "end": "^\\s*#endregion\\b"
+    }
   }
 }

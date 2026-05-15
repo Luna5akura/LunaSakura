@@ -61,64 +61,64 @@ static const char* PERF_TRANSCODE_OUTPUT = "/tmp/luna_perf_transcoded.mp4";
 static const char* PERF_EXPORT_OUTPUT = "/tmp/luna_perf_export.mp4";
 
 static const char* PERF_STDLIB_SCRIPT =
-    "var total = 0\n"
-    "var i = 0\n"
+    "total = 0\n"
+    "i = 0\n"
     "while i < 200:\n"
     "    total = total + i\n"
     "    i = i + 1\n"
-    "var doubled = List()\n"
+    "doubled = List()\n"
     "i = 0\n"
     "while i < 200:\n"
     "    push(doubled, i * 2)\n"
     "    i = i + 1\n"
-    "var d = Dict()\n"
+    "d = Dict()\n"
     "dict_put(d, \"name\", \"luna\")\n"
     "dict_put(d, \"lang\", \"video\")\n"
-    "var idx = 0\n"
+    "idx = 0\n"
     "while idx < len(doubled):\n"
     "    idx = idx + 1\n"
     "fun makeAdder(x):\n"
     "    fun add(y):\n"
     "        return x + y\n"
     "    return add\n"
-    "var add7 = makeAdder(7)\n"
+    "add7 = makeAdder(7)\n"
     "class Base:\n"
     "    fun greet():\n"
     "        return total\n"
     "class Child < Base:\n"
     "    fun greet():\n"
     "        return super.greet() + add7(3)\n"
-    "var c = Child()\n"
-    "var result = c.greet()\n"
+    "c = Child()\n"
+    "result = c.greet()\n"
     "try:\n"
-    "    var safe = result + len(dict_keys(d))\n"
+    "    safe = result + len(dict_keys(d))\n"
     "except:\n"
-    "    var safe = -1\n";
+    "    safe = -1\n";
 
 static const char* PERF_VIDEO_SCRIPT =
-    "var tl = Timeline(640, 360, 24)\n"
-    "var image = Image(\"tests/assets/test_image.ppm\")\n"
-    "var solid = Solid(320, 180, 10, 20, 30, 255)\n"
-    "var adjust = Adjustment(640, 360)\n"
+    "tl = Timeline(640, 360, 24)\n"
+    "image = Image(\"tests/assets/test_image.ppm\")\n"
+    "solid = Solid(320, 180, 10, 20, 30, 255)\n"
+    "adjust = Adjustment(640, 360)\n"
     "adjust.setAffectsWholeFrame(true)\n"
-    "var group = Group(320, 180, 24)\n"
-    "var groupTl = group.getTimeline()\n"
+    "group = Group(320, 180, 24)\n"
+    "groupTl = group.getTimeline()\n"
     "groupTl.add(0, Solid(320, 180, 80, 40, 20, 255), 0)\n"
-    "var precomp = Precomp(160, 90, 24)\n"
-    "var preTl = Timeline(160, 90, 24)\n"
+    "precomp = Precomp(160, 90, 24)\n"
+    "preTl = Timeline(160, 90, 24)\n"
     "preTl.add(0, Solid(160, 90, 20, 40, 80, 255), 0)\n"
     "precomp.setTimeline(preTl)\n"
-    "var imgInst = tl.add(0, image, 0)\n"
-    "var solidInst = tl.add(0, solid, 0.25)\n"
-    "var groupInst = tl.add(1, group, 0.5)\n"
-    "var preInst = tl.add(1, precomp, 0.75)\n"
-    "var adjustInst = tl.add(2, adjust, 0)\n"
+    "imgInst = tl.add(0, image, 0)\n"
+    "solidInst = tl.add(0, solid, 0.25)\n"
+    "groupInst = tl.add(1, group, 0.5)\n"
+    "preInst = tl.add(1, precomp, 0.75)\n"
+    "adjustInst = tl.add(2, adjust, 0)\n"
     "adjustInst.setDuration(2)\n"
-    "var mosaic = Mosaic(blockSize=8, sharpColors=true)\n"
+    "mosaic = Mosaic(blockSize=8, sharpColors=true)\n"
     "imgInst.addEffect(mosaic)\n"
-    "var fill = Fill(amount=0.5, color=[255, 120, 30, 255])\n"
+    "fill = Fill(amount=0.5, color=[255, 120, 30, 255])\n"
     "solidInst.addEffect(fill)\n"
-    "var grade = BrightnessContrast(brightness=0.05, contrast=1.15)\n"
+    "grade = BrightnessContrast(brightness=0.05, contrast=1.15)\n"
     "adjustInst.addEffect(grade)\n";
 
 static uint64_t now_ns(void) {
@@ -222,7 +222,7 @@ static BenchStatus benchmark_clip_construction(void) {
     for (uint64_t i = 0; i < iterations; i++) {
         Clip* media = clip_create_media("demo.mp4");
         Clip* image = clip_create_image("tests/assets/test_image.ppm", 2, 2);
-        Clip* text = clip_create_text("Hello", "arial.ttf", 32, 255, 255, 255);
+        Clip* text = clip_create_text("Hello", "assets/fonts/arial.ttf", 32, 255, 255, 255);
         Clip* solid = clip_create_solid(320, 180, 10, 20, 30, 255);
         Clip* adjustment = clip_create_adjustment(640, 360);
         Clip* group = clip_create_group(320, 180, 24.0);

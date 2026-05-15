@@ -20,6 +20,7 @@ typedef struct TextRenderer {
     FT_Library ft;
     FT_Face face;
     char* loaded_font_path;
+    u32 loaded_font_size;
     
     GLuint atlas_id;
     int atlas_width;

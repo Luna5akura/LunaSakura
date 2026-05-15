@@ -45,7 +45,17 @@ static void set_bool_prop_cached(VM* vm, ObjInstance* obj, int key_index, const 
     set_bool_prop_cached(vm, obj, key_enum, key_name, val)
 
 static Value effectInit(VM* vm, i32 argCount, Value* args);
+static Value animatedPropertyInit(VM* vm, i32 argCount, Value* args);
+static Value textAnimatorInit(VM* vm, i32 argCount, Value* args);
+static Value rangeSelectorInit(VM* vm, i32 argCount, Value* args);
+static Value expressionSelectorInit(VM* vm, i32 argCount, Value* args);
+static Value wigglySelectorInit(VM* vm, i32 argCount, Value* args);
 static void registerEffectMethods(VM* vm, ObjClass* klass);
+static void registerAnimatedPropertyMethods(VM* vm, ObjClass* klass);
+static void registerTextAnimatorMethods(VM* vm, ObjClass* klass);
+static void registerRangeSelectorMethods(VM* vm, ObjClass* klass);
+static void registerExpressionSelectorMethods(VM* vm, ObjClass* klass);
+static void registerWigglySelectorMethods(VM* vm, ObjClass* klass);
 
 static ObjString* get_cached_handle_key(VM* vm) {
     EngineContext* ctx = get_engine_ctx(vm);
@@ -55,6 +65,11 @@ static ObjString* get_cached_handle_key(VM* vm) {
     handleKey = copyString(vm, "_handle", 7);
     if (ctx) ctx->handle_key = handleKey;
     return handleKey;
+}
+
+static ObjString* get_existing_handle_key(VM* vm) {
+    EngineContext* ctx = get_engine_ctx(vm);
+    return ctx ? ctx->handle_key : NULL;
 }
 
 static ObjClass* get_cached_global_class(VM* vm, ObjClass** slot, const char* class_name, int class_name_length) {
@@ -117,6 +132,14 @@ static const EffectParamSpec BLUR_EFFECT_PARAMS[] = {
     {"radius", EFFECT_PARAM_NUMBER}
 };
 
+static const EffectParamSpec GLOW_EFFECT_PARAMS[] = {
+    {"radius", EFFECT_PARAM_NUMBER},
+    {"intensity", EFFECT_PARAM_NUMBER},
+    {"threshold", EFFECT_PARAM_NUMBER},
+    {"softness", EFFECT_PARAM_NUMBER},
+    {"color", EFFECT_PARAM_COLOR}
+};
+
 static const EffectParamSpec MOSAIC_EFFECT_PARAMS[] = {
     {"blockSize", EFFECT_PARAM_NUMBER},
     {"sharpColors", EFFECT_PARAM_BOOL}
@@ -158,6 +181,8 @@ static const EffectParamSpec DISPLACEMENT_MAP_EFFECT_PARAMS[] = {
     {"amount", EFFECT_PARAM_NUMBER},
     {"offsetX", EFFECT_PARAM_NUMBER},
     {"offsetY", EFFECT_PARAM_NUMBER},
+    {"horizontalChannel", EFFECT_PARAM_NUMBER},
+    {"verticalChannel", EFFECT_PARAM_NUMBER},
     {"useLuma", EFFECT_PARAM_BOOL}
 };
 
@@ -192,6 +217,7 @@ static const EffectClassSpec EFFECT_CLASS_SPECS[] = {
     {"Fill", FILL_EFFECT_PARAMS, (i32)(sizeof(FILL_EFFECT_PARAMS) / sizeof(FILL_EFFECT_PARAMS[0]))},
     {"BrightnessContrast", BRIGHTNESS_CONTRAST_EFFECT_PARAMS, (i32)(sizeof(BRIGHTNESS_CONTRAST_EFFECT_PARAMS) / sizeof(BRIGHTNESS_CONTRAST_EFFECT_PARAMS[0]))},
     {"Blur", BLUR_EFFECT_PARAMS, (i32)(sizeof(BLUR_EFFECT_PARAMS) / sizeof(BLUR_EFFECT_PARAMS[0]))},
+    {"Glow", GLOW_EFFECT_PARAMS, (i32)(sizeof(GLOW_EFFECT_PARAMS) / sizeof(GLOW_EFFECT_PARAMS[0]))},
     {"Mosaic", MOSAIC_EFFECT_PARAMS, (i32)(sizeof(MOSAIC_EFFECT_PARAMS) / sizeof(MOSAIC_EFFECT_PARAMS[0]))},
     {"Grid", GRID_EFFECT_PARAMS, (i32)(sizeof(GRID_EFFECT_PARAMS) / sizeof(GRID_EFFECT_PARAMS[0]))},
     {"GradientRamp", GRADIENT_RAMP_EFFECT_PARAMS, (i32)(sizeof(GRADIENT_RAMP_EFFECT_PARAMS) / sizeof(GRADIENT_RAMP_EFFECT_PARAMS[0]))},
@@ -205,12 +231,171 @@ static const EffectClassSpec EFFECT_CLASS_SPECS[] = {
     {"ColorControl", COLOR_CONTROL_EFFECT_PARAMS, (i32)(sizeof(COLOR_CONTROL_EFFECT_PARAMS) / sizeof(COLOR_CONTROL_EFFECT_PARAMS[0]))}
 };
 
+typedef struct {
+    const char* name;
+    AnimatedPropertyValueKind kind;
+} TextAnimatorParamSpec;
+
+typedef struct {
+    const char* name;
+} TextSelectorParamSpec;
+
+static const TextAnimatorParamSpec TEXT_ANIMATOR_PARAM_SPECS[] = {
+    {"x", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"y", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"scaleX", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"scaleY", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"rotation", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"opacity", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"tracking", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"strokeWidth", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"anchorX", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"anchorY", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"skew", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"skewAxis", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"fillOpacity", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"strokeOpacity", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"fillHue", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"fillSaturation", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"fillBrightness", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"strokeHue", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"strokeSaturation", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"strokeBrightness", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"characterOffset", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"characterValue", ANIMATED_PROPERTY_VALUE_NUMBER},
+    {"fillColor", ANIMATED_PROPERTY_VALUE_COLOR},
+    {"strokeColor", ANIMATED_PROPERTY_VALUE_COLOR}
+};
+
+static const TextSelectorParamSpec TEXT_SELECTOR_PARAM_SPECS[] = {
+    {"start"},
+    {"end"},
+    {"offset"},
+    {"amount"},
+    {"easeHigh"},
+    {"easeLow"}
+};
+
+static const TextSelectorParamSpec TEXT_EXPRESSION_SELECTOR_PARAM_SPECS[] = {
+    {"amount"}
+};
+
+static const TextSelectorParamSpec TEXT_WIGGLY_SELECTOR_PARAM_SPECS[] = {
+    {"amount"},
+    {"wigglesPerSecond"},
+    {"correlation"},
+    {"temporalPhase"},
+    {"spatialPhase"},
+    {"minAmount"},
+    {"maxAmount"}
+};
+
 static const EffectClassSpec* find_effect_class_spec(const char* class_name) {
     size_t i;
     for (i = 0; i < sizeof(EFFECT_CLASS_SPECS) / sizeof(EFFECT_CLASS_SPECS[0]); i++) {
         if (strcmp(EFFECT_CLASS_SPECS[i].class_name, class_name) == 0) return &EFFECT_CLASS_SPECS[i];
     }
     return NULL;
+}
+
+static const TextAnimatorParamSpec* find_text_animator_param_spec(const char* name) {
+    for (size_t i = 0; i < sizeof(TEXT_ANIMATOR_PARAM_SPECS) / sizeof(TEXT_ANIMATOR_PARAM_SPECS[0]); i++) {
+        if (strcmp(TEXT_ANIMATOR_PARAM_SPECS[i].name, name) == 0) return &TEXT_ANIMATOR_PARAM_SPECS[i];
+    }
+    return NULL;
+}
+
+static bool is_text_selector_param(const char* name) {
+    for (size_t i = 0; i < sizeof(TEXT_SELECTOR_PARAM_SPECS) / sizeof(TEXT_SELECTOR_PARAM_SPECS[0]); i++) {
+        if (strcmp(TEXT_SELECTOR_PARAM_SPECS[i].name, name) == 0) return true;
+    }
+    return false;
+}
+
+static bool is_text_expression_selector_param(const char* name) {
+    for (size_t i = 0; i < sizeof(TEXT_EXPRESSION_SELECTOR_PARAM_SPECS) / sizeof(TEXT_EXPRESSION_SELECTOR_PARAM_SPECS[0]); i++) {
+        if (strcmp(TEXT_EXPRESSION_SELECTOR_PARAM_SPECS[i].name, name) == 0) return true;
+    }
+    return false;
+}
+
+static bool is_text_wiggly_selector_param(const char* name) {
+    for (size_t i = 0; i < sizeof(TEXT_WIGGLY_SELECTOR_PARAM_SPECS) / sizeof(TEXT_WIGGLY_SELECTOR_PARAM_SPECS[0]); i++) {
+        if (strcmp(TEXT_WIGGLY_SELECTOR_PARAM_SPECS[i].name, name) == 0) return true;
+    }
+    return false;
+}
+
+static bool parse_text_selector_shape(const char* name, TextSelectorShape* out_shape) {
+    if (!name || !out_shape) return false;
+    if (strcmp(name, "square") == 0) *out_shape = TEXT_SELECTOR_SHAPE_SQUARE;
+    else if (strcmp(name, "ramp_up") == 0) *out_shape = TEXT_SELECTOR_SHAPE_RAMP_UP;
+    else if (strcmp(name, "ramp_down") == 0) *out_shape = TEXT_SELECTOR_SHAPE_RAMP_DOWN;
+    else if (strcmp(name, "triangle") == 0) *out_shape = TEXT_SELECTOR_SHAPE_TRIANGLE;
+    else if (strcmp(name, "smooth") == 0) *out_shape = TEXT_SELECTOR_SHAPE_SMOOTH;
+    else return false;
+    return true;
+}
+
+static bool parse_text_selector_mode(const char* name, TextSelectorMode* out_mode) {
+    if (!name || !out_mode) return false;
+    if (strcmp(name, "add") == 0) *out_mode = TEXT_SELECTOR_MODE_ADD;
+    else if (strcmp(name, "subtract") == 0) *out_mode = TEXT_SELECTOR_MODE_SUBTRACT;
+    else if (strcmp(name, "intersect") == 0) *out_mode = TEXT_SELECTOR_MODE_INTERSECT;
+    else if (strcmp(name, "min") == 0) *out_mode = TEXT_SELECTOR_MODE_MIN;
+    else if (strcmp(name, "max") == 0) *out_mode = TEXT_SELECTOR_MODE_MAX;
+    else return false;
+    return true;
+}
+
+static const char* text_selector_mode_name(TextSelectorMode mode) {
+    switch (mode) {
+        case TEXT_SELECTOR_MODE_SUBTRACT: return "subtract";
+        case TEXT_SELECTOR_MODE_INTERSECT: return "intersect";
+        case TEXT_SELECTOR_MODE_MIN: return "min";
+        case TEXT_SELECTOR_MODE_MAX: return "max";
+        case TEXT_SELECTOR_MODE_ADD:
+        default: return "add";
+    }
+}
+
+static const char* text_selector_shape_name(TextSelectorShape shape) {
+    switch (shape) {
+        case TEXT_SELECTOR_SHAPE_RAMP_UP: return "ramp_up";
+        case TEXT_SELECTOR_SHAPE_RAMP_DOWN: return "ramp_down";
+        case TEXT_SELECTOR_SHAPE_TRIANGLE: return "triangle";
+        case TEXT_SELECTOR_SHAPE_SMOOTH: return "smooth";
+        case TEXT_SELECTOR_SHAPE_SQUARE:
+        default: return "square";
+    }
+}
+
+static bool parse_text_selector_based_on(const char* name, TextSelectorBasedOn* out_based_on) {
+    if (!name || !out_based_on) return false;
+    if (strcmp(name, "characters") == 0) {
+        *out_based_on = TEXT_SELECTOR_BASED_ON_CHARACTERS;
+        return true;
+    }
+    if (strcmp(name, "words") == 0) {
+        *out_based_on = TEXT_SELECTOR_BASED_ON_WORDS;
+        return true;
+    }
+    if (strcmp(name, "lines") == 0) {
+        *out_based_on = TEXT_SELECTOR_BASED_ON_LINES;
+        return true;
+    }
+    return false;
+}
+
+static const char* text_selector_based_on_name(TextSelectorBasedOn based_on) {
+    switch (based_on) {
+        case TEXT_SELECTOR_BASED_ON_WORDS:
+            return "words";
+        case TEXT_SELECTOR_BASED_ON_LINES:
+            return "lines";
+        case TEXT_SELECTOR_BASED_ON_CHARACTERS:
+        default: return "characters";
+    }
 }
 
 static bool parse_effect_color_value(Value value, double* out_r, double* out_g, double* out_b, double* out_a) {
@@ -244,6 +429,85 @@ static bool apply_effect_constructor_value(EffectInstance* effect, const EffectP
             return effect->processor->set_color(effect->data, spec->name, r, g, b, a);
     }
     return false;
+}
+
+static const EffectParamSpec* find_effect_param_spec(const EffectClassSpec* spec, const char* param_name) {
+    if (!spec || !param_name) return NULL;
+    for (i32 i = 0; i < spec->param_count; i++) {
+        if (strcmp(spec->params[i].name, param_name) == 0) return &spec->params[i];
+    }
+    return NULL;
+}
+
+static Value make_effect_color_value(VM* vm, double r, double g, double b, double a) {
+    ObjList* list = newList(vm);
+    push(vm, OBJ_VAL(list));
+    list->capacity = 4;
+    list->count = 4;
+    list->items = ALLOCATE(vm, Value, 4);
+    list->items[0] = NUMBER_VAL(r);
+    list->items[1] = NUMBER_VAL(g);
+    list->items[2] = NUMBER_VAL(b);
+    list->items[3] = NUMBER_VAL(a);
+    pop(vm);
+    return OBJ_VAL(list);
+}
+
+static bool get_effect_property_value(VM* vm, EffectInstance* effect, const EffectParamSpec* spec, Value* out_value) {
+    double number_value;
+    bool bool_value;
+    Animation *r, *g, *b, *a;
+    if (!vm || !effect || !spec || !out_value || !effect->processor) return false;
+    switch (spec->kind) {
+        case EFFECT_PARAM_NUMBER:
+            if (!effect->processor->get_number ||
+                !effect->processor->get_number(effect->data, spec->name, &number_value)) {
+                return false;
+            }
+            *out_value = NUMBER_VAL(number_value);
+            return true;
+        case EFFECT_PARAM_BOOL:
+            if (!effect->processor->get_bool ||
+                !effect->processor->get_bool(effect->data, spec->name, &bool_value)) {
+                return false;
+            }
+            *out_value = BOOL_VAL(bool_value);
+            return true;
+        case EFFECT_PARAM_COLOR:
+            if (!effect->processor->get_color_animations ||
+                !effect->processor->get_color_animations(effect->data, spec->name, &r, &g, &b, &a)) {
+                return false;
+            }
+            *out_value = make_effect_color_value(vm,
+                                                 evaluate_animation(r, 0.0) * 255.0,
+                                                 evaluate_animation(g, 0.0) * 255.0,
+                                                 evaluate_animation(b, 0.0) * 255.0,
+                                                 evaluate_animation(a, 0.0) * 255.0);
+            return true;
+    }
+    return false;
+}
+
+static bool sync_effect_property_field(VM* vm, ObjInstance* instance, EffectInstance* effect, const EffectParamSpec* spec) {
+    ObjString* key;
+    Value value;
+    if (!vm || !instance || !effect || !spec) return false;
+    if (!get_effect_property_value(vm, effect, spec, &value)) return false;
+    key = copyString(vm, spec->name, (int)strlen(spec->name));
+    tableSet(vm, &instance->fields, OBJ_VAL(key), value);
+    return true;
+}
+
+static void populate_effect_instance_fields(VM* vm, ObjInstance* instance, EffectInstance* effect) {
+    const char* class_name;
+    const EffectClassSpec* spec;
+    if (!vm || !instance || !instance->klass || !instance->klass->name || !effect) return;
+    class_name = instance->klass->name->chars;
+    spec = find_effect_class_spec(class_name);
+    if (!spec) return;
+    for (i32 i = 0; i < spec->param_count; i++) {
+        sync_effect_property_field(vm, instance, effect, &spec->params[i]);
+    }
 }
 
 static Allocator* resolve_effect_allocator(VM* vm, ObjEffectHandle* effectHandle, Allocator* temp_allocator) {
@@ -292,6 +556,33 @@ static const char* adjustment_mask_mode_name(u8 mode) {
     return mode == 1 ? "luma" : "alpha";
 }
 
+static bool parse_position_mode(const char* mode, u8* out_mode) {
+    if (!mode || !out_mode) return false;
+    if (strcmp(mode, "position") == 0) *out_mode = TIMELINE_POSITION_MODE_POSITION;
+    else if (strcmp(mode, "anchor") == 0) *out_mode = TIMELINE_POSITION_MODE_ANCHOR;
+    else return false;
+    return true;
+}
+
+static const char* position_mode_name(u8 mode) {
+    return mode == TIMELINE_POSITION_MODE_ANCHOR ? "anchor" : "position";
+}
+
+static bool parse_timeline_anchor_point(const char* name, u8* out_anchor) {
+    if (!name || !out_anchor) return false;
+    if (strcmp(name, "top_left") == 0) *out_anchor = TIMELINE_ANCHOR_TOP_LEFT;
+    else if (strcmp(name, "top_center") == 0) *out_anchor = TIMELINE_ANCHOR_TOP_CENTER;
+    else if (strcmp(name, "top_right") == 0) *out_anchor = TIMELINE_ANCHOR_TOP_RIGHT;
+    else if (strcmp(name, "center_left") == 0) *out_anchor = TIMELINE_ANCHOR_CENTER_LEFT;
+    else if (strcmp(name, "center") == 0) *out_anchor = TIMELINE_ANCHOR_CENTER;
+    else if (strcmp(name, "center_right") == 0) *out_anchor = TIMELINE_ANCHOR_CENTER_RIGHT;
+    else if (strcmp(name, "bottom_left") == 0) *out_anchor = TIMELINE_ANCHOR_BOTTOM_LEFT;
+    else if (strcmp(name, "bottom_center") == 0) *out_anchor = TIMELINE_ANCHOR_BOTTOM_CENTER;
+    else if (strcmp(name, "bottom_right") == 0) *out_anchor = TIMELINE_ANCHOR_BOTTOM_RIGHT;
+    else return false;
+    return true;
+}
+
 static TimelineClip* resolve_timeline_clip(ObjTimelineClip* objTc, i32* out_track_index, i32* out_clip_index) {
     if (!objTc || !objTc->timeline || objTc->clip_id == 0) return NULL;
     return timeline_find_clip_by_id(objTc->timeline, objTc->clip_id, out_track_index, out_clip_index);
@@ -308,6 +599,117 @@ static Animation* resolve_clip_animation(ObjTimelineClip* objTc, const char* pro
     if (strcmp(prop, "opacity") == 0) return &clip->anim.opacity;
     if (strcmp(prop, "volume") == 0) return &clip->anim.volume;
     if (strcmp(prop, "font_size") == 0) return &clip->anim.font_size;
+    return NULL;
+}
+
+static bool is_clip_animation_property(const char* prop) {
+    return prop &&
+           (strcmp(prop, "x") == 0 || strcmp(prop, "y") == 0 ||
+            strcmp(prop, "scale_x") == 0 || strcmp(prop, "scale_y") == 0 ||
+            strcmp(prop, "rotation") == 0 || strcmp(prop, "opacity") == 0 ||
+            strcmp(prop, "volume") == 0 || strcmp(prop, "font_size") == 0);
+}
+
+static TextAnimator* resolve_text_animator_handle(ObjTextAnimatorHandle* handle) {
+    if (!handle || !handle->clip_obj || !handle->clip_obj->clip) return NULL;
+    return clip_text_get_animator(handle->clip_obj->clip, handle->animator_index);
+}
+
+static TextRangeSelector* resolve_text_range_selector_handle(ObjTextRangeSelectorHandle* handle) {
+    TextAnimator* animator;
+    if (!handle) return NULL;
+    animator = resolve_text_animator_handle((ObjTextAnimatorHandle*)handle);
+    return text_animator_get_range_selector(animator, handle->selector_index);
+}
+
+static TextExpressionSelector* resolve_text_expression_selector_handle(ObjTextExpressionSelectorHandle* handle) {
+    TextAnimator* animator;
+    if (!handle) return NULL;
+    animator = resolve_text_animator_handle((ObjTextAnimatorHandle*)handle);
+    return text_animator_get_expression_selector(animator, handle->selector_index);
+}
+
+static TextWigglySelector* resolve_text_wiggly_selector_handle(ObjTextWigglySelectorHandle* handle) {
+    TextAnimator* animator;
+    if (!handle) return NULL;
+    animator = resolve_text_animator_handle((ObjTextAnimatorHandle*)handle);
+    return text_animator_get_wiggly_selector(animator, handle->selector_index);
+}
+
+static Animation* resolve_text_animator_number_animation(TextAnimator* animator, const char* key) {
+    if (!animator || !key) return NULL;
+    if (strcmp(key, "x") == 0) return &animator->x;
+    if (strcmp(key, "y") == 0) return &animator->y;
+    if (strcmp(key, "scaleX") == 0) return &animator->scale_x;
+    if (strcmp(key, "scaleY") == 0) return &animator->scale_y;
+    if (strcmp(key, "rotation") == 0) return &animator->rotation;
+    if (strcmp(key, "opacity") == 0) return &animator->opacity;
+    if (strcmp(key, "tracking") == 0) return &animator->tracking;
+    if (strcmp(key, "strokeWidth") == 0) return &animator->stroke_width;
+    if (strcmp(key, "anchorX") == 0) return &animator->anchor_x;
+    if (strcmp(key, "anchorY") == 0) return &animator->anchor_y;
+    if (strcmp(key, "skew") == 0) return &animator->skew;
+    if (strcmp(key, "skewAxis") == 0) return &animator->skew_axis;
+    if (strcmp(key, "fillOpacity") == 0) return &animator->fill_opacity;
+    if (strcmp(key, "strokeOpacity") == 0) return &animator->stroke_opacity;
+    if (strcmp(key, "fillHue") == 0) return &animator->fill_hue;
+    if (strcmp(key, "fillSaturation") == 0) return &animator->fill_saturation;
+    if (strcmp(key, "fillBrightness") == 0) return &animator->fill_brightness;
+    if (strcmp(key, "strokeHue") == 0) return &animator->stroke_hue;
+    if (strcmp(key, "strokeSaturation") == 0) return &animator->stroke_saturation;
+    if (strcmp(key, "strokeBrightness") == 0) return &animator->stroke_brightness;
+    if (strcmp(key, "characterOffset") == 0) return &animator->character_offset;
+    if (strcmp(key, "characterValue") == 0) return &animator->character_value;
+    return NULL;
+}
+
+static bool resolve_text_animator_color_animations(TextAnimator* animator, const char* key,
+                                                   Animation** out_r, Animation** out_g,
+                                                   Animation** out_b, Animation** out_a) {
+    if (!animator || !key) return false;
+    if (strcmp(key, "fillColor") == 0) {
+        if (out_r) *out_r = &animator->fill_color[0];
+        if (out_g) *out_g = &animator->fill_color[1];
+        if (out_b) *out_b = &animator->fill_color[2];
+        if (out_a) *out_a = &animator->fill_color[3];
+        return true;
+    }
+    if (strcmp(key, "strokeColor") == 0) {
+        if (out_r) *out_r = &animator->stroke_color[0];
+        if (out_g) *out_g = &animator->stroke_color[1];
+        if (out_b) *out_b = &animator->stroke_color[2];
+        if (out_a) *out_a = &animator->stroke_color[3];
+        return true;
+    }
+    return false;
+}
+
+static Animation* resolve_text_selector_number_animation(TextRangeSelector* selector, const char* key) {
+    if (!selector || !key) return NULL;
+    if (strcmp(key, "start") == 0) return &selector->start;
+    if (strcmp(key, "end") == 0) return &selector->end;
+    if (strcmp(key, "offset") == 0) return &selector->offset;
+    if (strcmp(key, "amount") == 0) return &selector->amount;
+    if (strcmp(key, "easeHigh") == 0) return &selector->ease_high;
+    if (strcmp(key, "easeLow") == 0) return &selector->ease_low;
+    return NULL;
+}
+
+static Animation* resolve_text_expression_selector_number_animation(TextExpressionSelector* selector, const char* key) {
+    if (!selector || !key) return NULL;
+    if (strcmp(key, "amount") == 0) return &selector->amount;
+    return NULL;
+}
+
+static Animation* resolve_text_wiggly_selector_number_animation(TextWigglySelector* selector, const char* key) {
+    if (!selector || !key) return NULL;
+    if (strcmp(key, "amount") == 0) return &selector->amount;
+    if (strcmp(key, "wigglesPerSecond") == 0) return &selector->wiggles_per_second;
+    if (strcmp(key, "correlation") == 0) return &selector->correlation;
+    if (strcmp(key, "temporalPhase") == 0) return &selector->temporal_phase;
+    if (strcmp(key, "spatialPhase") == 0) return &selector->spatial_phase;
+    if (strcmp(key, "minAmount") == 0) return &selector->min_amount;
+    if (strcmp(key, "maxAmount") == 0) return &selector->max_amount;
     return NULL;
 }
 static void sync_common_props(VM* vm, ObjInstance* obj, Clip* inner) {
@@ -338,8 +740,9 @@ void reset_active_project(VM* vm) {
 static Obj* getHandle(VM* vm, Value instanceVal, const ForeignClassMethods* expectedMethods) {
     if (!IS_INSTANCE(instanceVal)) return NULL;
     ObjInstance* instance = AS_INSTANCE(instanceVal);
-    ObjString* handleKey = get_cached_handle_key(vm);
+    ObjString* handleKey = get_existing_handle_key(vm);
     Value handleVal;
+    if (!handleKey) return NULL;
     bool found = tableGet(&instance->fields, OBJ_VAL(handleKey), &handleVal);
 
     if (!found) return NULL;
@@ -460,8 +863,485 @@ static Value create_effect_value(VM* vm, ObjTimeline* tlObj, TimelineClip* tc, E
         return NIL_VAL;
     }
     instance = newInstance(vm, klass);
+    push(vm, OBJ_VAL(instance));
     setHandle(vm, instance, (Obj*)effectHandle);
+    populate_effect_instance_fields(vm, instance, effect);
+    pop(vm);
     return OBJ_VAL(instance);
+}
+
+static Value create_animated_property_value(VM* vm, Obj* owner_handle,
+                                            AnimatedPropertySourceKind source_kind,
+                                            AnimatedPropertyValueKind value_kind,
+                                            const char* key) {
+    ObjAnimatedPropertyHandle* prop_handle;
+    ObjClass* klass;
+    ObjInstance* instance;
+
+    if (!vm || !owner_handle || !key) return NIL_VAL;
+    klass = get_cached_global_class(vm, NULL, "AnimatedProperty", 16);
+    if (!klass) {
+        fprintf(stderr, "Runtime Error: AnimatedProperty class not found.\n");
+        return NIL_VAL;
+    }
+    prop_handle = newAnimatedPropertyHandle(vm, owner_handle, source_kind, value_kind, key);
+    instance = newInstance(vm, klass);
+    push(vm, OBJ_VAL(instance));
+    setHandle(vm, instance, (Obj*)prop_handle);
+    pop(vm);
+    return OBJ_VAL(instance);
+}
+
+static Value create_text_animator_value(VM* vm, ObjClip* clip_obj, u32 animator_index) {
+    ObjTextAnimatorHandle* handle;
+    ObjClass* klass;
+    ObjInstance* instance;
+
+    if (!vm || !clip_obj) return NIL_VAL;
+    klass = get_cached_global_class(vm, NULL, "TextAnimator", 12);
+    if (!klass) {
+        fprintf(stderr, "Runtime Error: TextAnimator class not found.\n");
+        return NIL_VAL;
+    }
+    handle = newTextAnimatorHandle(vm, clip_obj, animator_index);
+    instance = newInstance(vm, klass);
+    push(vm, OBJ_VAL(instance));
+    setHandle(vm, instance, (Obj*)handle);
+    pop(vm);
+    return OBJ_VAL(instance);
+}
+
+static Value create_range_selector_value(VM* vm, ObjClip* clip_obj, u32 animator_index, u32 selector_index) {
+    ObjTextRangeSelectorHandle* handle;
+    ObjClass* klass;
+    ObjInstance* instance;
+
+    if (!vm || !clip_obj) return NIL_VAL;
+    klass = get_cached_global_class(vm, NULL, "RangeSelector", 13);
+    if (!klass) {
+        fprintf(stderr, "Runtime Error: RangeSelector class not found.\n");
+        return NIL_VAL;
+    }
+    handle = newTextRangeSelectorHandle(vm, clip_obj, animator_index, selector_index);
+    instance = newInstance(vm, klass);
+    push(vm, OBJ_VAL(instance));
+    setHandle(vm, instance, (Obj*)handle);
+    pop(vm);
+    return OBJ_VAL(instance);
+}
+
+static Value create_expression_selector_value(VM* vm, ObjClip* clip_obj, u32 animator_index, u32 selector_index) {
+    ObjTextExpressionSelectorHandle* handle;
+    ObjClass* klass;
+    ObjInstance* instance;
+
+    if (!vm || !clip_obj) return NIL_VAL;
+    klass = get_cached_global_class(vm, NULL, "ExpressionSelector", 18);
+    if (!klass) {
+        fprintf(stderr, "Runtime Error: ExpressionSelector class not found.\n");
+        return NIL_VAL;
+    }
+    handle = newTextExpressionSelectorHandle(vm, clip_obj, animator_index, selector_index);
+    instance = newInstance(vm, klass);
+    push(vm, OBJ_VAL(instance));
+    setHandle(vm, instance, (Obj*)handle);
+    pop(vm);
+    return OBJ_VAL(instance);
+}
+
+static Value create_wiggly_selector_value(VM* vm, ObjClip* clip_obj, u32 animator_index, u32 selector_index) {
+    ObjTextWigglySelectorHandle* handle;
+    ObjClass* klass;
+    ObjInstance* instance;
+
+    if (!vm || !clip_obj) return NIL_VAL;
+    klass = get_cached_global_class(vm, NULL, "WigglySelector", 14);
+    if (!klass) {
+        fprintf(stderr, "Runtime Error: WigglySelector class not found.\n");
+        return NIL_VAL;
+    }
+    handle = newTextWigglySelectorHandle(vm, clip_obj, animator_index, selector_index);
+    instance = newInstance(vm, klass);
+    push(vm, OBJ_VAL(instance));
+    setHandle(vm, instance, (Obj*)handle);
+    pop(vm);
+    return OBJ_VAL(instance);
+}
+
+static Animation* resolve_animated_property_number_animation(ObjAnimatedPropertyHandle* handle) {
+    ObjTimelineClip* clip_handle;
+    ObjEffectHandle* effect_handle;
+    ObjTextAnimatorHandle* text_animator_handle;
+    ObjTextRangeSelectorHandle* text_selector_handle;
+    ObjTextExpressionSelectorHandle* text_expression_selector_handle;
+    ObjTextWigglySelectorHandle* text_wiggly_selector_handle;
+    EffectInstance* effect;
+    TextAnimator* animator;
+    TextRangeSelector* selector;
+    TextExpressionSelector* expression_selector;
+    TextWigglySelector* wiggly_selector;
+
+    if (!handle || handle->value_kind != ANIMATED_PROPERTY_VALUE_NUMBER) return NULL;
+    if (handle->source_kind == ANIMATED_PROPERTY_SOURCE_CLIP) {
+        clip_handle = (ObjTimelineClip*)handle->owner_handle;
+        return resolve_clip_animation(clip_handle, handle->key);
+    }
+    if (handle->source_kind == ANIMATED_PROPERTY_SOURCE_TEXT_ANIMATOR) {
+        text_animator_handle = (ObjTextAnimatorHandle*)handle->owner_handle;
+        animator = resolve_text_animator_handle(text_animator_handle);
+        return resolve_text_animator_number_animation(animator, handle->key);
+    }
+    if (handle->source_kind == ANIMATED_PROPERTY_SOURCE_TEXT_RANGE_SELECTOR) {
+        text_selector_handle = (ObjTextRangeSelectorHandle*)handle->owner_handle;
+        selector = resolve_text_range_selector_handle(text_selector_handle);
+        return resolve_text_selector_number_animation(selector, handle->key);
+    }
+    if (handle->source_kind == ANIMATED_PROPERTY_SOURCE_TEXT_EXPRESSION_SELECTOR) {
+        text_expression_selector_handle = (ObjTextExpressionSelectorHandle*)handle->owner_handle;
+        expression_selector = resolve_text_expression_selector_handle(text_expression_selector_handle);
+        return resolve_text_expression_selector_number_animation(expression_selector, handle->key);
+    }
+    if (handle->source_kind == ANIMATED_PROPERTY_SOURCE_TEXT_WIGGLY_SELECTOR) {
+        text_wiggly_selector_handle = (ObjTextWigglySelectorHandle*)handle->owner_handle;
+        wiggly_selector = resolve_text_wiggly_selector_handle(text_wiggly_selector_handle);
+        return resolve_text_wiggly_selector_number_animation(wiggly_selector, handle->key);
+    }
+    effect_handle = (ObjEffectHandle*)handle->owner_handle;
+    effect = resolve_effect_handle(effect_handle);
+    return resolve_effect_number_animation(effect, handle->key);
+}
+
+static bool resolve_animated_property_color_animations(ObjAnimatedPropertyHandle* handle,
+                                                       Animation** out_r, Animation** out_g,
+                                                       Animation** out_b, Animation** out_a) {
+    ObjTextAnimatorHandle* text_animator_handle;
+    ObjEffectHandle* effect_handle;
+    TextAnimator* animator;
+    EffectInstance* effect;
+    if (!handle || handle->value_kind != ANIMATED_PROPERTY_VALUE_COLOR) return false;
+    if (handle->source_kind == ANIMATED_PROPERTY_SOURCE_TEXT_ANIMATOR) {
+        text_animator_handle = (ObjTextAnimatorHandle*)handle->owner_handle;
+        animator = resolve_text_animator_handle(text_animator_handle);
+        return resolve_text_animator_color_animations(animator, handle->key, out_r, out_g, out_b, out_a);
+    }
+    if (handle->source_kind != ANIMATED_PROPERTY_SOURCE_EFFECT) return false;
+    effect_handle = (ObjEffectHandle*)handle->owner_handle;
+    effect = resolve_effect_handle(effect_handle);
+    return resolve_effect_color_animations(effect, handle->key, out_r, out_g, out_b, out_a);
+}
+
+static Allocator* resolve_animated_property_allocator(VM* vm, ObjAnimatedPropertyHandle* handle, Allocator* temp_allocator) {
+    if (!handle) return NULL;
+    switch (handle->source_kind) {
+        case ANIMATED_PROPERTY_SOURCE_CLIP: {
+            ObjTimelineClip* clip_handle = (ObjTimelineClip*)handle->owner_handle;
+            return clip_handle ? clip_handle->allocator : NULL;
+        }
+        case ANIMATED_PROPERTY_SOURCE_EFFECT: {
+            ObjEffectHandle* effect_handle = (ObjEffectHandle*)handle->owner_handle;
+            return resolve_effect_allocator(vm, effect_handle, temp_allocator);
+        }
+        case ANIMATED_PROPERTY_SOURCE_TEXT_ANIMATOR: {
+            ObjTextAnimatorHandle* text_animator_handle = (ObjTextAnimatorHandle*)handle->owner_handle;
+            return (text_animator_handle && text_animator_handle->clip_obj)
+                ? &text_animator_handle->clip_obj->allocator
+                : NULL;
+        }
+        case ANIMATED_PROPERTY_SOURCE_TEXT_RANGE_SELECTOR: {
+            ObjTextRangeSelectorHandle* selector_handle = (ObjTextRangeSelectorHandle*)handle->owner_handle;
+            return (selector_handle && selector_handle->clip_obj)
+                ? &selector_handle->clip_obj->allocator
+                : NULL;
+        }
+        case ANIMATED_PROPERTY_SOURCE_TEXT_EXPRESSION_SELECTOR: {
+            ObjTextExpressionSelectorHandle* selector_handle = (ObjTextExpressionSelectorHandle*)handle->owner_handle;
+            return (selector_handle && selector_handle->clip_obj)
+                ? &selector_handle->clip_obj->allocator
+                : NULL;
+        }
+        case ANIMATED_PROPERTY_SOURCE_TEXT_WIGGLY_SELECTOR: {
+            ObjTextWigglySelectorHandle* selector_handle = (ObjTextWigglySelectorHandle*)handle->owner_handle;
+            return (selector_handle && selector_handle->clip_obj)
+                ? &selector_handle->clip_obj->allocator
+                : NULL;
+        }
+        default:
+            break;
+    }
+    return NULL;
+}
+
+static bool parse_animated_property_number_value(Value value, double* out_value) {
+    if (IS_NUMBER(value)) {
+        *out_value = AS_NUMBER(value);
+        return true;
+    }
+    if (IS_BOOL(value)) {
+        *out_value = AS_BOOL(value) ? 1.0 : 0.0;
+        return true;
+    }
+    return false;
+}
+
+static bool resolve_effect_property_value_kind(ObjInstance* instance, const char* key,
+                                               AnimatedPropertyValueKind* out_kind) {
+    const EffectClassSpec* class_spec;
+    const EffectParamSpec* param_spec;
+    if (!instance || !instance->klass || !instance->klass->name || !key || !out_kind) return false;
+    class_spec = find_effect_class_spec(instance->klass->name->chars);
+    if (!class_spec) return false;
+    param_spec = find_effect_param_spec(class_spec, key);
+    if (!param_spec) return false;
+    *out_kind = (param_spec->kind == EFFECT_PARAM_COLOR)
+        ? ANIMATED_PROPERTY_VALUE_COLOR
+        : ANIMATED_PROPERTY_VALUE_NUMBER;
+    return true;
+}
+
+bool resolveBoundInstancePropertyGet(VM* vm, ObjInstance* instance, ObjString* name, Value* out_value,
+                                     bool* out_handled) {
+    ObjTimelineClip* clip_handle;
+    ObjEffectHandle* effect_handle;
+    ObjTextAnimatorHandle* text_animator_handle;
+    ObjTextRangeSelectorHandle* text_selector_handle;
+    ObjTextExpressionSelectorHandle* text_expression_selector_handle;
+    ObjTextWigglySelectorHandle* text_wiggly_selector_handle;
+    AnimatedPropertyValueKind value_kind;
+    const TextAnimatorParamSpec* text_animator_param_spec;
+
+    if (out_handled) *out_handled = false;
+    if (!vm || !instance || !name || !out_value) return true;
+
+    clip_handle = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(instance), &TimelineClipMethods);
+    if (clip_handle && is_clip_animation_property(name->chars)) {
+        if (out_handled) *out_handled = true;
+        push(vm, OBJ_VAL(instance));
+        *out_value = create_animated_property_value(vm, (Obj*)clip_handle,
+                                                    ANIMATED_PROPERTY_SOURCE_CLIP,
+                                                    ANIMATED_PROPERTY_VALUE_NUMBER,
+                                                    name->chars);
+        pop(vm);
+        return true;
+    }
+
+    text_animator_handle = (ObjTextAnimatorHandle*)getHandle(vm, OBJ_VAL(instance), &TextAnimatorHandleMethods);
+    text_animator_param_spec = text_animator_handle ? find_text_animator_param_spec(name->chars) : NULL;
+    if (text_animator_handle && text_animator_param_spec) {
+        if (out_handled) *out_handled = true;
+        push(vm, OBJ_VAL(instance));
+        *out_value = create_animated_property_value(vm, (Obj*)text_animator_handle,
+                                                    ANIMATED_PROPERTY_SOURCE_TEXT_ANIMATOR,
+                                                    text_animator_param_spec->kind,
+                                                    name->chars);
+        pop(vm);
+        return true;
+    }
+
+    text_selector_handle = (ObjTextRangeSelectorHandle*)getHandle(vm, OBJ_VAL(instance), &TextRangeSelectorHandleMethods);
+    if (text_selector_handle && is_text_selector_param(name->chars)) {
+        if (out_handled) *out_handled = true;
+        push(vm, OBJ_VAL(instance));
+        *out_value = create_animated_property_value(vm, (Obj*)text_selector_handle,
+                                                    ANIMATED_PROPERTY_SOURCE_TEXT_RANGE_SELECTOR,
+                                                    ANIMATED_PROPERTY_VALUE_NUMBER,
+                                                    name->chars);
+        pop(vm);
+        return true;
+    }
+
+    text_expression_selector_handle =
+        (ObjTextExpressionSelectorHandle*)getHandle(vm, OBJ_VAL(instance), &TextExpressionSelectorHandleMethods);
+    if (text_expression_selector_handle && is_text_expression_selector_param(name->chars)) {
+        if (out_handled) *out_handled = true;
+        push(vm, OBJ_VAL(instance));
+        *out_value = create_animated_property_value(vm, (Obj*)text_expression_selector_handle,
+                                                    ANIMATED_PROPERTY_SOURCE_TEXT_EXPRESSION_SELECTOR,
+                                                    ANIMATED_PROPERTY_VALUE_NUMBER,
+                                                    name->chars);
+        pop(vm);
+        return true;
+    }
+
+    text_wiggly_selector_handle =
+        (ObjTextWigglySelectorHandle*)getHandle(vm, OBJ_VAL(instance), &TextWigglySelectorHandleMethods);
+    if (text_wiggly_selector_handle && is_text_wiggly_selector_param(name->chars)) {
+        if (out_handled) *out_handled = true;
+        push(vm, OBJ_VAL(instance));
+        *out_value = create_animated_property_value(vm, (Obj*)text_wiggly_selector_handle,
+                                                    ANIMATED_PROPERTY_SOURCE_TEXT_WIGGLY_SELECTOR,
+                                                    ANIMATED_PROPERTY_VALUE_NUMBER,
+                                                    name->chars);
+        pop(vm);
+        return true;
+    }
+
+    effect_handle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(instance), &EffectHandleMethods);
+    if (effect_handle && resolve_effect_property_value_kind(instance, name->chars, &value_kind)) {
+        if (out_handled) *out_handled = true;
+        push(vm, OBJ_VAL(instance));
+        *out_value = create_animated_property_value(vm, (Obj*)effect_handle,
+                                                    ANIMATED_PROPERTY_SOURCE_EFFECT,
+                                                    value_kind,
+                                                    name->chars);
+        pop(vm);
+        return true;
+    }
+
+    return true;
+}
+
+bool syncBoundInstancePropertySet(VM* vm, ObjInstance* instance, ObjString* name, Value value,
+                                  bool* out_handled, const char** out_error) {
+    const EffectClassSpec* class_spec;
+    const EffectParamSpec* param_spec;
+    const TextAnimatorParamSpec* text_animator_param_spec;
+    ObjEffectHandle* effect_handle;
+    ObjTextAnimatorHandle* text_animator_handle;
+    ObjTextRangeSelectorHandle* text_selector_handle;
+    ObjTextExpressionSelectorHandle* text_expression_selector_handle;
+    ObjTextWigglySelectorHandle* text_wiggly_selector_handle;
+    EffectInstance* effect;
+    TextAnimator* animator;
+    TextRangeSelector* selector;
+    TextExpressionSelector* expression_selector;
+    TextWigglySelector* wiggly_selector;
+    double number_value;
+    double r;
+    double g;
+    double b;
+    double a;
+    Animation *anim_r, *anim_g, *anim_b, *anim_a;
+
+    if (out_handled) *out_handled = false;
+    if (out_error) *out_error = NULL;
+    if (!vm || !instance || !name || !instance->klass || !instance->klass->name) return true;
+
+    text_animator_handle = (ObjTextAnimatorHandle*)getHandle(vm, OBJ_VAL(instance), &TextAnimatorHandleMethods);
+    text_animator_param_spec = text_animator_handle ? find_text_animator_param_spec(name->chars) : NULL;
+    if (text_animator_handle && text_animator_param_spec) {
+        if (out_handled) *out_handled = true;
+        animator = resolve_text_animator_handle(text_animator_handle);
+        if (!animator) {
+            if (out_error) *out_error = "Text animator is unavailable.";
+            return false;
+        }
+        if (text_animator_param_spec->kind == ANIMATED_PROPERTY_VALUE_NUMBER) {
+            Animation* anim = resolve_text_animator_number_animation(animator, name->chars);
+            if (!anim || !parse_animated_property_number_value(value, &number_value)) {
+                if (out_error) *out_error = "Invalid text animator property value.";
+                return false;
+            }
+            anim->default_value = number_value;
+        } else {
+            if (!parse_effect_color_value(value, &r, &g, &b, &a) ||
+                !resolve_text_animator_color_animations(animator, name->chars, &anim_r, &anim_g, &anim_b, &anim_a)) {
+                if (out_error) *out_error = "Invalid text animator color value.";
+                return false;
+            }
+            anim_r->default_value = r / 255.0;
+            anim_g->default_value = g / 255.0;
+            anim_b->default_value = b / 255.0;
+            anim_a->default_value = a / 255.0;
+        }
+        return true;
+    }
+
+    text_selector_handle = (ObjTextRangeSelectorHandle*)getHandle(vm, OBJ_VAL(instance), &TextRangeSelectorHandleMethods);
+    if (text_selector_handle && is_text_selector_param(name->chars)) {
+        if (out_handled) *out_handled = true;
+        selector = resolve_text_range_selector_handle(text_selector_handle);
+        if (!selector) {
+            if (out_error) *out_error = "Range selector is unavailable.";
+            return false;
+        }
+        if (!parse_animated_property_number_value(value, &number_value)) {
+            if (out_error) *out_error = "Invalid range selector property value.";
+            return false;
+        }
+        {
+            Animation* anim = resolve_text_selector_number_animation(selector, name->chars);
+            if (!anim) {
+                if (out_error) *out_error = "Unknown range selector property.";
+                return false;
+            }
+            anim->default_value = number_value;
+        }
+        return true;
+    }
+
+    text_expression_selector_handle =
+        (ObjTextExpressionSelectorHandle*)getHandle(vm, OBJ_VAL(instance), &TextExpressionSelectorHandleMethods);
+    if (text_expression_selector_handle && is_text_expression_selector_param(name->chars)) {
+        if (out_handled) *out_handled = true;
+        expression_selector = resolve_text_expression_selector_handle(text_expression_selector_handle);
+        if (!expression_selector) {
+            if (out_error) *out_error = "Expression selector is unavailable.";
+            return false;
+        }
+        if (!parse_animated_property_number_value(value, &number_value)) {
+            if (out_error) *out_error = "Invalid expression selector property value.";
+            return false;
+        }
+        {
+            Animation* anim = resolve_text_expression_selector_number_animation(expression_selector, name->chars);
+            if (!anim) {
+                if (out_error) *out_error = "Unknown expression selector property.";
+                return false;
+            }
+            anim->default_value = number_value;
+        }
+        return true;
+    }
+
+    text_wiggly_selector_handle =
+        (ObjTextWigglySelectorHandle*)getHandle(vm, OBJ_VAL(instance), &TextWigglySelectorHandleMethods);
+    if (text_wiggly_selector_handle && is_text_wiggly_selector_param(name->chars)) {
+        if (out_handled) *out_handled = true;
+        wiggly_selector = resolve_text_wiggly_selector_handle(text_wiggly_selector_handle);
+        if (!wiggly_selector) {
+            if (out_error) *out_error = "Wiggly selector is unavailable.";
+            return false;
+        }
+        if (!parse_animated_property_number_value(value, &number_value)) {
+            if (out_error) *out_error = "Invalid wiggly selector property value.";
+            return false;
+        }
+        {
+            Animation* anim = resolve_text_wiggly_selector_number_animation(wiggly_selector, name->chars);
+            if (!anim) {
+                if (out_error) *out_error = "Unknown wiggly selector property.";
+                return false;
+            }
+            anim->default_value = number_value;
+        }
+        return true;
+    }
+
+    class_spec = find_effect_class_spec(instance->klass->name->chars);
+    if (!class_spec) return true;
+
+    if (out_handled) *out_handled = true;
+    param_spec = find_effect_param_spec(class_spec, name->chars);
+    if (!param_spec) {
+        if (out_error) *out_error = "Unknown effect property.";
+        return false;
+    }
+
+    effect_handle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(instance), &EffectHandleMethods);
+    effect = resolve_effect_handle(effect_handle);
+    if (!effect) {
+        if (out_error) *out_error = "Effect instance is unavailable.";
+        return false;
+    }
+    if (!apply_effect_constructor_value(effect, param_spec, value)) {
+        if (out_error) *out_error = "Invalid effect property value.";
+        return false;
+    }
+    if (!sync_effect_property_field(vm, instance, effect, param_spec)) {
+        if (out_error) *out_error = "Failed to synchronize effect property.";
+        return false;
+    }
+    return true;
 }
 // --- Clip 类实现 ---
 Value videoInit(VM* vm, i32 argCount, Value* args) {
@@ -484,6 +1364,7 @@ Value videoInit(VM* vm, i32 argCount, Value* args) {
     ObjClip* objClip = newClip(vm, path);
     if (objClip->clip) clip_free(objClip->clip);
     objClip->clip = clip_create_media(path->chars);
+    objClip->clip->user_data = objClip;
   
     Clip* inner = objClip->clip;
     inner->duration = meta.duration;
@@ -522,7 +1403,8 @@ Value textInit(VM* vm, i32 argCount, Value* args) {
     // 默认配置：Arial, 32px, 白色
     // 注意：这里的 font path 必须存在，否则渲染会失败。
     // 在实际项目中，可以使用内嵌字体或相对路径。
-    objClip->clip = clip_create_text(content, "arial.ttf", 32, 255, 255, 255);
+    objClip->clip = clip_create_text(content, "assets/fonts/arial.ttf", 32, 255, 255, 255);
+    objClip->clip->user_data = objClip;
     objClip->clip->text.letter_spacing = 0.0f;
     objClip->clip->text.stroke_enabled = false;
     objClip->clip->text.stroke_width = 2.0f;
@@ -876,7 +1758,7 @@ Value clipSetScale(VM* vm, i32 argCount, Value* args) {
     objClip->clip->default_scale_y = sy;
     SET_PROP(thisObj, ENGINE_BINDING_PROP_DEFAULT_SCALE_X, "default_scale_x", sx);
     SET_PROP(thisObj, ENGINE_BINDING_PROP_DEFAULT_SCALE_Y, "default_scale_y", sy);
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
 }
 Value clipSetPos(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -888,7 +1770,7 @@ Value clipSetPos(VM* vm, i32 argCount, Value* args) {
     objClip->clip->default_y = AS_NUMBER(args[1]);
     SET_PROP(thisObj, ENGINE_BINDING_PROP_DEFAULT_X, "default_x", objClip->clip->default_x);
     SET_PROP(thisObj, ENGINE_BINDING_PROP_DEFAULT_Y, "default_y", objClip->clip->default_y);
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
 }
 Value clipSetOpacity(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -902,7 +1784,7 @@ Value clipSetOpacity(VM* vm, i32 argCount, Value* args) {
     // [修改]
     objClip->clip->default_opacity = val;
     SET_PROP(thisObj, ENGINE_BINDING_PROP_DEFAULT_OPACITY, "default_opacity", val);
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
 }
 Value clipSetRotation(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -913,7 +1795,7 @@ Value clipSetRotation(VM* vm, i32 argCount, Value* args) {
   
     objClip->clip->default_rotation = val;
     SET_PROP(thisObj, ENGINE_BINDING_PROP_DEFAULT_ROTATION, "default_rotation", val);
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
 }
 // --- Text 专用 Setters ---
 Value textSetFont(VM* vm, i32 argCount, Value* args) {
@@ -925,7 +1807,7 @@ Value textSetFont(VM* vm, i32 argCount, Value* args) {
         if (objClip->clip->text.font_path) free(objClip->clip->text.font_path);
         objClip->clip->text.font_path = strdup(AS_CSTRING(args[0]));
     }
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
 }
 Value textSetSize(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -935,7 +1817,7 @@ Value textSetSize(VM* vm, i32 argCount, Value* args) {
     if (objClip->clip->type == CLIP_TYPE_TEXT) {
         objClip->clip->text.font_size = (u32)AS_NUMBER(args[0]);
     }
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
 }
 Value textSetColor(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -947,7 +1829,7 @@ Value textSetColor(VM* vm, i32 argCount, Value* args) {
         objClip->clip->text.color.g = (u8)AS_NUMBER(args[1]);
         objClip->clip->text.color.b = (u8)AS_NUMBER(args[2]);
     }
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
 }
 
 Value textSetLetterSpacing(VM* vm, i32 argCount, Value* args) {
@@ -956,7 +1838,7 @@ Value textSetLetterSpacing(VM* vm, i32 argCount, Value* args) {
     if (!objClip || argCount != 1) return NIL_VAL;
     objClip->clip->text.letter_spacing = AS_NUMBER(args[0]);
     SET_PROP(thisObj, ENGINE_BINDING_PROP_LETTER_SPACING, "letter_spacing", objClip->clip->text.letter_spacing);
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
 }
 
 Value textSetStroke(VM* vm, i32 argCount, Value* args) {
@@ -978,8 +1860,404 @@ Value textSetStroke(VM* vm, i32 argCount, Value* args) {
 
     SET_BOOL_PROP(thisObj, ENGINE_BINDING_PROP_STROKE_ENABLED, "stroke_enabled", objClip->clip->text.stroke_enabled);
     SET_PROP(thisObj, ENGINE_BINDING_PROP_STROKE_WIDTH, "stroke_width", objClip->clip->text.stroke_width);
+    return OBJ_VAL(thisObj);
+}
+
+Value textAddAnimator(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjClip* objClip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
+    TextAnimator* animator;
+    if (!objClip || !objClip->clip || objClip->clip->type != CLIP_TYPE_TEXT || argCount != 0) return NIL_VAL;
+    animator = clip_text_add_animator(objClip->clip);
+    if (!animator) return NIL_VAL;
+    return create_text_animator_value(vm, objClip, objClip->clip->text.animator_count - 1);
+}
+
+Value textGetAnimatorCount(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjClip* objClip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
+    if (!objClip || !objClip->clip || objClip->clip->type != CLIP_TYPE_TEXT || argCount != 0) return NIL_VAL;
+    return NUMBER_VAL((double)clip_text_get_animator_count(objClip->clip));
+}
+
+Value textGetAnimatorBinding(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjClip* objClip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
+    u32 index;
+    if (!objClip || !objClip->clip || objClip->clip->type != CLIP_TYPE_TEXT || argCount != 1 || !IS_NUMBER(args[0])) {
+        return NIL_VAL;
+    }
+    index = (u32)AS_NUMBER(args[0]);
+    if (!clip_text_get_animator(objClip->clip, index)) return NIL_VAL;
+    return create_text_animator_value(vm, objClip, index);
+}
+
+static Value textAnimatorInit(VM* vm, i32 argCount, Value* args) {
+    (void)vm;
+    (void)argCount;
+    (void)args;
     return NIL_VAL;
 }
+
+Value textAnimatorAddRangeSelector(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextAnimatorHandle* handle = (ObjTextAnimatorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextAnimatorHandleMethods);
+    TextAnimator* animator;
+    if (!handle || argCount != 0) return NIL_VAL;
+    animator = resolve_text_animator_handle(handle);
+    if (!animator || !text_animator_add_range_selector(animator)) return NIL_VAL;
+    return create_range_selector_value(vm, handle->clip_obj, handle->animator_index, animator->range_selector_count - 1);
+}
+
+Value textAnimatorGetRangeSelectorCount(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextAnimatorHandle* handle = (ObjTextAnimatorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextAnimatorHandleMethods);
+    TextAnimator* animator;
+    if (!handle || argCount != 0) return NIL_VAL;
+    animator = resolve_text_animator_handle(handle);
+    if (!animator) return NIL_VAL;
+    return NUMBER_VAL((double)text_animator_get_range_selector_count(animator));
+}
+
+Value textAnimatorGetRangeSelectorBinding(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextAnimatorHandle* handle = (ObjTextAnimatorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextAnimatorHandleMethods);
+    TextAnimator* animator;
+    u32 index;
+    if (!handle || argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
+    animator = resolve_text_animator_handle(handle);
+    if (!animator) return NIL_VAL;
+    index = (u32)AS_NUMBER(args[0]);
+    if (!text_animator_get_range_selector(animator, index)) return NIL_VAL;
+    return create_range_selector_value(vm, handle->clip_obj, handle->animator_index, index);
+}
+
+Value textAnimatorAddExpressionSelector(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextAnimatorHandle* handle = (ObjTextAnimatorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextAnimatorHandleMethods);
+    TextAnimator* animator;
+    if (!handle || argCount != 0) return NIL_VAL;
+    animator = resolve_text_animator_handle(handle);
+    if (!animator || !text_animator_add_expression_selector(animator)) return NIL_VAL;
+    return create_expression_selector_value(vm, handle->clip_obj, handle->animator_index,
+                                            animator->expression_selector_count - 1);
+}
+
+Value textAnimatorGetExpressionSelectorCount(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextAnimatorHandle* handle = (ObjTextAnimatorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextAnimatorHandleMethods);
+    TextAnimator* animator;
+    if (!handle || argCount != 0) return NIL_VAL;
+    animator = resolve_text_animator_handle(handle);
+    if (!animator) return NIL_VAL;
+    return NUMBER_VAL((double)text_animator_get_expression_selector_count(animator));
+}
+
+Value textAnimatorGetExpressionSelectorBinding(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextAnimatorHandle* handle = (ObjTextAnimatorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextAnimatorHandleMethods);
+    TextAnimator* animator;
+    u32 index;
+    if (!handle || argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
+    animator = resolve_text_animator_handle(handle);
+    if (!animator) return NIL_VAL;
+    index = (u32)AS_NUMBER(args[0]);
+    if (!text_animator_get_expression_selector(animator, index)) return NIL_VAL;
+    return create_expression_selector_value(vm, handle->clip_obj, handle->animator_index, index);
+}
+
+Value textAnimatorAddWigglySelector(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextAnimatorHandle* handle = (ObjTextAnimatorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextAnimatorHandleMethods);
+    TextAnimator* animator;
+    if (!handle || argCount != 0) return NIL_VAL;
+    animator = resolve_text_animator_handle(handle);
+    if (!animator || !text_animator_add_wiggly_selector(animator)) return NIL_VAL;
+    return create_wiggly_selector_value(vm, handle->clip_obj, handle->animator_index,
+                                        animator->wiggly_selector_count - 1);
+}
+
+Value textAnimatorGetWigglySelectorCount(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextAnimatorHandle* handle = (ObjTextAnimatorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextAnimatorHandleMethods);
+    TextAnimator* animator;
+    if (!handle || argCount != 0) return NIL_VAL;
+    animator = resolve_text_animator_handle(handle);
+    if (!animator) return NIL_VAL;
+    return NUMBER_VAL((double)text_animator_get_wiggly_selector_count(animator));
+}
+
+Value textAnimatorGetWigglySelectorBinding(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextAnimatorHandle* handle = (ObjTextAnimatorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextAnimatorHandleMethods);
+    TextAnimator* animator;
+    u32 index;
+    if (!handle || argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
+    animator = resolve_text_animator_handle(handle);
+    if (!animator) return NIL_VAL;
+    index = (u32)AS_NUMBER(args[0]);
+    if (!text_animator_get_wiggly_selector(animator, index)) return NIL_VAL;
+    return create_wiggly_selector_value(vm, handle->clip_obj, handle->animator_index, index);
+}
+
+static Value rangeSelectorInit(VM* vm, i32 argCount, Value* args) {
+    (void)vm;
+    (void)argCount;
+    (void)args;
+    return NIL_VAL;
+}
+
+Value rangeSelectorSetShape(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextRangeSelectorHandle* handle =
+        (ObjTextRangeSelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextRangeSelectorHandleMethods);
+    TextRangeSelector* selector;
+    TextSelectorShape shape;
+    if (!handle || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
+    selector = resolve_text_range_selector_handle(handle);
+    if (!selector || !parse_text_selector_shape(AS_CSTRING(args[0]), &shape)) return BOOL_VAL(false);
+    selector->shape = shape;
+    return OBJ_VAL(thisObj);
+}
+
+Value rangeSelectorGetShape(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextRangeSelectorHandle* handle =
+        (ObjTextRangeSelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextRangeSelectorHandleMethods);
+    TextRangeSelector* selector;
+    const char* shape_name;
+    if (!handle || argCount != 0) return NIL_VAL;
+    selector = resolve_text_range_selector_handle(handle);
+    if (!selector) return NIL_VAL;
+    shape_name = text_selector_shape_name(selector->shape);
+    return OBJ_VAL(copyString(vm, shape_name, (i32)strlen(shape_name)));
+}
+
+Value rangeSelectorSetBasedOn(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextRangeSelectorHandle* handle =
+        (ObjTextRangeSelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextRangeSelectorHandleMethods);
+    TextRangeSelector* selector;
+    TextSelectorBasedOn based_on;
+    if (!handle || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
+    selector = resolve_text_range_selector_handle(handle);
+    if (!selector || !parse_text_selector_based_on(AS_CSTRING(args[0]), &based_on)) return BOOL_VAL(false);
+    selector->based_on = based_on;
+    return OBJ_VAL(thisObj);
+}
+
+Value rangeSelectorGetBasedOn(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextRangeSelectorHandle* handle =
+        (ObjTextRangeSelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextRangeSelectorHandleMethods);
+    TextRangeSelector* selector;
+    const char* based_on_name;
+    if (!handle || argCount != 0) return NIL_VAL;
+    selector = resolve_text_range_selector_handle(handle);
+    if (!selector) return NIL_VAL;
+    based_on_name = text_selector_based_on_name(selector->based_on);
+    return OBJ_VAL(copyString(vm, based_on_name, (i32)strlen(based_on_name)));
+}
+
+Value rangeSelectorSetMode(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextRangeSelectorHandle* handle =
+        (ObjTextRangeSelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextRangeSelectorHandleMethods);
+    TextRangeSelector* selector;
+    TextSelectorMode mode;
+    if (!handle || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
+    selector = resolve_text_range_selector_handle(handle);
+    if (!selector || !parse_text_selector_mode(AS_CSTRING(args[0]), &mode)) return BOOL_VAL(false);
+    selector->mode = mode;
+    return OBJ_VAL(thisObj);
+}
+
+Value rangeSelectorGetMode(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextRangeSelectorHandle* handle =
+        (ObjTextRangeSelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextRangeSelectorHandleMethods);
+    TextRangeSelector* selector;
+    const char* mode_name;
+    if (!handle || argCount != 0) return NIL_VAL;
+    selector = resolve_text_range_selector_handle(handle);
+    if (!selector) return NIL_VAL;
+    mode_name = text_selector_mode_name(selector->mode);
+    return OBJ_VAL(copyString(vm, mode_name, (i32)strlen(mode_name)));
+}
+
+static Value expressionSelectorInit(VM* vm, i32 argCount, Value* args) {
+    (void)vm;
+    (void)argCount;
+    (void)args;
+    return NIL_VAL;
+}
+
+Value expressionSelectorSetExpression(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextExpressionSelectorHandle* handle =
+        (ObjTextExpressionSelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextExpressionSelectorHandleMethods);
+    TextExpressionSelector* selector;
+    char* new_expr;
+    if (!handle || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
+    selector = resolve_text_expression_selector_handle(handle);
+    if (!selector) return BOOL_VAL(false);
+    new_expr = strdup(AS_CSTRING(args[0]));
+    if (!new_expr) return BOOL_VAL(false);
+    if (selector->expression) free(selector->expression);
+    selector->expression = new_expr;
+    return OBJ_VAL(thisObj);
+}
+
+Value expressionSelectorSetCallback(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextExpressionSelectorHandle* handle =
+        (ObjTextExpressionSelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextExpressionSelectorHandleMethods);
+    TextExpressionSelector* selector;
+    if (!handle || argCount != 1) return NIL_VAL;
+    selector = resolve_text_expression_selector_handle(handle);
+    if (!selector) return BOOL_VAL(false);
+    if (!IS_NIL(args[0]) && !IS_CLOSURE(args[0]) && !IS_BOUND_METHOD(args[0]) && !IS_NATIVE(args[0])) {
+        return BOOL_VAL(false);
+    }
+    selector->callback = args[0];
+    selector->has_callback = !IS_NIL(args[0]);
+    return OBJ_VAL(thisObj);
+}
+
+Value expressionSelectorGetCallback(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextExpressionSelectorHandle* handle =
+        (ObjTextExpressionSelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextExpressionSelectorHandleMethods);
+    TextExpressionSelector* selector;
+    (void)vm;
+    if (!handle || argCount != 0) return NIL_VAL;
+    selector = resolve_text_expression_selector_handle(handle);
+    if (!selector || !selector->has_callback) return NIL_VAL;
+    return selector->callback;
+}
+
+Value expressionSelectorGetExpression(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextExpressionSelectorHandle* handle =
+        (ObjTextExpressionSelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextExpressionSelectorHandleMethods);
+    TextExpressionSelector* selector;
+    if (!handle || argCount != 0) return NIL_VAL;
+    selector = resolve_text_expression_selector_handle(handle);
+    if (!selector || !selector->expression) return NIL_VAL;
+    return OBJ_VAL(copyString(vm, selector->expression, (i32)strlen(selector->expression)));
+}
+
+Value expressionSelectorSetBasedOn(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextExpressionSelectorHandle* handle =
+        (ObjTextExpressionSelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextExpressionSelectorHandleMethods);
+    TextExpressionSelector* selector;
+    TextSelectorBasedOn based_on;
+    if (!handle || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
+    selector = resolve_text_expression_selector_handle(handle);
+    if (!selector || !parse_text_selector_based_on(AS_CSTRING(args[0]), &based_on)) return BOOL_VAL(false);
+    selector->based_on = based_on;
+    return OBJ_VAL(thisObj);
+}
+
+Value expressionSelectorGetBasedOn(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextExpressionSelectorHandle* handle =
+        (ObjTextExpressionSelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextExpressionSelectorHandleMethods);
+    TextExpressionSelector* selector;
+    const char* based_on_name;
+    if (!handle || argCount != 0) return NIL_VAL;
+    selector = resolve_text_expression_selector_handle(handle);
+    if (!selector) return NIL_VAL;
+    based_on_name = text_selector_based_on_name(selector->based_on);
+    return OBJ_VAL(copyString(vm, based_on_name, (i32)strlen(based_on_name)));
+}
+
+Value expressionSelectorSetMode(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextExpressionSelectorHandle* handle =
+        (ObjTextExpressionSelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextExpressionSelectorHandleMethods);
+    TextExpressionSelector* selector;
+    TextSelectorMode mode;
+    if (!handle || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
+    selector = resolve_text_expression_selector_handle(handle);
+    if (!selector || !parse_text_selector_mode(AS_CSTRING(args[0]), &mode)) return BOOL_VAL(false);
+    selector->mode = mode;
+    return OBJ_VAL(thisObj);
+}
+
+Value expressionSelectorGetMode(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextExpressionSelectorHandle* handle =
+        (ObjTextExpressionSelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextExpressionSelectorHandleMethods);
+    TextExpressionSelector* selector;
+    const char* mode_name;
+    if (!handle || argCount != 0) return NIL_VAL;
+    selector = resolve_text_expression_selector_handle(handle);
+    if (!selector) return NIL_VAL;
+    mode_name = text_selector_mode_name(selector->mode);
+    return OBJ_VAL(copyString(vm, mode_name, (i32)strlen(mode_name)));
+}
+
+static Value wigglySelectorInit(VM* vm, i32 argCount, Value* args) {
+    (void)vm;
+    (void)argCount;
+    (void)args;
+    return NIL_VAL;
+}
+
+Value wigglySelectorSetBasedOn(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextWigglySelectorHandle* handle =
+        (ObjTextWigglySelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextWigglySelectorHandleMethods);
+    TextWigglySelector* selector;
+    TextSelectorBasedOn based_on;
+    if (!handle || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
+    selector = resolve_text_wiggly_selector_handle(handle);
+    if (!selector || !parse_text_selector_based_on(AS_CSTRING(args[0]), &based_on)) return BOOL_VAL(false);
+    selector->based_on = based_on;
+    return OBJ_VAL(thisObj);
+}
+
+Value wigglySelectorGetBasedOn(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextWigglySelectorHandle* handle =
+        (ObjTextWigglySelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextWigglySelectorHandleMethods);
+    TextWigglySelector* selector;
+    const char* based_on_name;
+    if (!handle || argCount != 0) return NIL_VAL;
+    selector = resolve_text_wiggly_selector_handle(handle);
+    if (!selector) return NIL_VAL;
+    based_on_name = text_selector_based_on_name(selector->based_on);
+    return OBJ_VAL(copyString(vm, based_on_name, (i32)strlen(based_on_name)));
+}
+
+Value wigglySelectorSetMode(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextWigglySelectorHandle* handle =
+        (ObjTextWigglySelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextWigglySelectorHandleMethods);
+    TextWigglySelector* selector;
+    TextSelectorMode mode;
+    if (!handle || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
+    selector = resolve_text_wiggly_selector_handle(handle);
+    if (!selector || !parse_text_selector_mode(AS_CSTRING(args[0]), &mode)) return BOOL_VAL(false);
+    selector->mode = mode;
+    return OBJ_VAL(thisObj);
+}
+
+Value wigglySelectorGetMode(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTextWigglySelectorHandle* handle =
+        (ObjTextWigglySelectorHandle*)getHandle(vm, OBJ_VAL(thisObj), &TextWigglySelectorHandleMethods);
+    TextWigglySelector* selector;
+    const char* mode_name;
+    if (!handle || argCount != 0) return NIL_VAL;
+    selector = resolve_text_wiggly_selector_handle(handle);
+    if (!selector) return NIL_VAL;
+    mode_name = text_selector_mode_name(selector->mode);
+    return OBJ_VAL(copyString(vm, mode_name, (i32)strlen(mode_name)));
+}
+
 Value solidSetColor(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
     ObjClip* objClip = (ObjClip*)getHandle(vm, OBJ_VAL(thisObj), &ClipMethods);
@@ -988,7 +2266,7 @@ Value solidSetColor(VM* vm, i32 argCount, Value* args) {
     objClip->clip->solid.color.g = (u8)AS_NUMBER(args[1]);
     objClip->clip->solid.color.b = (u8)AS_NUMBER(args[2]);
     objClip->clip->solid.color.a = (u8)((argCount == 4) ? AS_NUMBER(args[3]) : 255);
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
 }
 
 // --- Timeline 类实现 ---
@@ -1207,7 +2485,7 @@ Value projectSetTimeline(VM* vm, i32 argCount, Value* args) {
     proj->timelineObj = tlObj;
     SET_PROP(thisObj, ENGINE_BINDING_PROP_DURATION, "duration", tlObj->timeline->duration);
   
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
 }
 Value projectPreview(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -1234,7 +2512,7 @@ Value projectPreview(VM* vm, i32 argCount, Value* args) {
         ctx->active_project = proj->project;
         ctx->active_project_obj = proj;
     }
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
 }
 Value projectSetPreviewRange(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -1316,189 +2594,399 @@ static Value effectInit(VM* vm, i32 argCount, Value* args) {
 
     effectHandle = newStandaloneEffectHandle(vm, effect);
     setHandle(vm, thisObj, (Obj*)effectHandle);
+    populate_effect_instance_fields(vm, thisObj, effect);
     return OBJ_VAL(thisObj);
 }
-// addKeyframe(property, time, value, type, [weight])
-Value clipInstanceAddKeyframe(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
-    if (!objTc || argCount < 4 || !IS_STRING(args[0]) || !IS_NUMBER(args[1]) || !IS_NUMBER(args[2]) || !IS_STRING(args[3])) return NIL_VAL;
-  
-    const char* prop = AS_CSTRING(args[0]);
-    double time = AS_NUMBER(args[1]);
-    double value = AS_NUMBER(args[2]);
-    const char* type_str = AS_CSTRING(args[3]);
-    double weight = (argCount >= 5) ? AS_NUMBER(args[4]) : 0.0;
-  
-    KeyframeType type;
-    if (!parse_keyframe_type(type_str, &type)) {
-        fprintf(stderr, "Invalid keyframe type: %s\n", type_str);
-        return NIL_VAL;
-    }
-  
-    Animation* anim = resolve_clip_animation(objTc, prop);
-    if (!anim) {
-        fprintf(stderr, "Invalid property: %s\n", prop);
-        return NIL_VAL;
-    }
-  
-    add_keyframe(anim, objTc->allocator, time, value, type, weight);
+
+Value animatedPropertyInit(VM* vm, i32 argCount, Value* args) {
+    (void)vm;
+    (void)argCount;
+    (void)args;
     return NIL_VAL;
 }
-// addKeyframeWithPreset(property, time, value, preset)
-Value clipInstanceAddKeyframeWithPreset(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
-    if (!objTc || argCount != 4 || !IS_STRING(args[0]) || !IS_NUMBER(args[1]) || !IS_NUMBER(args[2]) || !IS_STRING(args[3])) return NIL_VAL;
-  
-    const char* prop = AS_CSTRING(args[0]);
-    double time = AS_NUMBER(args[1]);
-    double value = AS_NUMBER(args[2]);
-    const char* preset = AS_CSTRING(args[3]);
-  
-    Animation* anim = resolve_clip_animation(objTc, prop);
-    if (!anim) {
-        fprintf(stderr, "Invalid property: %s\n", prop);
-        return NIL_VAL;
+
+static bool parse_batch_keyframe_entry(Value value, double* out_time, Value* out_payload,
+                                       KeyframeType* out_type, double* out_weight) {
+    ObjList* entry;
+    if (!IS_LIST(value)) return false;
+    entry = AS_LIST(value);
+    if (entry->count < 2 || entry->count > 4) return false;
+    if (!IS_NUMBER(entry->items[0])) return false;
+    *out_time = AS_NUMBER(entry->items[0]);
+    *out_payload = entry->items[1];
+    *out_type = KEYFRAME_LINEAR;
+    *out_weight = 0.0;
+    if (entry->count >= 3) {
+        if (!IS_STRING(entry->items[2]) || !parse_keyframe_type(AS_CSTRING(entry->items[2]), out_type)) return false;
     }
-  
-    add_keyframe_with_preset(anim, objTc->allocator, time, value, preset);
-    return NIL_VAL;
+    if (entry->count == 4) {
+        if (!IS_NUMBER(entry->items[3])) return false;
+        *out_weight = AS_NUMBER(entry->items[3]);
+    }
+    return true;
 }
-Value clipInstanceSetKeyframe(VM* vm, i32 argCount, Value* args) {
+
+static Value animatedPropertyKeyframesBinding(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
-    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
-    if (!objTc || argCount < 4 || !IS_STRING(args[0]) || !IS_NUMBER(args[1]) || !IS_NUMBER(args[2]) || !IS_STRING(args[3])) return NIL_VAL;
-
-    const char* prop = AS_CSTRING(args[0]);
-    double time = AS_NUMBER(args[1]);
-    double value = AS_NUMBER(args[2]);
-    const char* type_str = AS_CSTRING(args[3]);
-    double weight = (argCount >= 5) ? AS_NUMBER(args[4]) : 0.0;
-    KeyframeType type;
-    Animation* anim;
-
-    if (!parse_keyframe_type(type_str, &type)) {
-        fprintf(stderr, "Invalid keyframe type: %s\n", type_str);
-        return NIL_VAL;
+    ObjAnimatedPropertyHandle* handle =
+        (ObjAnimatedPropertyHandle*)getHandle(vm, OBJ_VAL(thisObj), &AnimatedPropertyHandleMethods);
+    ObjList* frames;
+    if (!handle || argCount != 1 || !IS_LIST(args[0])) return NIL_VAL;
+    frames = AS_LIST(args[0]);
+    if (handle->value_kind == ANIMATED_PROPERTY_VALUE_NUMBER) {
+        Animation* anim = resolve_animated_property_number_animation(handle);
+        Allocator temp_allocator;
+        Allocator* allocator;
+        if (!anim) return BOOL_VAL(false);
+        allocator = resolve_animated_property_allocator(vm, handle, &temp_allocator);
+        if (!allocator) return BOOL_VAL(false);
+        clear_keyframes(anim);
+        for (u32 i = 0; i < frames->count; i++) {
+            double time, payload_num, weight;
+            Value payload;
+            KeyframeType type;
+            if (!parse_batch_keyframe_entry(frames->items[i], &time, &payload, &type, &weight) ||
+                !parse_animated_property_number_value(payload, &payload_num)) {
+                return BOOL_VAL(false);
+            }
+            add_keyframe(anim, allocator, time, payload_num, type, weight);
+        }
+        return BOOL_VAL(true);
+    } else {
+        Animation *r, *g, *b, *a;
+        Allocator temp_allocator;
+        Allocator* allocator;
+        if (!resolve_animated_property_color_animations(handle, &r, &g, &b, &a)) return BOOL_VAL(false);
+        clear_keyframes(r);
+        clear_keyframes(g);
+        clear_keyframes(b);
+        clear_keyframes(a);
+        allocator = resolve_animated_property_allocator(vm, handle, &temp_allocator);
+        if (!allocator) return BOOL_VAL(false);
+        for (u32 i = 0; i < frames->count; i++) {
+            double time, cr, cg, cb, ca, weight;
+            Value payload;
+            KeyframeType type;
+            if (!parse_batch_keyframe_entry(frames->items[i], &time, &payload, &type, &weight) ||
+                !parse_effect_color_value(payload, &cr, &cg, &cb, &ca)) {
+                return BOOL_VAL(false);
+            }
+            add_keyframe(r, allocator, time, cr / 255.0, type, weight);
+            add_keyframe(g, allocator, time, cg / 255.0, type, weight);
+            add_keyframe(b, allocator, time, cb / 255.0, type, weight);
+            add_keyframe(a, allocator, time, ca / 255.0, type, weight);
+        }
+        return BOOL_VAL(true);
     }
-
-    anim = resolve_clip_animation(objTc, prop);
-    if (!anim) {
-        fprintf(stderr, "Invalid property: %s\n", prop);
-        return NIL_VAL;
-    }
-
-    set_keyframe(anim, objTc->allocator, time, value, type, weight);
-    return NIL_VAL;
 }
-Value clipInstanceRemoveKeyframe(VM* vm, i32 argCount, Value* args) {
+
+static Value animatedPropertyAddBinding(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
-    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
+    ObjAnimatedPropertyHandle* handle =
+        (ObjAnimatedPropertyHandle*)getHandle(vm, OBJ_VAL(thisObj), &AnimatedPropertyHandleMethods);
+    KeyframeType type = KEYFRAME_LINEAR;
+    double weight = 0.0;
+    if (!handle || argCount < 2 || argCount > 4 || !IS_NUMBER(args[0])) return NIL_VAL;
+    if (argCount >= 3) {
+        if (!IS_STRING(args[2]) || !parse_keyframe_type(AS_CSTRING(args[2]), &type)) return BOOL_VAL(false);
+    }
+    if (argCount == 4) {
+        if (!IS_NUMBER(args[3])) return BOOL_VAL(false);
+        weight = AS_NUMBER(args[3]);
+    }
+    if (handle->value_kind == ANIMATED_PROPERTY_VALUE_NUMBER) {
+        double payload;
+        Animation* anim = resolve_animated_property_number_animation(handle);
+        Allocator temp_allocator;
+        Allocator* allocator;
+        if (!anim || !parse_animated_property_number_value(args[1], &payload)) return BOOL_VAL(false);
+        allocator = resolve_animated_property_allocator(vm, handle, &temp_allocator);
+        if (!allocator) return BOOL_VAL(false);
+        add_keyframe(anim, allocator, AS_NUMBER(args[0]), payload, type, weight);
+        return BOOL_VAL(true);
+    } else {
+        double cr, cg, cb, ca;
+        Animation *r, *g, *b, *a;
+        Allocator temp_allocator;
+        Allocator* allocator;
+        if (!resolve_animated_property_color_animations(handle, &r, &g, &b, &a) ||
+            !parse_effect_color_value(args[1], &cr, &cg, &cb, &ca)) return BOOL_VAL(false);
+        allocator = resolve_animated_property_allocator(vm, handle, &temp_allocator);
+        if (!allocator) return BOOL_VAL(false);
+        add_keyframe(r, allocator, AS_NUMBER(args[0]), cr / 255.0, type, weight);
+        add_keyframe(g, allocator, AS_NUMBER(args[0]), cg / 255.0, type, weight);
+        add_keyframe(b, allocator, AS_NUMBER(args[0]), cb / 255.0, type, weight);
+        add_keyframe(a, allocator, AS_NUMBER(args[0]), ca / 255.0, type, weight);
+        return BOOL_VAL(true);
+    }
+}
+
+static Value animatedPropertySetBinding(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjAnimatedPropertyHandle* handle =
+        (ObjAnimatedPropertyHandle*)getHandle(vm, OBJ_VAL(thisObj), &AnimatedPropertyHandleMethods);
+    KeyframeType type = KEYFRAME_LINEAR;
+    double weight = 0.0;
+    if (!handle || argCount < 2 || argCount > 4 || !IS_NUMBER(args[0])) return NIL_VAL;
+    if (argCount >= 3) {
+        if (!IS_STRING(args[2]) || !parse_keyframe_type(AS_CSTRING(args[2]), &type)) return BOOL_VAL(false);
+    }
+    if (argCount == 4) {
+        if (!IS_NUMBER(args[3])) return BOOL_VAL(false);
+        weight = AS_NUMBER(args[3]);
+    }
+    if (handle->value_kind == ANIMATED_PROPERTY_VALUE_NUMBER) {
+        double payload;
+        Animation* anim = resolve_animated_property_number_animation(handle);
+        Allocator temp_allocator;
+        Allocator* allocator;
+        if (!anim || !parse_animated_property_number_value(args[1], &payload)) return BOOL_VAL(false);
+        allocator = resolve_animated_property_allocator(vm, handle, &temp_allocator);
+        if (!allocator) return BOOL_VAL(false);
+        set_keyframe(anim, allocator, AS_NUMBER(args[0]), payload, type, weight);
+        return BOOL_VAL(true);
+    } else {
+        double cr, cg, cb, ca;
+        Animation *r, *g, *b, *a;
+        Allocator temp_allocator;
+        Allocator* allocator;
+        if (!resolve_animated_property_color_animations(handle, &r, &g, &b, &a) ||
+            !parse_effect_color_value(args[1], &cr, &cg, &cb, &ca)) return BOOL_VAL(false);
+        allocator = resolve_animated_property_allocator(vm, handle, &temp_allocator);
+        if (!allocator) return BOOL_VAL(false);
+        set_keyframe(r, allocator, AS_NUMBER(args[0]), cr / 255.0, type, weight);
+        set_keyframe(g, allocator, AS_NUMBER(args[0]), cg / 255.0, type, weight);
+        set_keyframe(b, allocator, AS_NUMBER(args[0]), cb / 255.0, type, weight);
+        set_keyframe(a, allocator, AS_NUMBER(args[0]), ca / 255.0, type, weight);
+        return BOOL_VAL(true);
+    }
+}
+
+static Value animatedPropertyWithPresetBinding(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjAnimatedPropertyHandle* handle =
+        (ObjAnimatedPropertyHandle*)getHandle(vm, OBJ_VAL(thisObj), &AnimatedPropertyHandleMethods);
     Animation* anim;
-
-    if (!objTc || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-
-    anim = resolve_clip_animation(objTc, AS_CSTRING(args[0]));
-    if (!anim) {
-        fprintf(stderr, "Invalid property: %s\n", AS_CSTRING(args[0]));
+    double payload;
+    if (!handle || handle->value_kind != ANIMATED_PROPERTY_VALUE_NUMBER ||
+        argCount != 3 || !IS_NUMBER(args[0]) || !IS_STRING(args[2])) {
         return NIL_VAL;
     }
-
-    return BOOL_VAL(remove_keyframe(anim, AS_NUMBER(args[1])));
-}
-Value clipInstanceClearKeyframes(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
-    Animation* anim;
-
-    if (!objTc || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
-
-    anim = resolve_clip_animation(objTc, AS_CSTRING(args[0]));
-    if (!anim) {
-        fprintf(stderr, "Invalid property: %s\n", AS_CSTRING(args[0]));
-        return NIL_VAL;
+    anim = resolve_animated_property_number_animation(handle);
+    if (!anim || !parse_animated_property_number_value(args[1], &payload)) return BOOL_VAL(false);
+    {
+        Allocator temp_allocator;
+        Allocator* allocator = resolve_animated_property_allocator(vm, handle, &temp_allocator);
+        if (!allocator) return BOOL_VAL(false);
+        add_keyframe_with_preset(anim, allocator, AS_NUMBER(args[0]), payload, AS_CSTRING(args[2]));
     }
-
-    clear_keyframes(anim);
-    return NIL_VAL;
+    return BOOL_VAL(true);
 }
-Value clipInstanceGetKeyframeCount(VM* vm, i32 argCount, Value* args) {
+
+static Value animatedPropertyRemoveBinding(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
-    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
-    Animation* anim;
-
-    if (!objTc || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
-
-    anim = resolve_clip_animation(objTc, AS_CSTRING(args[0]));
-    if (!anim) {
-        fprintf(stderr, "Invalid property: %s\n", AS_CSTRING(args[0]));
-        return NIL_VAL;
+    ObjAnimatedPropertyHandle* handle =
+        (ObjAnimatedPropertyHandle*)getHandle(vm, OBJ_VAL(thisObj), &AnimatedPropertyHandleMethods);
+    if (!handle || argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
+    if (handle->value_kind == ANIMATED_PROPERTY_VALUE_NUMBER) {
+        Animation* anim = resolve_animated_property_number_animation(handle);
+        return BOOL_VAL(anim ? remove_keyframe(anim, AS_NUMBER(args[0])) : false);
+    } else {
+        Animation *r, *g, *b, *a;
+        bool removed = false;
+        if (!resolve_animated_property_color_animations(handle, &r, &g, &b, &a)) return BOOL_VAL(false);
+        removed = remove_keyframe(r, AS_NUMBER(args[0]));
+        removed = remove_keyframe(g, AS_NUMBER(args[0])) || removed;
+        removed = remove_keyframe(b, AS_NUMBER(args[0])) || removed;
+        removed = remove_keyframe(a, AS_NUMBER(args[0])) || removed;
+        return BOOL_VAL(removed);
     }
-
-    return NUMBER_VAL((double)get_keyframe_count(anim));
 }
-Value clipInstanceGetKeyframeTime(VM* vm, i32 argCount, Value* args) {
+
+static Value animatedPropertyClearBinding(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
-    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
-    Animation* anim;
+    ObjAnimatedPropertyHandle* handle =
+        (ObjAnimatedPropertyHandle*)getHandle(vm, OBJ_VAL(thisObj), &AnimatedPropertyHandleMethods);
+    if (!handle || argCount != 0) return NIL_VAL;
+    if (handle->value_kind == ANIMATED_PROPERTY_VALUE_NUMBER) {
+        Animation* anim = resolve_animated_property_number_animation(handle);
+        if (!anim) return BOOL_VAL(false);
+        clear_keyframes(anim);
+        return BOOL_VAL(true);
+    } else {
+        Animation *r, *g, *b, *a;
+        if (!resolve_animated_property_color_animations(handle, &r, &g, &b, &a)) return BOOL_VAL(false);
+        clear_keyframes(r);
+        clear_keyframes(g);
+        clear_keyframes(b);
+        clear_keyframes(a);
+        return BOOL_VAL(true);
+    }
+}
+
+static Value animatedPropertyCountBinding(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjAnimatedPropertyHandle* handle =
+        (ObjAnimatedPropertyHandle*)getHandle(vm, OBJ_VAL(thisObj), &AnimatedPropertyHandleMethods);
+    if (!handle || argCount != 0) return NIL_VAL;
+    if (handle->value_kind == ANIMATED_PROPERTY_VALUE_NUMBER) {
+        Animation* anim = resolve_animated_property_number_animation(handle);
+        return anim ? NUMBER_VAL((double)get_keyframe_count(anim)) : NIL_VAL;
+    } else {
+        Animation *r, *g, *b, *a;
+        if (!resolve_animated_property_color_animations(handle, &r, &g, &b, &a)) return NIL_VAL;
+        return NUMBER_VAL((double)get_keyframe_count(r));
+    }
+}
+
+static Value animatedPropertyTimeBinding(VM* vm, i32 argCount, Value* args) {
     const Keyframe* keyframe;
-
-    if (!objTc || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-
-    anim = resolve_clip_animation(objTc, AS_CSTRING(args[0]));
-    if (!anim) {
-        fprintf(stderr, "Invalid property: %s\n", AS_CSTRING(args[0]));
-        return NIL_VAL;
+    ObjInstance* thisObj = GET_SELF;
+    ObjAnimatedPropertyHandle* handle =
+        (ObjAnimatedPropertyHandle*)getHandle(vm, OBJ_VAL(thisObj), &AnimatedPropertyHandleMethods);
+    if (!handle || argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
+    if (handle->value_kind == ANIMATED_PROPERTY_VALUE_NUMBER) {
+        Animation* anim = resolve_animated_property_number_animation(handle);
+        if (!anim) return NIL_VAL;
+        keyframe = get_keyframe_at(anim, (uint32_t)AS_NUMBER(args[0]));
+    } else {
+        Animation *r, *g, *b, *a;
+        if (!resolve_animated_property_color_animations(handle, &r, &g, &b, &a)) return NIL_VAL;
+        keyframe = get_keyframe_at(r, (uint32_t)AS_NUMBER(args[0]));
     }
-
-    keyframe = get_keyframe_at(anim, (uint32_t)AS_NUMBER(args[1]));
-    if (!keyframe) return NIL_VAL;
-    return NUMBER_VAL(keyframe->time);
+    return keyframe ? NUMBER_VAL(keyframe->time) : NIL_VAL;
 }
-Value clipInstanceGetKeyframeValue(VM* vm, i32 argCount, Value* args) {
+
+static Value animatedPropertyValueBinding(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
-    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
-    Animation* anim;
-    const Keyframe* keyframe;
-
-    if (!objTc || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-
-    anim = resolve_clip_animation(objTc, AS_CSTRING(args[0]));
-    if (!anim) {
-        fprintf(stderr, "Invalid property: %s\n", AS_CSTRING(args[0]));
-        return NIL_VAL;
+    ObjAnimatedPropertyHandle* handle =
+        (ObjAnimatedPropertyHandle*)getHandle(vm, OBJ_VAL(thisObj), &AnimatedPropertyHandleMethods);
+    if (!handle || argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
+    if (handle->value_kind == ANIMATED_PROPERTY_VALUE_NUMBER) {
+        Animation* anim = resolve_animated_property_number_animation(handle);
+        const Keyframe* keyframe = anim ? get_keyframe_at(anim, (uint32_t)AS_NUMBER(args[0])) : NULL;
+        return keyframe ? NUMBER_VAL(keyframe->value) : NIL_VAL;
+    } else {
+        Animation *r, *g, *b, *a;
+        const Keyframe *kr, *kg, *kb, *ka;
+        if (!resolve_animated_property_color_animations(handle, &r, &g, &b, &a)) return NIL_VAL;
+        kr = get_keyframe_at(r, (uint32_t)AS_NUMBER(args[0]));
+        kg = get_keyframe_at(g, (uint32_t)AS_NUMBER(args[0]));
+        kb = get_keyframe_at(b, (uint32_t)AS_NUMBER(args[0]));
+        ka = get_keyframe_at(a, (uint32_t)AS_NUMBER(args[0]));
+        if (!kr || !kg || !kb || !ka) return NIL_VAL;
+        return make_effect_color_value(vm, kr->value * 255.0, kg->value * 255.0, kb->value * 255.0, ka->value * 255.0);
     }
-
-    keyframe = get_keyframe_at(anim, (uint32_t)AS_NUMBER(args[1]));
-    if (!keyframe) return NIL_VAL;
-    return NUMBER_VAL(keyframe->value);
 }
-Value clipInstanceGetKeyframeType(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
-    Animation* anim;
-    const Keyframe* keyframe;
 
-    if (!objTc || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    anim = resolve_clip_animation(objTc, AS_CSTRING(args[0]));
-    if (!anim) return NIL_VAL;
-    keyframe = get_keyframe_at(anim, (uint32_t)AS_NUMBER(args[1]));
-    if (!keyframe) return NIL_VAL;
-    return OBJ_VAL(copyString(vm, keyframe_type_name(keyframe->type), (i32)strlen(keyframe_type_name(keyframe->type))));
+static Value animatedPropertyTypeBinding(VM* vm, i32 argCount, Value* args) {
+    const Keyframe* keyframe;
+    ObjInstance* thisObj = GET_SELF;
+    ObjAnimatedPropertyHandle* handle =
+        (ObjAnimatedPropertyHandle*)getHandle(vm, OBJ_VAL(thisObj), &AnimatedPropertyHandleMethods);
+    if (!handle || argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
+    if (handle->value_kind == ANIMATED_PROPERTY_VALUE_NUMBER) {
+        Animation* anim = resolve_animated_property_number_animation(handle);
+        if (!anim) return NIL_VAL;
+        keyframe = get_keyframe_at(anim, (uint32_t)AS_NUMBER(args[0]));
+    } else {
+        Animation *r, *g, *b, *a;
+        if (!resolve_animated_property_color_animations(handle, &r, &g, &b, &a)) return NIL_VAL;
+        keyframe = get_keyframe_at(r, (uint32_t)AS_NUMBER(args[0]));
+    }
+    return keyframe ? OBJ_VAL(copyString(vm, keyframe_type_name(keyframe->type),
+                                         (i32)strlen(keyframe_type_name(keyframe->type)))) : NIL_VAL;
 }
-Value clipInstanceGetKeyframeWeight(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
-    Animation* anim;
-    const Keyframe* keyframe;
 
-    if (!objTc || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    anim = resolve_clip_animation(objTc, AS_CSTRING(args[0]));
-    if (!anim) return NIL_VAL;
-    keyframe = get_keyframe_at(anim, (uint32_t)AS_NUMBER(args[1]));
-    if (!keyframe) return NIL_VAL;
-    return NUMBER_VAL(keyframe->bezier_weight);
+static Value animatedPropertyWeightBinding(VM* vm, i32 argCount, Value* args) {
+    const Keyframe* keyframe;
+    ObjInstance* thisObj = GET_SELF;
+    ObjAnimatedPropertyHandle* handle =
+        (ObjAnimatedPropertyHandle*)getHandle(vm, OBJ_VAL(thisObj), &AnimatedPropertyHandleMethods);
+    if (!handle || argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
+    if (handle->value_kind == ANIMATED_PROPERTY_VALUE_NUMBER) {
+        Animation* anim = resolve_animated_property_number_animation(handle);
+        if (!anim) return NIL_VAL;
+        keyframe = get_keyframe_at(anim, (uint32_t)AS_NUMBER(args[0]));
+    } else {
+        Animation *r, *g, *b, *a;
+        if (!resolve_animated_property_color_animations(handle, &r, &g, &b, &a)) return NIL_VAL;
+        keyframe = get_keyframe_at(r, (uint32_t)AS_NUMBER(args[0]));
+    }
+    return keyframe ? NUMBER_VAL(keyframe->bezier_weight) : NIL_VAL;
+}
+
+static Value animatedPropertyShiftBinding(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjAnimatedPropertyHandle* handle =
+        (ObjAnimatedPropertyHandle*)getHandle(vm, OBJ_VAL(thisObj), &AnimatedPropertyHandleMethods);
+    if (!handle || argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
+    if (handle->value_kind == ANIMATED_PROPERTY_VALUE_NUMBER) {
+        Animation* anim = resolve_animated_property_number_animation(handle);
+        if (!anim) return BOOL_VAL(false);
+        shift_keyframe_times(anim, AS_NUMBER(args[0]));
+    } else {
+        Animation *r, *g, *b, *a;
+        if (!resolve_animated_property_color_animations(handle, &r, &g, &b, &a)) return BOOL_VAL(false);
+        shift_keyframe_times(r, AS_NUMBER(args[0]));
+        shift_keyframe_times(g, AS_NUMBER(args[0]));
+        shift_keyframe_times(b, AS_NUMBER(args[0]));
+        shift_keyframe_times(a, AS_NUMBER(args[0]));
+    }
+    return BOOL_VAL(true);
+}
+
+static Value animatedPropertyScaleTimesBinding(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjAnimatedPropertyHandle* handle =
+        (ObjAnimatedPropertyHandle*)getHandle(vm, OBJ_VAL(thisObj), &AnimatedPropertyHandleMethods);
+    if (!handle || argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
+    if (handle->value_kind == ANIMATED_PROPERTY_VALUE_NUMBER) {
+        Animation* anim = resolve_animated_property_number_animation(handle);
+        if (!anim) return BOOL_VAL(false);
+        scale_keyframe_times(anim, AS_NUMBER(args[0]));
+    } else {
+        Animation *r, *g, *b, *a;
+        if (!resolve_animated_property_color_animations(handle, &r, &g, &b, &a)) return BOOL_VAL(false);
+        scale_keyframe_times(r, AS_NUMBER(args[0]));
+        scale_keyframe_times(g, AS_NUMBER(args[0]));
+        scale_keyframe_times(b, AS_NUMBER(args[0]));
+        scale_keyframe_times(a, AS_NUMBER(args[0]));
+    }
+    return BOOL_VAL(true);
+}
+
+static Value animatedPropertyCopyFromBinding(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjAnimatedPropertyHandle* handle =
+        (ObjAnimatedPropertyHandle*)getHandle(vm, OBJ_VAL(thisObj), &AnimatedPropertyHandleMethods);
+    ObjAnimatedPropertyHandle* src_handle;
+    if (!handle || argCount != 1) return NIL_VAL;
+    src_handle = (ObjAnimatedPropertyHandle*)getHandle(vm, args[0], &AnimatedPropertyHandleMethods);
+    if (!src_handle || src_handle->value_kind != handle->value_kind) return BOOL_VAL(false);
+    if (handle->value_kind == ANIMATED_PROPERTY_VALUE_NUMBER) {
+        Animation* dst = resolve_animated_property_number_animation(handle);
+        Animation* src = resolve_animated_property_number_animation(src_handle);
+        Allocator temp_allocator;
+        Allocator* allocator;
+        if (!dst || !src) return BOOL_VAL(false);
+        allocator = resolve_animated_property_allocator(vm, handle, &temp_allocator);
+        if (!allocator) return BOOL_VAL(false);
+        copy_keyframes(dst, allocator, src);
+    } else {
+        Animation *dr, *dg, *db, *da, *sr, *sg, *sb, *sa;
+        Allocator temp_allocator;
+        Allocator* allocator;
+        if (!resolve_animated_property_color_animations(handle, &dr, &dg, &db, &da) ||
+            !resolve_animated_property_color_animations(src_handle, &sr, &sg, &sb, &sa)) return BOOL_VAL(false);
+        allocator = resolve_animated_property_allocator(vm, handle, &temp_allocator);
+        if (!allocator) return BOOL_VAL(false);
+        copy_keyframes(dr, allocator, sr);
+        copy_keyframes(dg, allocator, sg);
+        copy_keyframes(db, allocator, sb);
+        copy_keyframes(da, allocator, sa);
+    }
+    return BOOL_VAL(true);
 }
 Value clipInstanceSetStart(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -1508,7 +2996,10 @@ Value clipInstanceSetStart(VM* vm, i32 argCount, Value* args) {
     if (!objTc || argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
     clip = resolve_timeline_clip(objTc, &track_index, NULL);
     if (!clip) return NIL_VAL;
-    return BOOL_VAL(timeline_move_clip_by_id(objTc->timeline, objTc->clip_id, track_index, AS_NUMBER(args[0])));
+    if (!timeline_move_clip_by_id(objTc->timeline, objTc->clip_id, track_index, AS_NUMBER(args[0]))) {
+        return NIL_VAL;
+    }
+    return OBJ_VAL(thisObj);
 }
 Value clipInstanceGetStart(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -1529,7 +3020,7 @@ Value clipInstanceSetDuration(VM* vm, i32 argCount, Value* args) {
     if (duration < 0.0) duration = 0.0;
     clip->timeline_duration = duration;
     timeline_update_duration(objTc->timeline);
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
 }
 Value clipInstanceGetDuration(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -1549,7 +3040,7 @@ Value clipInstanceSetInPoint(VM* vm, i32 argCount, Value* args) {
     in_point = AS_NUMBER(args[0]);
     if (in_point < 0.0) in_point = 0.0;
     clip->source_in = in_point;
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
 }
 Value clipInstanceGetInPoint(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -1566,7 +3057,7 @@ Value clipInstanceSetZIndex(VM* vm, i32 argCount, Value* args) {
     if (!objTc || argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
     if (!clip) return NIL_VAL;
     clip->transform.z_index = (i32)AS_NUMBER(args[0]);
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
 }
 Value clipInstanceGetZIndex(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -1584,7 +3075,92 @@ Value clipInstanceSetVisible(VM* vm, i32 argCount, Value* args) {
     if (!clip) return NIL_VAL;
     if (AS_BOOL(args[0])) clip->flags |= 1;
     else clip->flags &= (u8)~1;
-    return NIL_VAL;
+    return OBJ_VAL(thisObj);
+}
+Value clipInstanceSetPositionMode(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
+    TimelineClip* clip = resolve_timeline_clip(objTc, NULL, NULL);
+    u8 mode;
+    if (!objTc || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
+    if (!clip || !parse_position_mode(AS_CSTRING(args[0]), &mode)) return NIL_VAL;
+    clip->position_mode = mode;
+    return OBJ_VAL(thisObj);
+}
+Value clipInstanceGetPositionMode(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
+    TimelineClip* clip = resolve_timeline_clip(objTc, NULL, NULL);
+    const char* mode_name;
+    if (!objTc || argCount != 0) return NIL_VAL;
+    if (!clip) return NIL_VAL;
+    mode_name = position_mode_name(clip->position_mode);
+    return OBJ_VAL(copyString(vm, mode_name, (i32)strlen(mode_name)));
+}
+Value clipInstanceAlignToBinding(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
+    ObjTimelineClip* targetHandle;
+    TimelineClip* clip = resolve_timeline_clip(objTc, NULL, NULL);
+    TimelineClip* target;
+    u8 self_anchor;
+    u8 target_anchor;
+    if (!objTc || argCount != 3 || !IS_STRING(args[1]) || !IS_STRING(args[2])) return NIL_VAL;
+    if (!clip) return NIL_VAL;
+    targetHandle = (ObjTimelineClip*)getHandle(vm, args[0], &TimelineClipMethods);
+    if (!targetHandle) return NIL_VAL;
+    target = resolve_timeline_clip(targetHandle, NULL, NULL);
+    if (!target || target == clip) return NIL_VAL;
+    if (!parse_timeline_anchor_point(AS_CSTRING(args[1]), &self_anchor) ||
+        !parse_timeline_anchor_point(AS_CSTRING(args[2]), &target_anchor)) {
+        return NIL_VAL;
+    }
+    clip->position_mode = TIMELINE_POSITION_MODE_ANCHOR;
+    clip->alignment_target_type = TIMELINE_ALIGNMENT_TARGET_CLIP;
+    clip->self_anchor = self_anchor;
+    clip->target_anchor = target_anchor;
+    clip->alignment_target_clip_id = target->id;
+    return OBJ_VAL(thisObj);
+}
+Value clipInstanceAlignToCompositionBinding(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
+    TimelineClip* clip = resolve_timeline_clip(objTc, NULL, NULL);
+    u8 self_anchor;
+    u8 target_anchor;
+    if (!objTc || argCount != 2 || !IS_STRING(args[0]) || !IS_STRING(args[1])) return NIL_VAL;
+    if (!clip) return NIL_VAL;
+    if (!parse_timeline_anchor_point(AS_CSTRING(args[0]), &self_anchor) ||
+        !parse_timeline_anchor_point(AS_CSTRING(args[1]), &target_anchor)) {
+        return NIL_VAL;
+    }
+    clip->position_mode = TIMELINE_POSITION_MODE_ANCHOR;
+    clip->alignment_target_type = TIMELINE_ALIGNMENT_TARGET_COMPOSITION;
+    clip->self_anchor = self_anchor;
+    clip->target_anchor = target_anchor;
+    clip->alignment_target_clip_id = 0;
+    return OBJ_VAL(thisObj);
+}
+Value clipInstanceClearAlignmentTargetBinding(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
+    TimelineClip* clip = resolve_timeline_clip(objTc, NULL, NULL);
+    if (!objTc || argCount != 0) return NIL_VAL;
+    if (!clip) return NIL_VAL;
+    clip->alignment_target_type = TIMELINE_ALIGNMENT_TARGET_COMPOSITION;
+    clip->alignment_target_clip_id = 0;
+    return OBJ_VAL(thisObj);
+}
+Value clipInstanceGetAlignmentTargetClipId(VM* vm, i32 argCount, Value* args) {
+    ObjInstance* thisObj = GET_SELF;
+    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
+    TimelineClip* clip = resolve_timeline_clip(objTc, NULL, NULL);
+    if (!objTc || argCount != 0) return NIL_VAL;
+    if (!clip || clip->alignment_target_type != TIMELINE_ALIGNMENT_TARGET_CLIP ||
+        clip->alignment_target_clip_id == 0) {
+        return NIL_VAL;
+    }
+    return NUMBER_VAL((double)clip->alignment_target_clip_id);
 }
 Value clipInstanceIsVisible(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -1631,41 +3207,6 @@ Value clipInstanceDuplicate(VM* vm, i32 argCount, Value* args) {
     clip = timeline_find_clip_by_id(objTc->timeline, new_id, NULL, NULL);
     if (!clip) return NIL_VAL;
     return create_clip_instance_value(vm, objTc->timelineObj, clip);
-}
-Value clipInstanceShiftKeyframes(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
-    Animation* anim;
-    if (!objTc || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    anim = resolve_clip_animation(objTc, AS_CSTRING(args[0]));
-    if (!anim) return NIL_VAL;
-    shift_keyframe_times(anim, AS_NUMBER(args[1]));
-    return NIL_VAL;
-}
-Value clipInstanceScaleKeyframeTimes(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
-    Animation* anim;
-    if (!objTc || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    anim = resolve_clip_animation(objTc, AS_CSTRING(args[0]));
-    if (!anim) return NIL_VAL;
-    scale_keyframe_times(anim, AS_NUMBER(args[1]));
-    return NIL_VAL;
-}
-Value clipInstanceCopyKeyframesFrom(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjTimelineClip* objTc = (ObjTimelineClip*)getHandle(vm, OBJ_VAL(thisObj), &TimelineClipMethods);
-    ObjTimelineClip* srcObjTc;
-    Animation* dst_anim;
-    Animation* src_anim;
-    if (!objTc || argCount != 3 || !IS_STRING(args[0]) || !IS_STRING(args[2])) return NIL_VAL;
-    srcObjTc = (ObjTimelineClip*)getHandle(vm, args[1], &TimelineClipMethods);
-    if (!srcObjTc) return NIL_VAL;
-    dst_anim = resolve_clip_animation(objTc, AS_CSTRING(args[0]));
-    src_anim = resolve_clip_animation(srcObjTc, AS_CSTRING(args[2]));
-    if (!dst_anim || !src_anim) return NIL_VAL;
-    copy_keyframes(dst_anim, objTc->allocator, src_anim);
-    return NIL_VAL;
 }
 Value clipInstanceAddEffectBinding(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -1741,64 +3282,6 @@ Value effectGetNameBinding(VM* vm, i32 argCount, Value* args) {
     effect = resolve_effect_handle(effectHandle);
     if (!effect) return NIL_VAL;
     return OBJ_VAL(copyString(vm, effect->name, (i32)strlen(effect->name)));
-}
-Value effectSetNumberBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect || !effect->processor || !effect->processor->set_number) return BOOL_VAL(false);
-    return BOOL_VAL(effect->processor->set_number(effect->data, AS_CSTRING(args[0]), AS_NUMBER(args[1])));
-}
-Value effectGetNumberBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    double value;
-    if (!effectHandle || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect || !effect->processor || !effect->processor->get_number) return NIL_VAL;
-    if (!effect->processor->get_number(effect->data, AS_CSTRING(args[0]), &value)) return NIL_VAL;
-    return NUMBER_VAL(value);
-}
-Value effectSetBoolBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_BOOL(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect || !effect->processor || !effect->processor->set_bool) return BOOL_VAL(false);
-    return BOOL_VAL(effect->processor->set_bool(effect->data, AS_CSTRING(args[0]), AS_BOOL(args[1])));
-}
-Value effectGetBoolBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    bool value;
-    if (!effectHandle || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect || !effect->processor || !effect->processor->get_bool) return NIL_VAL;
-    if (!effect->processor->get_bool(effect->data, AS_CSTRING(args[0]), &value)) return NIL_VAL;
-    return BOOL_VAL(value);
-}
-Value effectSetColorBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    double a = 255.0;
-    if (!effectHandle || argCount < 4 || argCount > 5 || !IS_STRING(args[0])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect || !effect->processor || !effect->processor->set_color) return BOOL_VAL(false);
-    if (argCount == 5) a = AS_NUMBER(args[4]);
-    return BOOL_VAL(effect->processor->set_color(
-        effect->data,
-        AS_CSTRING(args[0]),
-        AS_NUMBER(args[1]),
-        AS_NUMBER(args[2]),
-        AS_NUMBER(args[3]),
-        a
-    ));
 }
 Value effectSetSourceBinding(VM* vm, i32 argCount, Value* args) {
     ObjInstance* thisObj = GET_SELF;
@@ -1895,433 +3378,6 @@ Value effectUnlinkColorBinding(VM* vm, i32 argCount, Value* args) {
     allocator = resolve_effect_allocator(vm, effectHandle, &temp_allocator);
     return BOOL_VAL(effect_unlink(allocator, effect, AS_CSTRING(args[0]), EFFECT_LINK_COLOR));
 }
-Value effectAddNumberKeyframeBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* anim;
-    Allocator temp_allocator;
-    Allocator* allocator;
-    KeyframeType type;
-    double weight = 0.0;
-    if (!effectHandle || argCount < 4 || argCount > 5 || !IS_STRING(args[0]) || !IS_NUMBER(args[1]) || !IS_NUMBER(args[2]) || !IS_STRING(args[3])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    anim = resolve_effect_number_animation(effect, AS_CSTRING(args[0]));
-    if (!anim) return BOOL_VAL(false);
-    if (!parse_keyframe_type(AS_CSTRING(args[3]), &type)) return BOOL_VAL(false);
-    if (argCount == 5 && IS_NUMBER(args[4])) weight = AS_NUMBER(args[4]);
-    allocator = resolve_effect_allocator(vm, effectHandle, &temp_allocator);
-    add_keyframe(anim, allocator, AS_NUMBER(args[1]), AS_NUMBER(args[2]), type, weight);
-    return BOOL_VAL(true);
-}
-Value effectSetNumberKeyframeBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* anim;
-    Allocator temp_allocator;
-    Allocator* allocator;
-    KeyframeType type;
-    double weight = 0.0;
-    if (!effectHandle || argCount < 4 || argCount > 5 || !IS_STRING(args[0]) || !IS_NUMBER(args[1]) || !IS_NUMBER(args[2]) || !IS_STRING(args[3])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    anim = resolve_effect_number_animation(effect, AS_CSTRING(args[0]));
-    if (!anim) return BOOL_VAL(false);
-    if (!parse_keyframe_type(AS_CSTRING(args[3]), &type)) return BOOL_VAL(false);
-    if (argCount == 5 && IS_NUMBER(args[4])) weight = AS_NUMBER(args[4]);
-    allocator = resolve_effect_allocator(vm, effectHandle, &temp_allocator);
-    set_keyframe(anim, allocator, AS_NUMBER(args[1]), AS_NUMBER(args[2]), type, weight);
-    return BOOL_VAL(true);
-}
-Value effectRemoveNumberKeyframeBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* anim;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    anim = resolve_effect_number_animation(effect, AS_CSTRING(args[0]));
-    if (!anim) return BOOL_VAL(false);
-    return BOOL_VAL(remove_keyframe(anim, AS_NUMBER(args[1])));
-}
-Value effectClearNumberKeyframesBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* anim;
-    if (!effectHandle || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    anim = resolve_effect_number_animation(effect, AS_CSTRING(args[0]));
-    if (!anim) return BOOL_VAL(false);
-    clear_keyframes(anim);
-    return BOOL_VAL(true);
-}
-Value effectGetNumberKeyframeCountBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* anim;
-    if (!effectHandle || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    anim = resolve_effect_number_animation(effect, AS_CSTRING(args[0]));
-    if (!anim) return NIL_VAL;
-    return NUMBER_VAL((double)get_keyframe_count(anim));
-}
-Value effectGetNumberKeyframeTimeBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* anim;
-    const Keyframe* keyframe;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    anim = resolve_effect_number_animation(effect, AS_CSTRING(args[0]));
-    if (!anim) return NIL_VAL;
-    keyframe = get_keyframe_at(anim, (uint32_t)AS_NUMBER(args[1]));
-    if (!keyframe) return NIL_VAL;
-    return NUMBER_VAL(keyframe->time);
-}
-Value effectGetNumberKeyframeValueBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* anim;
-    const Keyframe* keyframe;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    anim = resolve_effect_number_animation(effect, AS_CSTRING(args[0]));
-    if (!anim) return NIL_VAL;
-    keyframe = get_keyframe_at(anim, (uint32_t)AS_NUMBER(args[1]));
-    if (!keyframe) return NIL_VAL;
-    return NUMBER_VAL(keyframe->value);
-}
-Value effectGetNumberKeyframeTypeBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* anim;
-    const Keyframe* keyframe;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    anim = resolve_effect_number_animation(effect, AS_CSTRING(args[0]));
-    if (!anim) return NIL_VAL;
-    keyframe = get_keyframe_at(anim, (uint32_t)AS_NUMBER(args[1]));
-    if (!keyframe) return NIL_VAL;
-    return OBJ_VAL(copyString(vm, keyframe_type_name(keyframe->type), (i32)strlen(keyframe_type_name(keyframe->type))));
-}
-Value effectGetNumberKeyframeWeightBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* anim;
-    const Keyframe* keyframe;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    anim = resolve_effect_number_animation(effect, AS_CSTRING(args[0]));
-    if (!anim) return NIL_VAL;
-    keyframe = get_keyframe_at(anim, (uint32_t)AS_NUMBER(args[1]));
-    if (!keyframe) return NIL_VAL;
-    return NUMBER_VAL(keyframe->bezier_weight);
-}
-Value effectShiftNumberKeyframesBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* anim;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    anim = resolve_effect_number_animation(effect, AS_CSTRING(args[0]));
-    if (!anim) return BOOL_VAL(false);
-    shift_keyframe_times(anim, AS_NUMBER(args[1]));
-    return BOOL_VAL(true);
-}
-Value effectScaleNumberKeyframeTimesBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* anim;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    anim = resolve_effect_number_animation(effect, AS_CSTRING(args[0]));
-    if (!anim) return BOOL_VAL(false);
-    scale_keyframe_times(anim, AS_NUMBER(args[1]));
-    return BOOL_VAL(true);
-}
-Value effectCopyNumberKeyframesFromBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    ObjEffectHandle* srcHandle;
-    EffectInstance* effect;
-    EffectInstance* srcEffect;
-    Animation* dst_anim;
-    Animation* src_anim;
-    Allocator temp_allocator;
-    Allocator* allocator;
-    if (!effectHandle || argCount != 3 || !IS_STRING(args[0]) || !IS_STRING(args[2])) return NIL_VAL;
-    srcHandle = (ObjEffectHandle*)getHandle(vm, args[1], &EffectHandleMethods);
-    if (!srcHandle) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    srcEffect = resolve_effect_handle(srcHandle);
-    if (!effect || !srcEffect) return NIL_VAL;
-    dst_anim = resolve_effect_number_animation(effect, AS_CSTRING(args[0]));
-    src_anim = resolve_effect_number_animation(srcEffect, AS_CSTRING(args[2]));
-    if (!dst_anim || !src_anim) return BOOL_VAL(false);
-    allocator = resolve_effect_allocator(vm, effectHandle, &temp_allocator);
-    copy_keyframes(dst_anim, allocator, src_anim);
-    return BOOL_VAL(true);
-}
-Value effectAddColorKeyframeBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* r;
-    Animation* g;
-    Animation* b;
-    Animation* a;
-    Allocator temp_allocator;
-    Allocator* allocator;
-    KeyframeType type;
-    double weight = 0.0;
-    if (!effectHandle || argCount < 7 || argCount > 8 || !IS_STRING(args[0]) || !IS_NUMBER(args[1]) || !IS_NUMBER(args[2]) || !IS_NUMBER(args[3]) || !IS_NUMBER(args[4]) || !IS_NUMBER(args[5]) || !IS_STRING(args[6])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    if (!resolve_effect_color_animations(effect, AS_CSTRING(args[0]), &r, &g, &b, &a)) return BOOL_VAL(false);
-    if (!parse_keyframe_type(AS_CSTRING(args[6]), &type)) return BOOL_VAL(false);
-    if (argCount == 8 && IS_NUMBER(args[7])) weight = AS_NUMBER(args[7]);
-    allocator = resolve_effect_allocator(vm, effectHandle, &temp_allocator);
-    add_keyframe(r, allocator, AS_NUMBER(args[1]), AS_NUMBER(args[2]) / 255.0, type, weight);
-    add_keyframe(g, allocator, AS_NUMBER(args[1]), AS_NUMBER(args[3]) / 255.0, type, weight);
-    add_keyframe(b, allocator, AS_NUMBER(args[1]), AS_NUMBER(args[4]) / 255.0, type, weight);
-    add_keyframe(a, allocator, AS_NUMBER(args[1]), AS_NUMBER(args[5]) / 255.0, type, weight);
-    return BOOL_VAL(true);
-}
-Value effectSetColorKeyframeBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* r;
-    Animation* g;
-    Animation* b;
-    Animation* a;
-    Allocator temp_allocator;
-    Allocator* allocator;
-    KeyframeType type;
-    double weight = 0.0;
-    if (!effectHandle || argCount < 7 || argCount > 8 || !IS_STRING(args[0]) || !IS_NUMBER(args[1]) || !IS_NUMBER(args[2]) || !IS_NUMBER(args[3]) || !IS_NUMBER(args[4]) || !IS_NUMBER(args[5]) || !IS_STRING(args[6])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    if (!resolve_effect_color_animations(effect, AS_CSTRING(args[0]), &r, &g, &b, &a)) return BOOL_VAL(false);
-    if (!parse_keyframe_type(AS_CSTRING(args[6]), &type)) return BOOL_VAL(false);
-    if (argCount == 8 && IS_NUMBER(args[7])) weight = AS_NUMBER(args[7]);
-    allocator = resolve_effect_allocator(vm, effectHandle, &temp_allocator);
-    set_keyframe(r, allocator, AS_NUMBER(args[1]), AS_NUMBER(args[2]) / 255.0, type, weight);
-    set_keyframe(g, allocator, AS_NUMBER(args[1]), AS_NUMBER(args[3]) / 255.0, type, weight);
-    set_keyframe(b, allocator, AS_NUMBER(args[1]), AS_NUMBER(args[4]) / 255.0, type, weight);
-    set_keyframe(a, allocator, AS_NUMBER(args[1]), AS_NUMBER(args[5]) / 255.0, type, weight);
-    return BOOL_VAL(true);
-}
-Value effectRemoveColorKeyframeBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* r;
-    Animation* g;
-    Animation* b;
-    Animation* a;
-    bool removed;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    if (!resolve_effect_color_animations(effect, AS_CSTRING(args[0]), &r, &g, &b, &a)) return BOOL_VAL(false);
-    removed = remove_keyframe(r, AS_NUMBER(args[1]));
-    removed = remove_keyframe(g, AS_NUMBER(args[1])) || removed;
-    removed = remove_keyframe(b, AS_NUMBER(args[1])) || removed;
-    removed = remove_keyframe(a, AS_NUMBER(args[1])) || removed;
-    return BOOL_VAL(removed);
-}
-Value effectClearColorKeyframesBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* r;
-    Animation* g;
-    Animation* b;
-    Animation* a;
-    if (!effectHandle || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    if (!resolve_effect_color_animations(effect, AS_CSTRING(args[0]), &r, &g, &b, &a)) return BOOL_VAL(false);
-    clear_keyframes(r);
-    clear_keyframes(g);
-    clear_keyframes(b);
-    clear_keyframes(a);
-    return BOOL_VAL(true);
-}
-Value effectGetColorKeyframeCountBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* r;
-    Animation* g;
-    Animation* b;
-    Animation* a;
-    if (!effectHandle || argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    if (!resolve_effect_color_animations(effect, AS_CSTRING(args[0]), &r, &g, &b, &a)) return NIL_VAL;
-    return NUMBER_VAL((double)get_keyframe_count(r));
-}
-Value effectGetColorKeyframeTimeBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* r;
-    Animation* g;
-    Animation* b;
-    Animation* a;
-    const Keyframe* keyframe;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    if (!resolve_effect_color_animations(effect, AS_CSTRING(args[0]), &r, &g, &b, &a)) return NIL_VAL;
-    keyframe = get_keyframe_at(r, (uint32_t)AS_NUMBER(args[1]));
-    if (!keyframe) return NIL_VAL;
-    return NUMBER_VAL(keyframe->time);
-}
-Value effectGetColorKeyframeValueBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* r;
-    Animation* g;
-    Animation* b;
-    Animation* a;
-    const Keyframe* keyframe;
-    if (!effectHandle || argCount != 3 || !IS_STRING(args[0]) || !IS_NUMBER(args[1]) || !IS_STRING(args[2])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    if (!resolve_effect_color_animations(effect, AS_CSTRING(args[0]), &r, &g, &b, &a)) return NIL_VAL;
-    if (strcmp(AS_CSTRING(args[2]), "r") == 0) keyframe = get_keyframe_at(r, (uint32_t)AS_NUMBER(args[1]));
-    else if (strcmp(AS_CSTRING(args[2]), "g") == 0) keyframe = get_keyframe_at(g, (uint32_t)AS_NUMBER(args[1]));
-    else if (strcmp(AS_CSTRING(args[2]), "b") == 0) keyframe = get_keyframe_at(b, (uint32_t)AS_NUMBER(args[1]));
-    else if (strcmp(AS_CSTRING(args[2]), "a") == 0) keyframe = get_keyframe_at(a, (uint32_t)AS_NUMBER(args[1]));
-    else return NIL_VAL;
-    if (!keyframe) return NIL_VAL;
-    return NUMBER_VAL(keyframe->value * 255.0);
-}
-Value effectGetColorKeyframeTypeBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* r;
-    Animation* g;
-    Animation* b;
-    Animation* a;
-    const Keyframe* keyframe;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    if (!resolve_effect_color_animations(effect, AS_CSTRING(args[0]), &r, &g, &b, &a)) return NIL_VAL;
-    keyframe = get_keyframe_at(r, (uint32_t)AS_NUMBER(args[1]));
-    if (!keyframe) return NIL_VAL;
-    return OBJ_VAL(copyString(vm, keyframe_type_name(keyframe->type), (i32)strlen(keyframe_type_name(keyframe->type))));
-}
-Value effectGetColorKeyframeWeightBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* r;
-    Animation* g;
-    Animation* b;
-    Animation* a;
-    const Keyframe* keyframe;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    if (!resolve_effect_color_animations(effect, AS_CSTRING(args[0]), &r, &g, &b, &a)) return NIL_VAL;
-    keyframe = get_keyframe_at(r, (uint32_t)AS_NUMBER(args[1]));
-    if (!keyframe) return NIL_VAL;
-    return NUMBER_VAL(keyframe->bezier_weight);
-}
-Value effectShiftColorKeyframesBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* r;
-    Animation* g;
-    Animation* b;
-    Animation* a;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    if (!resolve_effect_color_animations(effect, AS_CSTRING(args[0]), &r, &g, &b, &a)) return BOOL_VAL(false);
-    shift_keyframe_times(r, AS_NUMBER(args[1]));
-    shift_keyframe_times(g, AS_NUMBER(args[1]));
-    shift_keyframe_times(b, AS_NUMBER(args[1]));
-    shift_keyframe_times(a, AS_NUMBER(args[1]));
-    return BOOL_VAL(true);
-}
-Value effectScaleColorKeyframeTimesBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    EffectInstance* effect;
-    Animation* r;
-    Animation* g;
-    Animation* b;
-    Animation* a;
-    if (!effectHandle || argCount != 2 || !IS_STRING(args[0]) || !IS_NUMBER(args[1])) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    if (!effect) return NIL_VAL;
-    if (!resolve_effect_color_animations(effect, AS_CSTRING(args[0]), &r, &g, &b, &a)) return BOOL_VAL(false);
-    scale_keyframe_times(r, AS_NUMBER(args[1]));
-    scale_keyframe_times(g, AS_NUMBER(args[1]));
-    scale_keyframe_times(b, AS_NUMBER(args[1]));
-    scale_keyframe_times(a, AS_NUMBER(args[1]));
-    return BOOL_VAL(true);
-}
-Value effectCopyColorKeyframesFromBinding(VM* vm, i32 argCount, Value* args) {
-    ObjInstance* thisObj = GET_SELF;
-    ObjEffectHandle* effectHandle = (ObjEffectHandle*)getHandle(vm, OBJ_VAL(thisObj), &EffectHandleMethods);
-    ObjEffectHandle* srcHandle;
-    EffectInstance* effect;
-    EffectInstance* srcEffect;
-    Animation* dst_r;
-    Animation* dst_g;
-    Animation* dst_b;
-    Animation* dst_a;
-    Animation* src_r;
-    Animation* src_g;
-    Animation* src_b;
-    Animation* src_a;
-    Allocator temp_allocator;
-    Allocator* allocator;
-    if (!effectHandle || argCount != 3 || !IS_STRING(args[0]) || !IS_STRING(args[2])) return NIL_VAL;
-    srcHandle = (ObjEffectHandle*)getHandle(vm, args[1], &EffectHandleMethods);
-    if (!srcHandle) return NIL_VAL;
-    effect = resolve_effect_handle(effectHandle);
-    srcEffect = resolve_effect_handle(srcHandle);
-    if (!effect || !srcEffect) return NIL_VAL;
-    if (!resolve_effect_color_animations(effect, AS_CSTRING(args[0]), &dst_r, &dst_g, &dst_b, &dst_a)) return BOOL_VAL(false);
-    if (!resolve_effect_color_animations(srcEffect, AS_CSTRING(args[2]), &src_r, &src_g, &src_b, &src_a)) return BOOL_VAL(false);
-    allocator = resolve_effect_allocator(vm, effectHandle, &temp_allocator);
-    copy_keyframes(dst_r, allocator, src_r);
-    copy_keyframes(dst_g, allocator, src_g);
-    copy_keyframes(dst_b, allocator, src_b);
-    copy_keyframes(dst_a, allocator, src_a);
-    return BOOL_VAL(true);
-}
-// --- 新增: 全局函数 addUserPreset(name, type, weight) ---
 Value globalAddUserPreset(VM* vm, i32 argCount, Value* args) {
     if (argCount != 3 || !IS_STRING(args[0]) || !IS_STRING(args[1]) || !IS_NUMBER(args[2])) return NIL_VAL;
   
@@ -2432,6 +3488,9 @@ static void registerTextMethods(VM* vm, ObjClass* klass) {
     defineNativeMethod(vm, klass, "setColor", textSetColor);
     defineNativeMethod(vm, klass, "setLetterSpacing", textSetLetterSpacing);
     defineNativeMethod(vm, klass, "setStroke", textSetStroke);
+    defineNativeMethod(vm, klass, "addAnimator", textAddAnimator);
+    defineNativeMethod(vm, klass, "getAnimatorCount", textGetAnimatorCount);
+    defineNativeMethod(vm, klass, "getAnimator", textGetAnimatorBinding);
 }
 static void registerSolidMethods(VM* vm, ObjClass* klass) {
     registerCommonMethods(vm, klass);
@@ -2483,15 +3542,6 @@ static void registerProjectMethods(VM* vm, ObjClass* klass) {
     defineNativeMethod(vm, klass, "getDuration", projectGetDurationBinding);
 }
 static void registerClipInstanceMethods(VM* vm, ObjClass* klass) {
-    defineNativeMethod(vm, klass, "addKeyframe", clipInstanceAddKeyframe);
-    defineNativeMethod(vm, klass, "setKeyframe", clipInstanceSetKeyframe);
-    defineNativeMethod(vm, klass, "removeKeyframe", clipInstanceRemoveKeyframe);
-    defineNativeMethod(vm, klass, "clearKeyframes", clipInstanceClearKeyframes);
-    defineNativeMethod(vm, klass, "getKeyframeCount", clipInstanceGetKeyframeCount);
-    defineNativeMethod(vm, klass, "getKeyframeTime", clipInstanceGetKeyframeTime);
-    defineNativeMethod(vm, klass, "getKeyframeValue", clipInstanceGetKeyframeValue);
-    defineNativeMethod(vm, klass, "getKeyframeType", clipInstanceGetKeyframeType);
-    defineNativeMethod(vm, klass, "getKeyframeWeight", clipInstanceGetKeyframeWeight);
     defineNativeMethod(vm, klass, "setStart", clipInstanceSetStart);
     defineNativeMethod(vm, klass, "getStart", clipInstanceGetStart);
     defineNativeMethod(vm, klass, "setDuration", clipInstanceSetDuration);
@@ -2502,57 +3552,86 @@ static void registerClipInstanceMethods(VM* vm, ObjClass* klass) {
     defineNativeMethod(vm, klass, "getZIndex", clipInstanceGetZIndex);
     defineNativeMethod(vm, klass, "setVisible", clipInstanceSetVisible);
     defineNativeMethod(vm, klass, "isVisible", clipInstanceIsVisible);
+    defineNativeMethod(vm, klass, "setPositionMode", clipInstanceSetPositionMode);
+    defineNativeMethod(vm, klass, "getPositionMode", clipInstanceGetPositionMode);
+    defineNativeMethod(vm, klass, "alignTo", clipInstanceAlignToBinding);
+    defineNativeMethod(vm, klass, "alignToComposition", clipInstanceAlignToCompositionBinding);
+    defineNativeMethod(vm, klass, "clearAlignmentTarget", clipInstanceClearAlignmentTargetBinding);
+    defineNativeMethod(vm, klass, "getAlignmentTargetClipId", clipInstanceGetAlignmentTargetClipId);
     defineNativeMethod(vm, klass, "remove", clipInstanceRemoveBinding);
     defineNativeMethod(vm, klass, "moveToTrack", clipInstanceMoveToTrack);
     defineNativeMethod(vm, klass, "duplicate", clipInstanceDuplicate);
-    defineNativeMethod(vm, klass, "shiftKeyframes", clipInstanceShiftKeyframes);
-    defineNativeMethod(vm, klass, "scaleKeyframeTimes", clipInstanceScaleKeyframeTimes);
-    defineNativeMethod(vm, klass, "copyKeyframesFrom", clipInstanceCopyKeyframesFrom);
     defineNativeMethod(vm, klass, "addEffect", clipInstanceAddEffectBinding);
     defineNativeMethod(vm, klass, "getEffectCount", clipInstanceGetEffectCountBinding);
     defineNativeMethod(vm, klass, "getEffect", clipInstanceGetEffectBinding);
     defineNativeMethod(vm, klass, "removeEffect", clipInstanceRemoveEffectBinding);
     defineNativeMethod(vm, klass, "clearEffects", clipInstanceClearEffectsBinding);
-    defineNativeMethod(vm, klass, "addKeyframeWithPreset", clipInstanceAddKeyframeWithPreset);
 }
 static void registerEffectMethods(VM* vm, ObjClass* klass) {
     defineNativeMethod(vm, klass, "getName", effectGetNameBinding);
-    defineNativeMethod(vm, klass, "setNumber", effectSetNumberBinding);
-    defineNativeMethod(vm, klass, "getNumber", effectGetNumberBinding);
-    defineNativeMethod(vm, klass, "setBool", effectSetBoolBinding);
-    defineNativeMethod(vm, klass, "getBool", effectGetBoolBinding);
-    defineNativeMethod(vm, klass, "setColor", effectSetColorBinding);
     defineNativeMethod(vm, klass, "setSource", effectSetSourceBinding);
     defineNativeMethod(vm, klass, "getSourceClipId", effectGetSourceClipIdBinding);
     defineNativeMethod(vm, klass, "linkNumber", effectLinkNumberBinding);
     defineNativeMethod(vm, klass, "linkColor", effectLinkColorBinding);
     defineNativeMethod(vm, klass, "unlinkNumber", effectUnlinkNumberBinding);
     defineNativeMethod(vm, klass, "unlinkColor", effectUnlinkColorBinding);
-    defineNativeMethod(vm, klass, "addNumberKeyframe", effectAddNumberKeyframeBinding);
-    defineNativeMethod(vm, klass, "setNumberKeyframe", effectSetNumberKeyframeBinding);
-    defineNativeMethod(vm, klass, "removeNumberKeyframe", effectRemoveNumberKeyframeBinding);
-    defineNativeMethod(vm, klass, "clearNumberKeyframes", effectClearNumberKeyframesBinding);
-    defineNativeMethod(vm, klass, "getNumberKeyframeCount", effectGetNumberKeyframeCountBinding);
-    defineNativeMethod(vm, klass, "getNumberKeyframeTime", effectGetNumberKeyframeTimeBinding);
-    defineNativeMethod(vm, klass, "getNumberKeyframeValue", effectGetNumberKeyframeValueBinding);
-    defineNativeMethod(vm, klass, "getNumberKeyframeType", effectGetNumberKeyframeTypeBinding);
-    defineNativeMethod(vm, klass, "getNumberKeyframeWeight", effectGetNumberKeyframeWeightBinding);
-    defineNativeMethod(vm, klass, "shiftNumberKeyframes", effectShiftNumberKeyframesBinding);
-    defineNativeMethod(vm, klass, "scaleNumberKeyframeTimes", effectScaleNumberKeyframeTimesBinding);
-    defineNativeMethod(vm, klass, "copyNumberKeyframesFrom", effectCopyNumberKeyframesFromBinding);
-    defineNativeMethod(vm, klass, "addColorKeyframe", effectAddColorKeyframeBinding);
-    defineNativeMethod(vm, klass, "setColorKeyframe", effectSetColorKeyframeBinding);
-    defineNativeMethod(vm, klass, "removeColorKeyframe", effectRemoveColorKeyframeBinding);
-    defineNativeMethod(vm, klass, "clearColorKeyframes", effectClearColorKeyframesBinding);
-    defineNativeMethod(vm, klass, "getColorKeyframeCount", effectGetColorKeyframeCountBinding);
-    defineNativeMethod(vm, klass, "getColorKeyframeTime", effectGetColorKeyframeTimeBinding);
-    defineNativeMethod(vm, klass, "getColorKeyframeValue", effectGetColorKeyframeValueBinding);
-    defineNativeMethod(vm, klass, "getColorKeyframeType", effectGetColorKeyframeTypeBinding);
-    defineNativeMethod(vm, klass, "getColorKeyframeWeight", effectGetColorKeyframeWeightBinding);
-    defineNativeMethod(vm, klass, "shiftColorKeyframes", effectShiftColorKeyframesBinding);
-    defineNativeMethod(vm, klass, "scaleColorKeyframeTimes", effectScaleColorKeyframeTimesBinding);
-    defineNativeMethod(vm, klass, "copyColorKeyframesFrom", effectCopyColorKeyframesFromBinding);
 }
+static void registerAnimatedPropertyMethods(VM* vm, ObjClass* klass) {
+    defineNativeMethod(vm, klass, "keyframes", animatedPropertyKeyframesBinding);
+    defineNativeMethod(vm, klass, "add", animatedPropertyAddBinding);
+    defineNativeMethod(vm, klass, "set", animatedPropertySetBinding);
+    defineNativeMethod(vm, klass, "withPreset", animatedPropertyWithPresetBinding);
+    defineNativeMethod(vm, klass, "remove", animatedPropertyRemoveBinding);
+    defineNativeMethod(vm, klass, "clear", animatedPropertyClearBinding);
+    defineNativeMethod(vm, klass, "count", animatedPropertyCountBinding);
+    defineNativeMethod(vm, klass, "time", animatedPropertyTimeBinding);
+    defineNativeMethod(vm, klass, "value", animatedPropertyValueBinding);
+    defineNativeMethod(vm, klass, "type", animatedPropertyTypeBinding);
+    defineNativeMethod(vm, klass, "weight", animatedPropertyWeightBinding);
+    defineNativeMethod(vm, klass, "shift", animatedPropertyShiftBinding);
+    defineNativeMethod(vm, klass, "scaleTimes", animatedPropertyScaleTimesBinding);
+    defineNativeMethod(vm, klass, "copyFrom", animatedPropertyCopyFromBinding);
+}
+
+static void registerTextAnimatorMethods(VM* vm, ObjClass* klass) {
+    defineNativeMethod(vm, klass, "addRangeSelector", textAnimatorAddRangeSelector);
+    defineNativeMethod(vm, klass, "getRangeSelectorCount", textAnimatorGetRangeSelectorCount);
+    defineNativeMethod(vm, klass, "getRangeSelector", textAnimatorGetRangeSelectorBinding);
+    defineNativeMethod(vm, klass, "addExpressionSelector", textAnimatorAddExpressionSelector);
+    defineNativeMethod(vm, klass, "getExpressionSelectorCount", textAnimatorGetExpressionSelectorCount);
+    defineNativeMethod(vm, klass, "getExpressionSelector", textAnimatorGetExpressionSelectorBinding);
+    defineNativeMethod(vm, klass, "addWigglySelector", textAnimatorAddWigglySelector);
+    defineNativeMethod(vm, klass, "getWigglySelectorCount", textAnimatorGetWigglySelectorCount);
+    defineNativeMethod(vm, klass, "getWigglySelector", textAnimatorGetWigglySelectorBinding);
+}
+
+static void registerRangeSelectorMethods(VM* vm, ObjClass* klass) {
+    defineNativeMethod(vm, klass, "setShape", rangeSelectorSetShape);
+    defineNativeMethod(vm, klass, "getShape", rangeSelectorGetShape);
+    defineNativeMethod(vm, klass, "setBasedOn", rangeSelectorSetBasedOn);
+    defineNativeMethod(vm, klass, "getBasedOn", rangeSelectorGetBasedOn);
+    defineNativeMethod(vm, klass, "setMode", rangeSelectorSetMode);
+    defineNativeMethod(vm, klass, "getMode", rangeSelectorGetMode);
+}
+
+static void registerExpressionSelectorMethods(VM* vm, ObjClass* klass) {
+    defineNativeMethod(vm, klass, "setExpression", expressionSelectorSetExpression);
+    defineNativeMethod(vm, klass, "getExpression", expressionSelectorGetExpression);
+    defineNativeMethod(vm, klass, "setCallback", expressionSelectorSetCallback);
+    defineNativeMethod(vm, klass, "getCallback", expressionSelectorGetCallback);
+    defineNativeMethod(vm, klass, "setBasedOn", expressionSelectorSetBasedOn);
+    defineNativeMethod(vm, klass, "getBasedOn", expressionSelectorGetBasedOn);
+    defineNativeMethod(vm, klass, "setMode", expressionSelectorSetMode);
+    defineNativeMethod(vm, klass, "getMode", expressionSelectorGetMode);
+}
+
+static void registerWigglySelectorMethods(VM* vm, ObjClass* klass) {
+    defineNativeMethod(vm, klass, "setBasedOn", wigglySelectorSetBasedOn);
+    defineNativeMethod(vm, klass, "getBasedOn", wigglySelectorGetBasedOn);
+    defineNativeMethod(vm, klass, "setMode", wigglySelectorSetMode);
+    defineNativeMethod(vm, klass, "getMode", wigglySelectorGetMode);
+}
+
 void registerVideoBindings(VM* vm) {
     size_t i;
     effect_registry_init(vm);
@@ -2568,6 +3647,11 @@ void registerVideoBindings(VM* vm) {
     defineClass(vm, "Project", projectInit, registerProjectMethods);
     // 新增 ClipInstance (无 init)
     defineClass(vm, "ClipInstance", clipInstanceInit, registerClipInstanceMethods);
+    defineClass(vm, "AnimatedProperty", animatedPropertyInit, registerAnimatedPropertyMethods);
+    defineClass(vm, "TextAnimator", textAnimatorInit, registerTextAnimatorMethods);
+    defineClass(vm, "RangeSelector", rangeSelectorInit, registerRangeSelectorMethods);
+    defineClass(vm, "ExpressionSelector", expressionSelectorInit, registerExpressionSelectorMethods);
+    defineClass(vm, "WigglySelector", wigglySelectorInit, registerWigglySelectorMethods);
     for (i = 0; i < sizeof(EFFECT_CLASS_SPECS) / sizeof(EFFECT_CLASS_SPECS[0]); i++) {
         defineEffectClass(vm, &EFFECT_CLASS_SPECS[i]);
     }

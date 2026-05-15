@@ -53,6 +53,11 @@ static void main_mark_roots(VM* vm) {
     }
 }
 
+static void reset_engine_context(EngineContext* ctx) {
+    if (!ctx) return;
+    memset(ctx, 0, sizeof(*ctx));
+}
+
 
 // --- 辅助函数 ---
 time_t get_file_mtime(const char* path) {
@@ -136,8 +141,8 @@ int main(int argc, char* argv[]) {
     VM vm;
     memset(&vm, 0, sizeof(VM));
 
-    EngineContext engine_ctx; 
-    memset(&engine_ctx, 0, sizeof(EngineContext));
+    EngineContext engine_ctx;
+    reset_engine_context(&engine_ctx);
     bool vm_initialized = false;
 
     // === 主循环 ===
@@ -163,11 +168,9 @@ int main(int argc, char* argv[]) {
             }
 
             // 2. 初始化新环境
+            reset_engine_context(&engine_ctx);
             initVM(&vm);
             vm_initialized = true;
-
-            engine_ctx.active_project = NULL; 
-            engine_ctx.active_project_obj = NULL;
             
             // 2. 挂载到 VM
             vm.user_data = &engine_ctx;

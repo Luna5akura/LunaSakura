@@ -188,7 +188,12 @@ static INLINE bool op_get_property(VM* vm, CallFrame** framePtr, Value** spPtr, 
         ObjInstance* instance = AS_INSTANCE(POP());
         ObjString* name = READ_STRING();
         Value value;
-        if (tableGet(&instance->fields, OBJ_VAL(name), &value)) {
+        bool handled = false;
+        if (!resolveBoundInstancePropertyGet(vm, instance, name, &value, &handled)) {
+            RETURN_ERROR();
+        } else if (handled) {
+            PUSH(value);
+        } else if (tableGet(&instance->fields, OBJ_VAL(name), &value)) {
             PUSH(value);
         } else {
             SYNC_VM();
@@ -207,7 +212,12 @@ static INLINE bool op_get_property_long(VM* vm, CallFrame** framePtr, Value** sp
         ObjInstance* instance = AS_INSTANCE(POP());
         ObjString* name = READ_STRING_LONG();
         Value value;
-        if (tableGet(&instance->fields, OBJ_VAL(name), &value)) {
+        bool handled = false;
+        if (!resolveBoundInstancePropertyGet(vm, instance, name, &value, &handled)) {
+            RETURN_ERROR();
+        } else if (handled) {
+            PUSH(value);
+        } else if (tableGet(&instance->fields, OBJ_VAL(name), &value)) {
             PUSH(value);
         } else {
             SYNC_VM();
@@ -224,7 +234,17 @@ static INLINE bool op_set_property(VM* vm, CallFrame** framePtr, Value** spPtr, 
         LOAD_FRAME();
     } else {
         ObjInstance* instance = AS_INSTANCE(PEEK(1));
-        tableSet(vm, &instance->fields, OBJ_VAL(READ_STRING()), PEEK(0));
+        ObjString* name = READ_STRING();
+        bool handled = false;
+        const char* error_message = NULL;
+        if (!syncBoundInstancePropertySet(vm, instance, name, PEEK(0), &handled, &error_message)) {
+            SYNC_VM();
+            if (!runtimeError(vm, "%s", error_message ? error_message : "Invalid property assignment.")) RETURN_ERROR();
+            LOAD_FRAME();
+        }
+        if (!handled) {
+            tableSet(vm, &instance->fields, OBJ_VAL(name), PEEK(0));
+        }
         Value value = POP();
         DROP(1);
         PUSH(value);
@@ -238,7 +258,17 @@ static INLINE bool op_set_property_long(VM* vm, CallFrame** framePtr, Value** sp
         LOAD_FRAME();
     } else {
         ObjInstance* instance = AS_INSTANCE(PEEK(1));
-        tableSet(vm, &instance->fields, OBJ_VAL(READ_STRING_LONG()), PEEK(0));
+        ObjString* name = READ_STRING_LONG();
+        bool handled = false;
+        const char* error_message = NULL;
+        if (!syncBoundInstancePropertySet(vm, instance, name, PEEK(0), &handled, &error_message)) {
+            SYNC_VM();
+            if (!runtimeError(vm, "%s", error_message ? error_message : "Invalid property assignment.")) RETURN_ERROR();
+            LOAD_FRAME();
+        }
+        if (!handled) {
+            tableSet(vm, &instance->fields, OBJ_VAL(name), PEEK(0));
+        }
         Value value = POP();
         DROP(1);
         PUSH(value);
@@ -992,10 +1022,6 @@ static INLINE bool op_build_list(VM* vm, CallFrame** framePtr, Value** spPtr, u8
         for (int i = itemCount - 1; i >= 0; i--) {
             list->items[i] = *(--SP);
         }
-        if (!isListHomogeneous(list)) {
-            if (!runtimeError(vm, "List elements must be of the same type.")) RETURN_ERROR();
-            LOAD_FRAME();
-        }
     }
     PUSH(OBJ_VAL(list));
     return true;
@@ -1028,8 +1054,30 @@ static INLINE bool op_closure(VM* vm, CallFrame** framePtr, Value** spPtr, u8** 
     }
     return true;
 }
+static INLINE bool op_closure_long(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
+    ObjFunction* function = AS_FUNCTION(READ_CONSTANT_LONG());
+    SYNC_VM();
+    ObjClosure* closure = newClosure(vm, function);
+    PUSH(OBJ_VAL(closure));
+    for (int i = 0; i < closure->upvalueCount; i++) {
+        u8 isLocal = READ_BYTE();
+        u8 index = READ_BYTE();
+        if (isLocal) {
+            closure->upvalues[i] = captureUpvalue(vm, FRAME->slots + index);
+        } else {
+            closure->upvalues[i] = FRAME->closure->upvalues[index];
+        }
+    }
+    return true;
+}
 static INLINE bool op_class(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
     ObjString* name = READ_STRING();
+    SYNC_VM();
+    PUSH(OBJ_VAL(newClass(vm, name)));
+    return true;
+}
+static INLINE bool op_class_long(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
+    ObjString* name = READ_STRING_LONG();
     SYNC_VM();
     PUSH(OBJ_VAL(newClass(vm, name)));
     return true;
@@ -1061,11 +1109,25 @@ static INLINE bool op_method(VM* vm, CallFrame** framePtr, Value** spPtr, u8** i
     POP();
     return true;
 }
+static INLINE bool op_method_long(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
+    Value method = PEEK(0);
+    ObjClass* klass = AS_CLASS(PEEK(1));
+    ObjString* name = READ_STRING_LONG();
+    tableSet(vm, &klass->methods, OBJ_VAL(name), method);
+    klass->cachedMethodName = name;
+    klass->cachedMethodValue = method;
+    klass->cachedMethodValid = true;
+    POP();
+    return true;
+}
 static INLINE bool op_return(VM* vm, CallFrame** framePtr, Value** spPtr, u8** ipPtr) {
     Value result = POP();
     closeUpvalues(vm, FRAME->slots);
     vm->frameCount--;
     if (vm->frameCount == 0) {
+        if (vm->captureReturn) {
+            vm->capturedReturn = result;
+        }
         POP();
         return false; // Stop interpreter
     }

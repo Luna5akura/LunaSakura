@@ -3,7 +3,7 @@
   "publisher": "Luna5akura",
   "displayName": "LunaCode",
   "description": "Syntax Highlighter and Language Support for luna",
-  "version": "0.0.6",
+  "version": "0.1.0",
   "engines": {
     "vscode": "^1.70.0"
   },
@@ -25,6 +25,12 @@
       "language": "luna",
       "scopeName": "source.luna",
       "path": "./luna.tmLanguage.json"
-    }]
+    }],
+    "snippets": [
+      {
+        "language": "luna",
+        "path": "./snippets/luna.code-snippets"
+      }
+    ]
   }
 }

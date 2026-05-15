@@ -8,6 +8,11 @@
 #include "core/memory.h"
 #include "engine/model/animation.h"
 
+extern bool syncBoundInstancePropertySet(VM* vm, ObjInstance* instance, ObjString* name, Value value,
+                                         bool* out_handled, const char** out_error);
+extern bool resolveBoundInstancePropertyGet(VM* vm, ObjInstance* instance, ObjString* name, Value* out_value,
+                                            bool* out_handled);
+
 // --- Helper Functions ---
 void closeUpvalues(VM* vm, Value* last) {
     while (vm->openUpvalues != NULL && vm->openUpvalues->location >= last) {
@@ -65,6 +70,8 @@ void initVM(VM* vm) {
     vm->user_data = NULL;
     vm->host_mark_roots = NULL;
     vm->handlerCount = 0;
+    vm->captureReturn = false;
+    vm->capturedReturn = NIL_VAL;
 }
 void freeVM(VM* vm) {
     reset_user_presets();
@@ -100,8 +107,8 @@ static InterpretResult run(VM* vm) {
         &&OP_NOT_EQUAL, &&OP_GREATER, &&OP_GREATER_EQUAL, &&OP_LESS, &&OP_LESS_EQUAL,
         &&OP_ADD, &&OP_SUBTRACT, &&OP_MULTIPLY, &&OP_DIVIDE, &&OP_NOT, &&OP_NEGATE,
         &&OP_PRINT, &&OP_JUMP, &&OP_JUMP_IF_FALSE, &&OP_LOOP, &&OP_CALL, &&OP_CALL_KW,
-        &&OP_CHECK_DEFAULT,&&OP_ITER_INIT, &&OP_ITER_NEXT,&&OP_LIST_APPEND,&&OP_BUILD_LIST, &&OP_BUILD_DICT, &&OP_CLOSURE,
-        &&OP_CLOSE_UPVALUE, &&OP_RETURN, &&OP_CLASS, &&OP_INHERIT, &&OP_METHOD,
+        &&OP_CHECK_DEFAULT,&&OP_ITER_INIT, &&OP_ITER_NEXT,&&OP_LIST_APPEND,&&OP_BUILD_LIST, &&OP_BUILD_DICT, &&OP_CLOSURE, &&OP_CLOSURE_LONG,
+        &&OP_CLOSE_UPVALUE, &&OP_RETURN, &&OP_CLASS, &&OP_CLASS_LONG, &&OP_INHERIT, &&OP_METHOD, &&OP_METHOD_LONG,
         &&OP_GET_PROPERTY, &&OP_GET_PROPERTY_LONG, &&OP_SET_PROPERTY, &&OP_SET_PROPERTY_LONG,
         &&OP_GET_SUPER, &&OP_GET_SUPER_LONG, &&OP_INVOKE, &&OP_INVOKE_LONG,
         &&OP_INVOKE_KW, &&OP_INVOKE_KW_LONG, &&OP_SUPER_INVOKE, &&OP_SUPER_INVOKE_LONG,
@@ -187,9 +194,12 @@ static InterpretResult run(VM* vm) {
         OP_BUILD_LIST: if (!op_build_list(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_BUILD_DICT: op_build_dict(vm, &frame, &sp, &ip); continue;
         OP_CLOSURE: op_closure(vm, &frame, &sp, &ip); continue;
+        OP_CLOSURE_LONG: op_closure_long(vm, &frame, &sp, &ip); continue;
         OP_CLASS: op_class(vm, &frame, &sp, &ip); continue;
+        OP_CLASS_LONG: op_class_long(vm, &frame, &sp, &ip); continue;
         OP_INHERIT: if (!op_inherit(vm, &frame, &sp, &ip)) return INTERPRET_RUNTIME_ERROR; continue;
         OP_METHOD: op_method(vm, &frame, &sp, &ip); continue;
+        OP_METHOD_LONG: op_method_long(vm, &frame, &sp, &ip); continue;
         OP_RETURN: if (!op_return(vm, &frame, &sp, &ip)) return INTERPRET_OK; continue;
         OP_TRY: op_try(vm, &frame, &sp, &ip); continue;
         OP_POP_HANDLER: vm->handlerCount--; continue;
@@ -207,4 +217,42 @@ InterpretResult interpret(VM* vm, Chunk* chunk) {
     push(vm, OBJ_VAL(closure));
     call(vm, closure, 0);
     return run(vm);
+}
+
+InterpretResult vm_call_value(VM* vm, Value callee, i32 argCount, Value* args, Value* out_result) {
+    InterpretResult result;
+    Value captured = NIL_VAL;
+    if (!vm) return INTERPRET_RUNTIME_ERROR;
+    if (vm->frameCount != 0) {
+        if (!runtimeError(vm, "Nested VM callback invocation is not supported in the current state.")) {
+            resetStack(vm);
+        }
+        return INTERPRET_RUNTIME_ERROR;
+    }
+
+    resetStack(vm);
+    push(vm, callee);
+    for (i32 i = 0; i < argCount; i++) {
+        push(vm, args[i]);
+    }
+    if (!callValue(vm, callee, argCount)) {
+        resetStack(vm);
+        return INTERPRET_RUNTIME_ERROR;
+    }
+
+    if (vm->frameCount > 0) {
+        vm->captureReturn = true;
+        vm->capturedReturn = NIL_VAL;
+        result = run(vm);
+        captured = vm->capturedReturn;
+        vm->captureReturn = false;
+    } else {
+        result = INTERPRET_OK;
+        if (vm->stackTop > vm->stack) {
+            captured = pop(vm);
+        }
+    }
+    resetStack(vm);
+    if (out_result) *out_result = captured;
+    return result;
 }

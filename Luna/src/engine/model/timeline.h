@@ -28,7 +28,34 @@ typedef struct {
         Animation font_size;  // 用于文字图层等
     } anim;
     EffectInstance* effectChain;   // 新增：效果链
+    u8 position_mode;
+    u8 alignment_target_type;
+    u8 self_anchor;
+    u8 target_anchor;
+    u32 alignment_target_clip_id;
 } TimelineClip;
+
+typedef enum {
+    TIMELINE_POSITION_MODE_POSITION = 0,
+    TIMELINE_POSITION_MODE_ANCHOR = 1
+} TimelinePositionMode;
+
+typedef enum {
+    TIMELINE_ALIGNMENT_TARGET_COMPOSITION = 0,
+    TIMELINE_ALIGNMENT_TARGET_CLIP = 1
+} TimelineAlignmentTargetType;
+
+typedef enum {
+    TIMELINE_ANCHOR_TOP_LEFT = 0,
+    TIMELINE_ANCHOR_TOP_CENTER = 1,
+    TIMELINE_ANCHOR_TOP_RIGHT = 2,
+    TIMELINE_ANCHOR_CENTER_LEFT = 3,
+    TIMELINE_ANCHOR_CENTER = 4,
+    TIMELINE_ANCHOR_CENTER_RIGHT = 5,
+    TIMELINE_ANCHOR_BOTTOM_LEFT = 6,
+    TIMELINE_ANCHOR_BOTTOM_CENTER = 7,
+    TIMELINE_ANCHOR_BOTTOM_RIGHT = 8
+} TimelineAnchorPoint;
 
 typedef struct {
     i32 id;

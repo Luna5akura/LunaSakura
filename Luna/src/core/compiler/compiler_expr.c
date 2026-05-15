@@ -4,18 +4,6 @@
 #include "compiler_internal.h"
 #include "core/memory.h"
 
-static void emitConstantOperandInstruction(u8 shortOp, u8 longOp, u32 operand) {
-    if (operand <= UINT8_MAX) {
-        emitBytes(shortOp, (u8)operand);
-        return;
-    }
-
-    emitByte(longOp);
-    emitByte((u8)(operand & 0xFF));
-    emitByte((u8)((operand >> 8) & 0xFF));
-    emitByte((u8)((operand >> 16) & 0xFF));
-}
-
 static void emitInvokeInstruction(u8 shortOp, u8 longOp, u32 name, u8 argCount) {
     emitConstantOperandInstruction(shortOp, longOp, name);
     emitByte(argCount);
@@ -97,8 +85,8 @@ void argumentList(u8* outArgCount, u8* outKwCount) {
 
             if (parser.current.type == TOKEN_IDENTIFIER && peekChar(&scanner) == '=') {
                 isKeyword = true;
-                u8 nameConst = identifierConstant(&parser.current);
-                emitBytes(OP_CONSTANT, nameConst); 
+                u32 nameConst = identifierConstant(&parser.current);
+                emitConstantOperandInstruction(OP_CONSTANT, OP_CONSTANT_LONG, nameConst);
                 consume(TOKEN_IDENTIFIER, "Expect keyword name.");
                 consume(TOKEN_EQUAL, "Expect '='.");
                 
@@ -273,7 +261,7 @@ static void listLiteral(bool canAssign) {
         
         int exitJump = emitJump(OP_ITER_NEXT);
         
-        // 进入循环体 Scope (var 所在)
+        // 进入循环体 Scope (循环变量所在)
         beginScope();
         addLocal(varName); 
         defineVariable(0);
@@ -290,7 +278,7 @@ static void listLiteral(bool canAssign) {
         emitBytes(OP_LIST_APPEND, listSlot);
         
         // 7. 循环收尾
-        endScope(); // 弹出 var (循环变量)
+        endScope(); // 弹出循环变量
         
         emitLoop(loop.start);
         patchJump(exitJump);
@@ -428,7 +416,7 @@ static void lambda(bool canAssign) {
     }
     
     ObjFunction* func = endCompiler();
-    emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(func)));
+    emitConstantOperandInstruction(OP_CLOSURE, OP_CLOSURE_LONG, makeConstant(OBJ_VAL(func)));
     for (i32 i = 0; i < func->upvalueCount; i++) {
         emitByte(compiler.upvalues[i].isLocal ? 1 : 0);
         emitByte(compiler.upvalues[i].index);

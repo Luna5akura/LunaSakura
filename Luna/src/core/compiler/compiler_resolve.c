@@ -1,6 +1,7 @@
 // src/core/compiler/compiler_resolve.c
 
 #include "compiler_internal.h"
+#include "core/memory.h"
 
 Token syntheticToken(const char* text) {
     Token token;
@@ -27,6 +28,51 @@ static void emitGlobalOperandInstruction(u8 shortOp, u8 longOp, u32 operand) {
     emitByte((u8)(operand & 0xFF));
     emitByte((u8)((operand >> 8) & 0xFF));
     emitByte((u8)((operand >> 16) & 0xFF));
+}
+
+static Compiler* getScriptCompiler(void) {
+    Compiler* compiler = current;
+    while (compiler != NULL && compiler->type != TYPE_SCRIPT) {
+        compiler = compiler->enclosing;
+    }
+    return compiler;
+}
+
+bool hasKnownScriptGlobal(Token* name) {
+    Compiler* script = getScriptCompiler();
+    if (script == NULL) return false;
+
+    for (i32 i = 0; i < script->globalCount; i++) {
+        if (identifiersEqual(name, &script->globalNames[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void rememberScriptGlobal(Token* name) {
+    Compiler* script = getScriptCompiler();
+    if (script == NULL || hasKnownScriptGlobal(name)) return;
+
+    if (script->globalCount + 1 > script->globalCapacity) {
+        i32 oldCapacity = script->globalCapacity;
+        i32 newCapacity = GROW_CAPACITY(oldCapacity);
+        script->globalNames = GROW_ARRAY(compilingVM, Token, script->globalNames, oldCapacity, newCapacity);
+        script->globalCapacity = newCapacity;
+    }
+
+    script->globalNames[script->globalCount++] = *name;
+}
+
+static void declareLocalToken(Token* name) {
+    for (i32 i = current->localCount - 1; i >= 0; i--) {
+        Local* local = &current->locals[i];
+        if (local->depth != -1 && local->depth < current->scopeDepth) break;
+        if (identifiersEqual(name, &local->name)) {
+            error("Already a variable with this name in this scope.");
+        }
+    }
+    addLocal(*name);
 }
 
 void addLocal(Token name) {
@@ -86,15 +132,7 @@ i32 resolveUpvalue(Compiler* compiler, Token* name) {
 
 void declareVariable() {
     if (current->scopeDepth == 0) return;
-    Token* name = &parser.previous;
-    for (i32 i = current->localCount - 1; i >= 0; i--) {
-        Local* local = &current->locals[i];
-        if (local->depth != -1 && local->depth < current->scopeDepth) break;
-        if (identifiersEqual(name, &local->name)) {
-            error("Already a variable with this name in this scope.");
-        }
-    }
-    addLocal(*name);
+    declareLocalToken(&parser.previous);
 }
 
 void defineVariable(u32 global) {
@@ -130,12 +168,22 @@ void namedVariable(Token name, bool canAssign) {
             emitBytes(getOp, (u8)arg);
         }
     } else {
-        // [修改] 处理全局变量索引可能 > 255 的情况
         u32 globalArg = identifierConstant(&name);
         
         if (canAssign && match(TOKEN_EQUAL)) {
             expression();
-            emitGlobalOperandInstruction(OP_SET_GLOBAL, OP_SET_GLOBAL_LONG, globalArg);
+            if (current->scopeDepth > 0 && !hasKnownScriptGlobal(&name)) {
+                declareLocalToken(&name);
+                defineVariable(0);
+            } else {
+                if (hasKnownScriptGlobal(&name)) {
+                    emitGlobalOperandInstruction(OP_SET_GLOBAL, OP_SET_GLOBAL_LONG, globalArg);
+                } else {
+                    rememberScriptGlobal(&name);
+                    emitGlobalOperandInstruction(OP_DEFINE_GLOBAL, OP_DEFINE_GLOBAL_LONG, globalArg);
+                    emitGlobalOperandInstruction(OP_GET_GLOBAL, OP_GET_GLOBAL_LONG, globalArg);
+                }
+            }
         } else {
             emitGlobalOperandInstruction(OP_GET_GLOBAL, OP_GET_GLOBAL_LONG, globalArg);
         }

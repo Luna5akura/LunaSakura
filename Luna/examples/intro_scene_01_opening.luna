@@ -1,0 +1,154 @@
+width = 1280
+height = 720
+fps = 30
+duration = 6
+gridBlock = 48
+
+proj = Project(width, height, fps)
+tl = Timeline(width, height, fps)
+proj.setTimeline(tl)
+
+# 背景底板：渐变 + 置换 + 轻网格
+bg = Solid(width, height, 245, 245, 245, 255)
+bgInst = tl.add(0, bg, 0)
+    .setDuration(duration)
+
+ramp = bgInst.addEffect(
+    GradientRamp(
+        startX=0.0,
+        startY=0.0,
+        endX=1.0,
+        endY=1.0,
+        blend=1.0
+    )
+)
+ramp.startColor.keyframes([
+    [0.0, [255, 120, 84, 255]],
+    [3.0, [255, 82, 176, 255]],
+    [6.0, [255, 120, 84, 255]]
+])
+ramp.endColor.keyframes([
+    [0.0, [56, 214, 255, 255]],
+    [3.0, [150, 255, 124, 255]],
+    [6.0, [56, 214, 255, 255]]
+])
+
+noiseSource = Solid(width, height, 0, 0, 0, 255)
+noiseInst = tl.add(1, noiseSource, 0)
+    .setDuration(duration)
+    .setVisible(false)
+
+fractal = noiseInst.addEffect(
+    FractalNoise(
+        scale=96,
+        contrast=1.55,
+        brightness=0.02,
+        octaves=5,
+        amount=1.0,
+        offsetX=0,
+        offsetY=0
+    )
+)
+fractal.evolution.keyframes([
+    [0.0, 0.0],
+    [duration, 70.0]
+])
+
+displacement = bgInst.addEffect(
+    DisplacementMap(
+        scaleX=180,
+        scaleY=50,
+        amount=0.75,
+        offsetX=0,
+        offsetY=0,
+        useLuma=true
+    )
+)
+displacement.setSource(noiseInst)
+
+bgInst.addEffect(
+    Grid(
+        sizeX=width / gridBlock,
+        sizeY=height / gridBlock,
+        lineWidth=0.04,
+        opacity=0.22,
+        color=[12, 16, 24, 255]
+    )
+)
+
+# 标题组
+title = Text("Luna")
+    .setFont("assets/fonts/arial.ttf")
+    .setSize(150)
+    .setColor(255, 248, 240)
+    .setLetterSpacing(14)
+    .setStroke(true, 3, 10, 14, 20)
+    .setPos(270, 246)
+
+subtitle = Text("A programmable motion graphics language")
+    .setFont("assets/fonts/arial.ttf")
+    .setSize(34)
+    .setColor(245, 244, 242)
+    .setLetterSpacing(4)
+    .setPos(274, 418)
+
+tag = Text("Script motion. Render ideas.")
+    .setFont("assets/fonts/arial.ttf")
+    .setSize(24)
+    .setColor(220, 228, 236)
+    .setLetterSpacing(2)
+    .setPos(278, 474)
+
+titleInst = tl.add(2, title, 0)
+    .setDuration(duration)
+titleInst.opacity.keyframes([
+    [0.0, 0.0],
+    [0.8, 1.0]
+])
+titleInst.y.keyframes([
+    [0.0, 278],
+    [1.1, 246]
+])
+titleInst.addEffect(
+    Glow(
+        radius=26,
+        intensity=1.35,
+        threshold=0.45,
+        softness=0.24,
+        color=[255, 214, 176, 255]
+    )
+)
+
+subtitleInst = tl.add(3, subtitle, 0)
+    .setDuration(duration)
+subtitleInst.opacity.keyframes([
+    [0.6, 0.0],
+    [1.4, 1.0]
+])
+subtitleInst.y.keyframes([
+    [0.6, 448],
+    [1.4, 418]
+])
+
+tagInst = tl.add(4, tag, 0)
+    .setDuration(duration)
+tagInst.opacity.keyframes([
+    [1.1, 0.0],
+    [1.9, 0.78]
+])
+tagInst.y.keyframes([
+    [1.1, 500],
+    [1.9, 474]
+])
+tagInst.addEffect(
+    Glow(
+        radius=14,
+        intensity=0.75,
+        threshold=0.52,
+        softness=0.2,
+        color=[188, 226, 255, 255]
+    )
+)
+
+print tl.getDuration()
+proj.preview(0, duration)

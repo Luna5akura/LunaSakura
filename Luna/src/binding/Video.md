@@ -80,7 +80,7 @@
 #### `Text(content: String)`
 创建一个包含指定内容的文字图层。
 * **默认属性**: 字体 Arial, 字号 32px, 颜色 白色, 时长 5秒。
-* **示例**: `var t = Text("Hello World")`
+* **示例**: `t = Text("Hello World")`
 
 ### 方法 (Text 特有)
 #### `setFont(path: String)`
@@ -95,11 +95,34 @@
 设置文字颜色 (0-255)。
 * **示例**: `t.setColor(255, 0, 0)`
 
+#### `addAnimator()`
+向 `Text` 图层添加一个 `TextAnimator`，用于逐字符文本动画。
+* **返回值**: `TextAnimator`
+
+#### `getAnimatorCount()`
+返回当前文字图层上的文本动画器数量。
+
+#### `getAnimator(index: Number)`
+返回指定索引处的 `TextAnimator`。
+
 ### 方法 (通用)
 * `trim(start, duration)`: 调整文字显示的入点和持续时间。
 * `setPos(x, y)`: 设置文字位置。
 * `setScale(scale)`: 设置文字缩放。
 * `setOpacity(opacity)`: 设置透明度。
+
+### 第一阶段限制
+当前第一阶段文本动画器主要对齐 AE 的基础工作流：
+* 支持 `RangeSelector`
+* 支持逐字符 (`characters`) 选择
+* 支持位置、缩放、旋转、透明度、tracking、描边宽度、填充色、描边色
+* 所有这些属性都支持关键帧
+
+暂未支持：
+* `words` / `lines`
+* `Wiggly Selector`
+* `Expression Selector`
+* 真正的表达式求值系统
 
 ---
 ## 3. Image 类 (图片图层)
@@ -303,87 +326,414 @@
 ## 8. ClipInstance 类 (时间线素材实例) [新增]
 `ClipInstance` 是 `Timeline.add` 的返回值，用于管理时间线上特定素材实例的关键帧动画。它不支持直接构造（无需 `new`），仅通过 `Timeline.add` 获取。该类支持通用的关键帧系统，适用于所有数值属性，并可轻松扩展到未来类型（如形状图层、文字图层、图片图层）。
 
+### 定位模式
+`ClipInstance` 现在支持两种定位方式：
+* `position`：传统绝对位置模式，`x/y` 直接表示左上角位置。
+* `anchor`：锚点对齐模式，`x/y` 会作为对齐完成后的额外偏移量。
+
+#### `setPositionMode(mode: String)`
+切换定位模式。支持：
+* `position`
+* `anchor`
+
+#### `getPositionMode()`
+返回当前定位模式名称。
+
+#### `alignTo(target: ClipInstance, selfAnchor: String, targetAnchor: String)`
+切换到锚点模式，并把当前实例的某个锚点对齐到目标实例的某个锚点。
+
+#### `alignToComposition(selfAnchor: String, targetAnchor: String)`
+切换到锚点模式，并把当前实例的某个锚点对齐到整个合成画幅的某个锚点。
+
+#### `clearAlignmentTarget()`
+清除当前对齐目标，回到“对齐合成画幅”的目标类型，但不会强制切回 `position` 模式。
+
+#### `getAlignmentTargetClipId()`
+如果当前正在对齐某个图层实例，则返回目标 `ClipInstance` 的内部 `clip_id`；否则返回 `nil`。
+
+支持的锚点名称：
+* `top_left`
+* `top_center`
+* `top_right`
+* `center_left`
+* `center`
+* `center_right`
+* `bottom_left`
+* `bottom_center`
+* `bottom_right`
+
+示例：
+
+```luna
+badgeInst = tl.add(1, badge, 0)
+    .setDuration(2)
+    .alignTo(titleInst, "top_left", "bottom_left")
+
+badgeInst.alignToComposition("center", "center")
+```
+
+当前第一版的对齐边界基于图层的未旋转矩形尺寸计算；也就是说，缩放会参与对齐，旋转后的外接轮廓暂时不会参与锚点求解。这是为了给后续更完整的约束布局留出扩展空间。
+
+## 8A. TextAnimator 类
+`TextAnimator` 挂在 `Text` 图层本体上，用于给文字的每个字符施加动画影响。
+
 ### 方法
-#### `addKeyframe(property: String, time: Number, value: Number, type: String, [weight: Number])`
-为指定属性添加关键帧。
-* **参数**:
-    * `property`: 属性名称 (字符串)。支持："x"、"y"、"scale_x"、"scale_y"、"rotation"、"opacity"、"volume"、"font_size"（适用于文字图层）。
-    * `time`: 关键帧时间（秒，从素材在时间线上的起始时间开始计算）。
-    * `value`: 属性值（Number）。
-    * `type`: 插值类型（字符串）。支持："hold"（冻结）、"linear"（线性）、"bezier"（贝塞尔）。
-    * `weight` (可选): 贝塞尔权重（0.0 - 1.0，调节曲线强度）。仅在 `type` 为 "bezier" 时有效，默认 0.0。
-* **示例**: `inst.addKeyframe("opacity", 0, 0, "linear")` // 在 0 秒时不透明度为 0，使用线性插值到下一个关键帧。
+#### `addRangeSelector()`
+添加一个 `RangeSelector`。
+* **返回值**: `RangeSelector`
 
-#### `addKeyframeWithPreset(property: String, time: Number, value: Number, preset: String)`
+#### `addExpressionSelector()`
+添加一个 `ExpressionSelector`。
+* **返回值**: `ExpressionSelector`
+
+#### `addWigglySelector()`
+添加一个 `WigglySelector`。
+* **返回值**: `WigglySelector`
+
+#### `getRangeSelectorCount()`
+返回当前动画器上的选择器数量。
+
+#### `getRangeSelector(index: Number)`
+返回指定索引处的 `RangeSelector`。
+
+#### `getExpressionSelectorCount()`
+返回当前动画器上的表达式选择器数量。
+
+#### `getExpressionSelector(index: Number)`
+返回指定索引处的 `ExpressionSelector`。
+
+#### `getWigglySelectorCount()`
+返回当前动画器上的 wiggly 选择器数量。
+
+#### `getWigglySelector(index: Number)`
+返回指定索引处的 `WigglySelector`。
+
+### 可动画属性
+以下属性会直接返回 `AnimatedProperty`：
+* `x`
+* `y`
+* `scaleX`
+* `scaleY`
+* `rotation`
+* `opacity`
+* `tracking`
+* `strokeWidth`
+* `anchorX`
+* `anchorY`
+* `skew`
+* `skewAxis`
+* `fillOpacity`
+* `strokeOpacity`
+* `fillHue`
+* `fillSaturation`
+* `fillBrightness`
+* `strokeHue`
+* `strokeSaturation`
+* `strokeBrightness`
+* `characterOffset`
+* `characterValue`
+* `fillColor`
+* `strokeColor`
+
+示例：
+
+```luna
+anim = text.addAnimator()
+anim.y = 40
+anim.opacity.keyframes([
+    [0.0, -100.0],
+    [1.0, 0.0]
+])
+anim.fillColor = [255, 120, 80, 255]
+```
+
+说明：
+* `scaleX` / `scaleY` 以百分比增量方式工作，`100` 表示额外放大 100%。
+* `opacity` 以百分比增量方式工作，`-100` 表示完全隐藏，`0` 表示不改动原透明度。
+* `fillOpacity` / `strokeOpacity` 也是百分比增量，`-100` 表示完全压到 0，`0` 表示不改动。
+* `anchorX` / `anchorY` 会改变单字符的局部变换支点。
+* `skew` / `skewAxis` 提供更接近 AE 的逐字符斜切控制。
+* `fillHue` / `fillSaturation` / `fillBrightness` 和 `strokeHue` / `strokeSaturation` / `strokeBrightness`
+  会按 HSV 方式对每个字符的填充/描边颜色做增量调节。
+* `characterOffset` 会按字符码偏移当前字符。
+* `characterValue` 会直接把字符替换成指定字符码对应的字符。
+
+## 8B. RangeSelector 类
+`RangeSelector` 决定一个 `TextAnimator` 对哪些字符、以多大权重生效。
+
+### 可动画属性
+这些属性返回 `AnimatedProperty`：
+* `start`
+* `end`
+* `offset`
+* `amount`
+* `easeHigh`
+* `easeLow`
+
+### 方法
+#### `setShape(name: String)`
+设置选择器形状。当前支持：
+* `square`
+* `ramp_up`
+* `ramp_down`
+* `triangle`
+* `smooth`
+
+#### `getShape()`
+返回当前选择器形状名称。
+
+#### `setBasedOn(name: String)`
+设置选择基础。当前支持：
+* `characters`
+* `words`
+* `lines`
+
+#### `getBasedOn()`
+返回当前 `basedOn` 名称。
+
+#### `setMode(name: String)`
+设置选择器组合模式。支持：
+* `add`
+* `subtract`
+* `intersect`
+* `min`
+* `max`
+
+#### `getMode()`
+返回当前选择器组合模式名称。
+
+示例：
+
+```luna
+selector = anim.addRangeSelector()
+selector.setShape("smooth")
+selector.setBasedOn("characters")
+selector.offset.keyframes([
+    [0.0, -100.0],
+    [2.0, 100.0]
+])
+```
+
+## 8C. ExpressionSelector 类
+`ExpressionSelector` 会对每个字符、单词或行计算一条数值表达式，并把结果当成动画器影响权重。
+
+### 可动画属性
+这些属性返回 `AnimatedProperty`：
+* `amount`
+
+### 方法
+#### `setExpression(source: String)`
+设置表达式字符串。表达式会按字符逐个求值。
+
+当前内置变量：
+* `index` / `i`
+* `count` / `n`
+* `time` / `t`
+* `position` / `p`
+* `charIndex`, `charCount`
+* `wordIndex`, `wordCount`
+* `lineIndex`, `lineCount`
+* `PI`, `TAU`
+
+当前内置函数：
+* `sin`, `cos`, `tan`
+* `abs`, `floor`, `ceil`, `round`
+* `sqrt`, `exp`, `log`
+* `min`, `max`, `clamp`
+* `mix`, `smoothstep`
+* `frac`, `sign`, `pow`, `mod`
+* `step`, `ifelse`
+
+#### `getExpression()`
+返回当前表达式字符串。
+
+#### `setBasedOn(name: String)`
+设置表达式选择基础，支持：
+* `characters`
+* `words`
+* `lines`
+
+#### `getBasedOn()`
+返回当前 `basedOn` 名称。
+
+#### `setMode(name: String)`
+设置组合模式，支持：
+* `add`
+* `subtract`
+* `intersect`
+* `min`
+* `max`
+
+#### `getMode()`
+返回当前组合模式。
+
+#### `setCallback(fn)`
+设置一个 Luna 可调用对象。回调会收到一个上下文字典，返回数值后直接作为该 selector 的逐字符权重来源。
+
+上下文字典会包含：
+* `index`
+* `count`
+* `time`
+* `position`
+* `charIndex`
+* `charCount`
+* `wordIndex`
+* `wordCount`
+* `lineIndex`
+* `lineCount`
+
+#### `getCallback()`
+返回当前 callback；如果没有设置则返回 `nil`。
+
+示例：
+
+```luna
+expr = anim.addExpressionSelector()
+expr.setExpression("smoothstep(0, 100, position) * 100")
+expr.setBasedOn("characters")
+expr.setMode("add")
+expr.amount.keyframes([
+    [0.0, 0.0],
+    [0.4, 100.0]
+])
+
+fun selectorFn(ctx):
+    return dict_get(ctx, "position")
+
+expr.setCallback(selectorFn)
+```
+
+## 8D. WigglySelector 类
+`WigglySelector` 会持续生成随时间变化的随机权重，适合做逐字符抖动、跳动、呼吸感动画。
+
+### 可动画属性
+这些属性返回 `AnimatedProperty`：
+* `amount`
+* `wigglesPerSecond`
+* `correlation`
+* `temporalPhase`
+* `spatialPhase`
+* `minAmount`
+* `maxAmount`
+
+### 方法
+#### `setBasedOn(name: String)`
+设置选择基础，支持：
+* `characters`
+* `words`
+* `lines`
+
+#### `getBasedOn()`
+返回当前 `basedOn` 名称。
+
+#### `setMode(name: String)`
+设置组合模式，支持：
+* `add`
+* `subtract`
+* `intersect`
+* `min`
+* `max`
+
+#### `getMode()`
+返回当前组合模式名称。
+
+说明：
+* `wigglesPerSecond` 控制时间变化频率。
+* `correlation` 越高，字符之间的变化越趋向一致；越低，每个字符越独立。
+* `temporalPhase` / `spatialPhase` 分别控制时间相位和空间相位。
+* `minAmount` / `maxAmount` 用于限制输出权重范围。
+
+示例：
+
+```luna
+wiggly = anim.addWigglySelector()
+wiggly.setBasedOn("characters")
+wiggly.amount = 40
+wiggly.wigglesPerSecond = 2.0
+wiggly.correlation = 20
+wiggly.minAmount = 10
+wiggly.maxAmount = 100
+```
+
+### 方法
+可动画属性不再通过字符串接口管理，而是直接返回 `AnimatedProperty` 对象。当前支持：
+
+- `inst.x`
+- `inst.y`
+- `inst.scale_x`
+- `inst.scale_y`
+- `inst.rotation`
+- `inst.opacity`
+- `inst.volume`
+- `inst.font_size`
+
+这些属性都支持下面这组方法：
+
+#### `property.keyframes(entries: List)`
+批量重建关键帧。调用时会先清空现有关键帧，再按顺序写入。
+
+- 数值属性条目格式：
+  - `[time, value]`
+  - `[time, value, type]`
+  - `[time, value, type, weight]`
+- 颜色属性条目格式：
+  - `[time, [r, g, b, a]]`
+  - `[time, [r, g, b, a], type]`
+  - `[time, [r, g, b, a], type, weight]`
+
+#### `property.add(time: Number, value, [type: String], [weight: Number])`
+追加关键帧。
+
+#### `property.set(time: Number, value, [type: String], [weight: Number])`
+设置关键帧；同时间点存在则覆盖，否则新增。
+
+#### `property.withPreset(time: Number, value, preset: String)`
 使用预设添加关键帧。
-* **参数**:
-    * `property`、`time`、`value`: 同上。
-    * `preset`: 预设名称 (字符串)。内置预设："hold"、"linear"、"ease_in"、"ease_out"、"ease_in_out"。可使用自定义预设（通过全局 `addUserPreset` 添加）。
-* **示例**: `inst.addKeyframeWithPreset("rotation", 2, 180, "ease_in_out")` // 在 2 秒时旋转到 180 度，使用 ease_in_out 预设。
 
-#### `setKeyframe(property: String, time: Number, value: Number, type: String, [weight: Number])`
-设置关键帧。
-* **描述**:
-    * 如果相同 `property` 在相同 `time` 上已经存在关键帧，则覆盖其值和插值参数。
-    * 如果不存在，则新增关键帧。
-* **参数**:
-    * `property`、`time`、`value`、`type`、`weight`: 同 `addKeyframe(...)`。
-* **示例**: `inst.setKeyframe("x", 0, 320, "bezier", 0.4)`
+#### `property.remove(time: Number)`
+删除指定时间点的关键帧，返回 `true` / `false`。
 
-#### `removeKeyframe(property: String, time: Number)`
-删除指定时间点上的关键帧。
-* **参数**:
-    * `property`: 属性名称。
-    * `time`: 关键帧时间。
-* **返回值**:
-    * `true`: 删除成功。
-    * `false`: 该时间点不存在关键帧。
-* **示例**: `inst.removeKeyframe("opacity", 5)`
+#### `property.clear()`
+清空该属性上的全部关键帧。
 
-#### `clearKeyframes(property: String)`
-清空某个属性上的全部关键帧。
-* **参数**:
-    * `property`: 属性名称。
-* **示例**: `inst.clearKeyframes("rotation")`
+#### `property.count()`
+返回关键帧数量。
 
-#### `getKeyframeCount(property: String)`
-获取某个属性当前的关键帧数量。
-* **参数**:
-    * `property`: 属性名称。
-* **返回值**: 关键帧数量（Number）。
-* **示例**: `print inst.getKeyframeCount("x")`
+#### `property.time(index: Number)`
+返回指定关键帧的时间，越界返回 `nil`。
 
-#### `getKeyframeTime(property: String, index: Number)`
-获取某个属性下指定索引关键帧的时间。
-* **参数**:
-    * `property`: 属性名称。
-    * `index`: 关键帧索引，按时间排序，从 `0` 开始。
-* **返回值**:
-    * 成功时返回关键帧时间。
-    * 越界时返回 `nil`。
-* **示例**: `print inst.getKeyframeTime("x", 0)`
+#### `property.value(index: Number)`
+返回指定关键帧的值。颜色属性返回 `[r, g, b, a]`。
 
-#### `getKeyframeValue(property: String, index: Number)`
-获取某个属性下指定索引关键帧的值。
-* **参数**:
-    * `property`: 属性名称。
-    * `index`: 关键帧索引，按时间排序，从 `0` 开始。
-* **返回值**:
-    * 成功时返回关键帧值。
-    * 越界时返回 `nil`。
-* **示例**: `print inst.getKeyframeValue("x", 0)`
+#### `property.type(index: Number)`
+返回指定关键帧的插值类型：`"hold"`、`"linear"`、`"bezier"`。
 
-#### `getKeyframeType(property: String, index: Number)`
-获取某个属性下指定索引关键帧的插值类型。
-* **返回值**:
-    * 成功时返回 `"hold"`、`"linear"` 或 `"bezier"`。
-    * 越界时返回 `nil`。
+#### `property.weight(index: Number)`
+返回指定关键帧的贝塞尔权重。
 
-#### `getKeyframeWeight(property: String, index: Number)`
-获取某个属性下指定索引关键帧的贝塞尔权重。
-* **返回值**:
-    * 成功时返回权重值。
-    * 越界时返回 `nil`。
+#### `property.shift(delta: Number)`
+整体平移该属性全部关键帧时间。
+
+#### `property.scaleTimes(factor: Number)`
+整体缩放该属性全部关键帧时间。
+
+#### `property.copyFrom(other: AnimatedProperty)`
+从另一动画属性复制全部关键帧。
+
+#### 示例
+```luna
+inst.opacity.keyframes([
+    [0, 1.0],
+    [5, 0.0, "bezier", 0.5]
+])
+
+inst.volume.keyframes([[0, 1.0, "hold"]])
+inst.volume.withPreset(8, 0.0, "ease_out")
+
+inst.rotation.add(0, 0)
+inst.rotation.set(4, 360, "bezier", 0.7)
+inst.scale_x.withPreset(3, 0.5, "ease_in")
+```
 
 #### `setStart(time: Number)`
 设置该实例在时间线上的起始时间。
@@ -441,18 +791,7 @@
     * 新的 `ClipInstance`。
     * 失败时返回 `nil`。
 
-#### `shiftKeyframes(property: String, delta: Number)`
-把某个属性上的全部关键帧整体平移 `delta` 秒。
-
-#### `scaleKeyframeTimes(property: String, factor: Number)`
-按比例缩放某个属性上全部关键帧的时间位置。
-* **示例**: `inst.scaleKeyframeTimes("x", 2)` 会把 `0.5s` 的关键帧移动到 `1.0s`。
-
-#### `copyKeyframesFrom(property: String, other: ClipInstance, otherProperty: String)`
-把另一个实例某个属性上的关键帧复制到当前实例的目标属性上。
-* **描述**:
-    * 目标属性原有的关键帧会被替换。
-    * 关键帧的时间、值、插值类型和贝塞尔权重都会一并复制。
+动画相关操作请直接通过属性对象完成，例如 `inst.x.shift(...)`、`inst.opacity.copyFrom(other.opacity)`。
 
 #### `addEffect(effect: EffectInstance)`
 把一个效果对象挂到当前实例上，并返回这个效果对象本身。
@@ -481,6 +820,7 @@
 * `Fill`
 * `BrightnessContrast`
 * `Blur`
+* `Glow`
 * `Mosaic`
 * `Grid`
 * `GradientRamp`
@@ -497,12 +837,12 @@
 每个效果都是同名类，支持直接构造；构造参数会映射到对应效果参数。推荐使用关键字参数：
 
 ```luna
-var fractal = FractalNoise(scale=120, evolution=45, contrast=1.3)
-var mosaic = Mosaic(blockSize=12, sharpColors=true)
-var tint = Tint(amount=0.8, color=[255, 120, 80, 255])
-clipInst.addEffect(fractal)
-clipInst.addEffect(mosaic)
-clipInst.addEffect(tint)
+fractal = FractalNoise(scale=120, evolution=45, contrast=1.3)
+mosaic = Mosaic(blockSize=12, sharpColors=true)
+tint = Tint(amount=0.8, color=[255, 120, 80, 255])
+fractal = clipInst.addEffect(fractal)
+mosaic = clipInst.addEffect(mosaic)
+tint = clipInst.addEffect(tint)
 ```
 
 颜色参数在构造时使用 `List` 传入，支持 `[r, g, b]` 或 `[r, g, b, a]`。
@@ -511,41 +851,55 @@ clipInst.addEffect(tint)
 #### `getName()`
 返回效果名称。
 
-#### `setNumber(key: String, value: Number)`
-设置数值参数。
-* `Tint`: `amount`
-* `Fill`: `amount`
-* `BrightnessContrast`: `brightness`, `contrast`
-* `Blur`: `radius`
-* `Mosaic`: `blockSize`
-* `Grid`: `sizeX`, `sizeY`, `lineWidth`, `opacity`
-* `GradientRamp`: `startX`, `startY`, `endX`, `endY`, `blend`
-* `FractalNoise`: `scale`, `evolution`, `contrast`, `brightness`, `octaves`, `amount`, `offsetX`, `offsetY`
-* `DisplacementMap`: `scaleX`, `scaleY`, `amount`, `offsetX`, `offsetY`
-* `Posterize`: `levels`, `amount`
-* `SliderControl`: `value`
-* `AngleControl`: `angle`
-* `CheckboxControl`: `value`
-* `PointControl`: `x`, `y`
+#### 直接属性访问
+效果参数现在统一通过对象属性读写，不再使用 `setNumber` / `setBool` / `setColor` 这类字符串接口。
 
-#### `getNumber(key: String)`
-读取数值参数。
+数值参数可直接写成：
+```luna
+blur.radius = 6
+ramp.startX = 0
+fractal.scale = 120
+print fractal.scale
+```
 
-#### `setBool(key: String, value: Bool)`
-设置布尔参数。
+布尔参数可直接写成：
+```luna
+mosaic.sharpColors = true
+fractal.invert = false
+print mosaic.sharpColors
+```
+
+颜色参数使用 `List`：
+```luna
+tint.color = [255, 120, 80, 255]
+ramp.startColor = [255, 0, 0, 255]
+```
+
+支持的布尔参数：
 * `Mosaic`: `sharpColors`
 * `FractalNoise`: `invert`
 * `DisplacementMap`: `useLuma`
 * `CheckboxControl`: `value`
 
-#### `getBool(key: String)`
-读取布尔参数。
+`DisplacementMap` 还支持两个数值参数：
+* `horizontalChannel`
+* `verticalChannel`
 
-#### `setColor(key: String, r: Number, g: Number, b: Number, [a: Number])`
-设置颜色参数。
+通道编号约定：
+* `0`: red
+* `1`: green
+* `2`: blue
+* `3`: alpha
+* `4`: luma
+
+当 `useLuma = true` 时，会忽略 `horizontalChannel` / `verticalChannel`，并按 AE 风格使用“50% 灰为中性点”的亮度位移。
+当 `useLuma = false` 时，会对每个像素分别读取横向和纵向通道值，直接生成位移量。
+
+支持的颜色参数：
 * `Tint`: `color`
 * `Fill`: `color`
 * `Grid`: `color`
+* `Glow`: `color`
 * `GradientRamp`: `startColor`, `endColor`
 * `ColorControl`: `color`
 
@@ -571,131 +925,65 @@ clipInst.addEffect(tint)
 #### `unlinkColor(key: String)`
 移除某个颜色参数上的驱动关系。
 
-#### `addNumberKeyframe(key: String, time: Number, value: Number, type: String, [weight: Number])`
-为数值参数添加关键帧。
+效果参数的动画接口也统一成属性对象。也就是说：
 
-#### `setNumberKeyframe(key: String, time: Number, value: Number, type: String, [weight: Number])`
-设置数值参数关键帧；同时间点存在则覆盖，否则新增。
+- 数值参数直接使用 `effect.amount`、`effect.evolution`、`effect.levels`
+- 布尔参数也可动画，例如 `effect.sharpColors`
+- 颜色参数使用 `effect.startColor`、`effect.endColor`、`effect.color`
 
-#### `removeNumberKeyframe(key: String, time: Number)`
-删除数值参数上的关键帧。
+这些属性同样返回 `AnimatedProperty`，支持：
 
-#### `clearNumberKeyframes(key: String)`
-清空某个数值参数上的关键帧。
-
-#### `getNumberKeyframeCount(key: String)`
-返回某个数值参数的关键帧数量。
-
-#### `getNumberKeyframeTime(key: String, index: Number)`
-返回数值参数指定关键帧的时间。
-
-#### `getNumberKeyframeValue(key: String, index: Number)`
-返回数值参数指定关键帧的值。
-
-#### `getNumberKeyframeType(key: String, index: Number)`
-返回数值参数指定关键帧的插值类型。
-
-#### `getNumberKeyframeWeight(key: String, index: Number)`
-返回数值参数指定关键帧的贝塞尔权重。
-
-#### `shiftNumberKeyframes(key: String, delta: Number)`
-整体平移某个数值参数的全部关键帧时间。
-
-#### `scaleNumberKeyframeTimes(key: String, factor: Number)`
-整体缩放某个数值参数的全部关键帧时间。
-
-#### `copyNumberKeyframesFrom(key: String, otherEffect: Effect, otherKey: String)`
-把另一效果的数值参数关键帧复制到当前效果参数上。
-
-#### `addColorKeyframe(key: String, time: Number, r: Number, g: Number, b: Number, a: Number, type: String, [weight: Number])`
-为颜色参数添加关键帧。颜色会拆成 RGBA 四个通道分别动画。
-
-#### `setColorKeyframe(key: String, time: Number, r: Number, g: Number, b: Number, a: Number, type: String, [weight: Number])`
-设置颜色参数关键帧；同时间点存在则覆盖，否则新增。
-
-#### `removeColorKeyframe(key: String, time: Number)`
-删除颜色参数在指定时间点上的关键帧。
-
-#### `clearColorKeyframes(key: String)`
-清空某个颜色参数上的关键帧。
-
-#### `getColorKeyframeCount(key: String)`
-返回某个颜色参数的关键帧数量。
-
-#### `getColorKeyframeTime(key: String, index: Number)`
-返回颜色参数指定关键帧的时间。
-
-#### `getColorKeyframeValue(key: String, index: Number, channel: String)`
-返回颜色参数指定关键帧某个通道的值；`channel` 取 `r`、`g`、`b`、`a`。
-
-#### `getColorKeyframeType(key: String, index: Number)`
-返回颜色参数指定关键帧的插值类型。
-
-#### `getColorKeyframeWeight(key: String, index: Number)`
-返回颜色参数指定关键帧的贝塞尔权重。
-
-#### `shiftColorKeyframes(key: String, delta: Number)`
-整体平移某个颜色参数的全部关键帧时间。
-
-#### `scaleColorKeyframeTimes(key: String, factor: Number)`
-整体缩放某个颜色参数的全部关键帧时间。
-
-#### `copyColorKeyframesFrom(key: String, otherEffect: Effect, otherKey: String)`
-把另一效果的颜色参数关键帧复制到当前效果参数上。
+- `property.keyframes(...)`
+- `property.add(...)`
+- `property.set(...)`
+- `property.withPreset(...)`
+- `property.remove(...)`
+- `property.clear()`
+- `property.count()`
+- `property.time(index)`
+- `property.value(index)`
+- `property.type(index)`
+- `property.weight(index)`
+- `property.shift(delta)`
+- `property.scaleTimes(factor)`
+- `property.copyFrom(otherProperty)`
 
 ### 示例
 ```luna
-var tint = Tint(amount=0.8, color=[255, 120, 80, 255])
-clipInst.addEffect(tint)
-tint.setNumber("amount", 0.8)
-tint.setColor("color", 255, 120, 80, 255)
+tint = clipInst.addEffect(Tint(amount=0.8, color=[255, 120, 80, 255]))
+blur = clipInst.addEffect(Blur(radius=6))
+glow = clipInst.addEffect(Glow(radius=18, intensity=1.1, threshold=0.6, softness=0.2, color=[255, 220, 180, 255]))
+fill = clipInst.addEffect(Fill(amount=0.4, color=[20, 140, 255, 255]))
 
-var blur = Blur(radius=6)
-clipInst.addEffect(blur)
-blur.setNumber("radius", 6)
+ramp = clipInst.addEffect(GradientRamp(
+    startX=0,
+    startY=0,
+    endX=1,
+    endY=1,
+    startColor=[255, 0, 0, 255],
+    endColor=[255, 255, 0, 255]
+))
+ramp.startColor.keyframes([
+    [0, [255, 0, 0, 255]],
+    [1, [0, 255, 0, 255], "linear"]
+])
 
-var fill = Fill(amount=0.4, color=[20, 140, 255, 255])
-clipInst.addEffect(fill)
-fill.setNumber("amount", 0.4)
-fill.setColor("color", 20, 140, 255, 255)
+fractal = clipInst.addEffect(FractalNoise(scale=120, evolution=45, invert=false))
 
-var ramp = GradientRamp(startX=0, startY=0, endX=1, endY=1, startColor=[255, 0, 0, 255], endColor=[255, 255, 0, 255])
-clipInst.addEffect(ramp)
-ramp.setNumber("startX", 0)
-ramp.setNumber("startY", 0)
-ramp.setNumber("endX", 1)
-ramp.setNumber("endY", 1)
-ramp.setColor("startColor", 255, 0, 0, 255)
-ramp.setColor("endColor", 255, 255, 0, 255)
-ramp.addColorKeyframe("startColor", 0, 255, 0, 0, 255, "linear")
-ramp.setColorKeyframe("startColor", 1, 0, 255, 0, 255, "linear")
-
-var fractal = FractalNoise(scale=120, evolution=45, invert=false)
-clipInst.addEffect(fractal)
-fractal.setNumber("scale", 120)
-fractal.setNumber("evolution", 45)
-fractal.setBool("invert", false)
-
-var disp = DisplacementMap(scaleX=20, scaleY=12, useLuma=true)
-clipInst.addEffect(disp)
-disp.setNumber("scaleX", 20)
-disp.setNumber("scaleY", 12)
-disp.setBool("useLuma", true)
+disp = clipInst.addEffect(DisplacementMap(scaleX=20, scaleY=12, horizontalChannel=0, verticalChannel=1, useLuma=false))
 disp.setSource(otherClipInst)
 
-var posterize = Posterize(levels=6)
-clipInst.addEffect(posterize)
-posterize.setNumber("levels", 6)
+posterize = clipInst.addEffect(Posterize(levels=6))
 
-var slider = SliderControl(value=10)
-clipInst.addEffect(slider)
-slider.addNumberKeyframe("value", 0, 10, "linear")
-slider.setNumberKeyframe("value", 1, 20, "bezier", 0.2)
+slider = clipInst.addEffect(SliderControl(value=10))
+slider.value.keyframes([
+    [0, 10],
+    [1, 20, "bezier", 0.2]
+])
 posterize.linkNumber("levels", slider, "value", 0.5, 1)
 
-var colorCtl = ColorControl(color=[255, 0, 0, 255])
-clipInst.addEffect(colorCtl)
-colorCtl.addColorKeyframe("color", 0, 255, 0, 0, 255, "linear")
+colorCtl = clipInst.addEffect(ColorControl(color=[255, 0, 0, 255]))
+colorCtl.color.keyframes([[0, [255, 0, 0, 255]]])
 fill.linkColor("color", colorCtl, "color")
 ```
 
@@ -760,12 +1048,12 @@ fill.linkColor("color", colorCtl, "color")
 ## 10. 完整示例代码
 ```luna
 # 1. 创建项目
-var proj = Project(1920, 1080, 30)
+proj = Project(1920, 1080, 30)
 # 2. 创建时间线
-var tl = Timeline(1920, 1080, 30)
+tl = Timeline(1920, 1080, 30)
 proj.setTimeline(tl)
 # 3. 加载并处理素材
-var clip = Clip("test.mp4")
+clip = Clip("assets/media/test.mp4")
 if clip == nil:
     print "加载失败"
 else:
@@ -777,23 +1065,27 @@ else:
     clip.setPos(100, 200)
     clip.setOpacity(0.8)
     # 4. 添加到时间线，并获取 ClipInstance
-    var clipInst = tl.add(0, clip, 0)  # 轨道0，从时间线第0秒开始播放
+    clipInst = tl.add(0, clip, 0)  # 轨道0，从时间线第0秒开始播放
     # 新增: 测试关键帧 - opacity 淡出, volume 渐弱
-    clipInst.addKeyframe("opacity", 0, 1.0, "linear")  # 0秒全不透明
-    clipInst.addKeyframe("opacity", 5, 0.0, "bezier", 0.5)  # 5秒淡出到透明，贝塞尔权重0.5
-    clipInst.addKeyframe("volume", 0, 1.0, "hold")  # 0秒全音量，冻结到下一个
-    clipInst.addKeyframeWithPreset("volume", 8, 0.0, "ease_out")  # 8秒渐弱到静音，使用预设
+    clipInst.opacity.keyframes([
+        [0, 1.0, "linear"],
+        [5, 0.0, "bezier", 0.5]
+    ])
+    clipInst.volume.keyframes([[0, 1.0, "hold"]])
+    clipInst.volume.withPreset(8, 0.0, "ease_out")
     # 5. 添加第二个素材
-    var clip2 = Clip("test.mp4")
+    clip2 = Clip("assets/media/test.mp4")
     clip2.trim(5, 5) # 截取5秒
     clip2.setPos(500, 500)
     # 轨道1 (上层)，从时间线第2秒开始播放
-    var clip2Inst = tl.add(1, clip2, 2)
+    clip2Inst = tl.add(1, clip2, 2)
     # 新增: 测试关键帧 - rotation 旋转, scale_x 缩放
-    clip2Inst.addKeyframe("rotation", 0, 0, "linear")  # 0秒0度
-    clip2Inst.addKeyframe("rotation", 4, 360, "bezier", 0.7)  # 4秒旋转360度，贝塞尔权重0.7
-    clip2Inst.addKeyframeWithPreset("scale_x", 0, 1.0, "ease_in")  # 0秒原始缩放，使用预设
-    clip2Inst.addKeyframeWithPreset("scale_x", 3, 0.5, "ease_in")  # 3秒缩小到0.5
+    clip2Inst.rotation.keyframes([
+        [0, 0, "linear"],
+        [4, 360, "bezier", 0.7]
+    ])
+    clip2Inst.scale_x.withPreset(0, 1.0, "ease_in")
+    clip2Inst.scale_x.withPreset(3, 0.5, "ease_in")
     print "时间线总时长: "
     print tl.duration
     # 6. 启动预览

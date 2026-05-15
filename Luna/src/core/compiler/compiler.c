@@ -71,6 +71,9 @@ void initCompiler(Compiler* compiler, VM* vm, FunctionType type) {
     compiler->type = type;
     compiler->localCount = 0;
     compiler->scopeDepth = 0;
+    compiler->globalNames = NULL;
+    compiler->globalCount = 0;
+    compiler->globalCapacity = 0;
  
     compiler->function = newFunction(vm);
  
@@ -104,6 +107,7 @@ ObjFunction* endCompiler() {
     }
 #endif
  
+    FREE_ARRAY(compilingVM, Token, current->globalNames, current->globalCapacity);
     current = current->enclosing;
     return function;
 }

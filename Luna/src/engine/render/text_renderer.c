@@ -36,6 +36,16 @@ TextRenderer* text_renderer_create() {
     return tr;
 }
 
+static void reset_text_atlas(TextRenderer* tr) {
+    memset(tr->glyph_loaded, 0, sizeof(tr->glyph_loaded));
+    memset(tr->glyphs, 0, sizeof(tr->glyphs));
+    tr->atlas_x_offset = 0;
+
+    glBindTexture(GL_TEXTURE_2D, tr->atlas_id);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, MAX_ATLAS_WIDTH, MAX_ATLAS_HEIGHT,
+                 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+}
+
 void text_renderer_free(TextRenderer* tr) {
     if (!tr) return;
     if (tr->face) FT_Done_Face(tr->face);
@@ -85,6 +95,7 @@ static void load_glyph_to_atlas(TextRenderer* tr, u32 char_code) {
 bool text_renderer_update(TextRenderer* tr, Clip* clip) {
     if (clip->type != CLIP_TYPE_TEXT) return false;
     bool dirty = false;
+    bool font_changed = false;
     
     // Check Font change
     if (!tr->loaded_font_path || strcmp(tr->loaded_font_path, clip->text.font_path) != 0) {
@@ -105,14 +116,17 @@ bool text_renderer_update(TextRenderer* tr, Clip* clip) {
         if (tr->loaded_font_path) free(tr->loaded_font_path);
         tr->loaded_font_path = strdup(clip->text.font_path);
         
-        // Reset Atlas
-        memset(tr->glyph_loaded, 0, sizeof(tr->glyph_loaded));
-        tr->atlas_x_offset = 0;
+        font_changed = true;
         dirty = true;
     }
     
     // 只有当字体有效时才设置大小和加载字形
     if (tr->face) {
+        if (font_changed || tr->loaded_font_size != clip->text.font_size) {
+            tr->loaded_font_size = clip->text.font_size;
+            reset_text_atlas(tr);
+            dirty = true;
+        }
         FT_Set_Pixel_Sizes(tr->face, 0, clip->text.font_size);
 
         text_renderer_layout_text(tr, clip, &clip->text.cached_width, &clip->text.cached_height);

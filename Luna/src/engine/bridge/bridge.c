@@ -5,6 +5,7 @@
 #include "core/vm/vm.h" // 这里包含 VM 定义
 #include "engine/effect/filter_base.h"
 #include "engine/model/timeline.h"
+#include <string.h>
 static void* vm_realloc_wrapper(void* ctx, void* ptr, size_t old_size, size_t new_size) {
     VM* vm = (VM*)ctx;
     return reallocate(vm, ptr, old_size, new_size);
@@ -56,6 +57,16 @@ static void clipMark(VM* vm, Obj* obj) {
     if (oClip->timelineObj) {
         markObject(vm, (Obj*)oClip->timelineObj);
     }
+    if (oClip->clip && oClip->clip->type == CLIP_TYPE_TEXT) {
+        for (u32 i = 0; i < oClip->clip->text.animator_count; i++) {
+            TextAnimator* animator = &oClip->clip->text.animators[i];
+            for (u32 j = 0; j < animator->expression_selector_count; j++) {
+                if (animator->expression_selectors[j].has_callback) {
+                    markValue(vm, animator->expression_selectors[j].callback);
+                }
+            }
+        }
+    }
 }
 static void clipFree(VM* vm, Obj* obj) {
     ObjClip* oClip = (ObjClip*)obj;
@@ -73,6 +84,7 @@ const ForeignClassMethods ClipMethods = {
 };
 ObjClip* newClip(VM* vm, ObjString* path) {
     ObjClip* obj = (ObjClip*)newForeign(vm, sizeof(ObjClip), &ClipMethods);
+    init_allocator(&obj->allocator, vm);
     obj->clip = clip_create_media(path ? path->chars : NULL);
     obj->clip->user_data = obj;
     obj->timelineObj = NULL;
@@ -191,5 +203,172 @@ ObjEffectHandle* newStandaloneEffectHandle(VM* vm, EffectInstance* effect) {
     obj->effect = effect;
     obj->allocator = NULL;
     obj->owns_effect = true;
+    return obj;
+}
+
+static void animatedPropertyHandleMark(VM* vm, Obj* obj) {
+    ObjAnimatedPropertyHandle* handle = (ObjAnimatedPropertyHandle*)obj;
+    if (handle->owner_handle) {
+        markObject(vm, handle->owner_handle);
+    }
+}
+
+static void animatedPropertyHandleFree(VM* vm, Obj* obj) {
+    (void)vm;
+    ObjAnimatedPropertyHandle* handle = (ObjAnimatedPropertyHandle*)obj;
+    handle->owner_handle = NULL;
+    handle->source_kind = ANIMATED_PROPERTY_SOURCE_CLIP;
+    handle->value_kind = ANIMATED_PROPERTY_VALUE_NUMBER;
+    handle->key[0] = '\0';
+}
+
+const ForeignClassMethods AnimatedPropertyHandleMethods = {
+    "animated_property_handle",
+    NULL,
+    animatedPropertyHandleFree,
+    animatedPropertyHandleMark
+};
+
+static void textAnimatorHandleMark(VM* vm, Obj* obj) {
+    ObjTextAnimatorHandle* handle = (ObjTextAnimatorHandle*)obj;
+    if (handle->clip_obj) {
+        markObject(vm, (Obj*)handle->clip_obj);
+    }
+}
+
+static void textAnimatorHandleFree(VM* vm, Obj* obj) {
+    (void)vm;
+    ObjTextAnimatorHandle* handle = (ObjTextAnimatorHandle*)obj;
+    handle->clip_obj = NULL;
+    handle->animator_index = 0;
+}
+
+const ForeignClassMethods TextAnimatorHandleMethods = {
+    "text_animator_handle",
+    NULL,
+    textAnimatorHandleFree,
+    textAnimatorHandleMark
+};
+
+static void textRangeSelectorHandleMark(VM* vm, Obj* obj) {
+    ObjTextRangeSelectorHandle* handle = (ObjTextRangeSelectorHandle*)obj;
+    if (handle->clip_obj) {
+        markObject(vm, (Obj*)handle->clip_obj);
+    }
+}
+
+static void textRangeSelectorHandleFree(VM* vm, Obj* obj) {
+    (void)vm;
+    ObjTextRangeSelectorHandle* handle = (ObjTextRangeSelectorHandle*)obj;
+    handle->clip_obj = NULL;
+    handle->animator_index = 0;
+    handle->selector_index = 0;
+}
+
+const ForeignClassMethods TextRangeSelectorHandleMethods = {
+    "text_range_selector_handle",
+    NULL,
+    textRangeSelectorHandleFree,
+    textRangeSelectorHandleMark
+};
+
+static void textExpressionSelectorHandleMark(VM* vm, Obj* obj) {
+    ObjTextExpressionSelectorHandle* handle = (ObjTextExpressionSelectorHandle*)obj;
+    if (handle->clip_obj) {
+        markObject(vm, (Obj*)handle->clip_obj);
+    }
+}
+
+static void textExpressionSelectorHandleFree(VM* vm, Obj* obj) {
+    (void)vm;
+    ObjTextExpressionSelectorHandle* handle = (ObjTextExpressionSelectorHandle*)obj;
+    handle->clip_obj = NULL;
+    handle->animator_index = 0;
+    handle->selector_index = 0;
+}
+
+const ForeignClassMethods TextExpressionSelectorHandleMethods = {
+    "text_expression_selector_handle",
+    NULL,
+    textExpressionSelectorHandleFree,
+    textExpressionSelectorHandleMark
+};
+
+static void textWigglySelectorHandleMark(VM* vm, Obj* obj) {
+    ObjTextWigglySelectorHandle* handle = (ObjTextWigglySelectorHandle*)obj;
+    if (handle->clip_obj) {
+        markObject(vm, (Obj*)handle->clip_obj);
+    }
+}
+
+static void textWigglySelectorHandleFree(VM* vm, Obj* obj) {
+    (void)vm;
+    ObjTextWigglySelectorHandle* handle = (ObjTextWigglySelectorHandle*)obj;
+    handle->clip_obj = NULL;
+    handle->animator_index = 0;
+    handle->selector_index = 0;
+}
+
+const ForeignClassMethods TextWigglySelectorHandleMethods = {
+    "text_wiggly_selector_handle",
+    NULL,
+    textWigglySelectorHandleFree,
+    textWigglySelectorHandleMark
+};
+
+ObjAnimatedPropertyHandle* newAnimatedPropertyHandle(VM* vm, Obj* owner_handle,
+                                                     AnimatedPropertySourceKind source_kind,
+                                                     AnimatedPropertyValueKind value_kind,
+                                                     const char* key) {
+    ObjAnimatedPropertyHandle* obj =
+        (ObjAnimatedPropertyHandle*)newForeign(vm, sizeof(ObjAnimatedPropertyHandle), &AnimatedPropertyHandleMethods);
+    obj->owner_handle = owner_handle;
+    obj->source_kind = source_kind;
+    obj->value_kind = value_kind;
+    if (key) {
+        strncpy(obj->key, key, sizeof(obj->key) - 1);
+        obj->key[sizeof(obj->key) - 1] = '\0';
+    } else {
+        obj->key[0] = '\0';
+    }
+    return obj;
+}
+
+ObjTextAnimatorHandle* newTextAnimatorHandle(VM* vm, ObjClip* clip_obj, u32 animator_index) {
+    ObjTextAnimatorHandle* obj =
+        (ObjTextAnimatorHandle*)newForeign(vm, sizeof(ObjTextAnimatorHandle), &TextAnimatorHandleMethods);
+    obj->clip_obj = clip_obj;
+    obj->animator_index = animator_index;
+    return obj;
+}
+
+ObjTextRangeSelectorHandle* newTextRangeSelectorHandle(VM* vm, ObjClip* clip_obj, u32 animator_index, u32 selector_index) {
+    ObjTextRangeSelectorHandle* obj =
+        (ObjTextRangeSelectorHandle*)newForeign(vm, sizeof(ObjTextRangeSelectorHandle), &TextRangeSelectorHandleMethods);
+    obj->clip_obj = clip_obj;
+    obj->animator_index = animator_index;
+    obj->selector_index = selector_index;
+    return obj;
+}
+
+ObjTextExpressionSelectorHandle* newTextExpressionSelectorHandle(VM* vm, ObjClip* clip_obj,
+                                                                 u32 animator_index, u32 selector_index) {
+    ObjTextExpressionSelectorHandle* obj =
+        (ObjTextExpressionSelectorHandle*)newForeign(vm, sizeof(ObjTextExpressionSelectorHandle),
+                                                     &TextExpressionSelectorHandleMethods);
+    obj->clip_obj = clip_obj;
+    obj->animator_index = animator_index;
+    obj->selector_index = selector_index;
+    return obj;
+}
+
+ObjTextWigglySelectorHandle* newTextWigglySelectorHandle(VM* vm, ObjClip* clip_obj,
+                                                         u32 animator_index, u32 selector_index) {
+    ObjTextWigglySelectorHandle* obj =
+        (ObjTextWigglySelectorHandle*)newForeign(vm, sizeof(ObjTextWigglySelectorHandle),
+                                                 &TextWigglySelectorHandleMethods);
+    obj->clip_obj = clip_obj;
+    obj->animator_index = animator_index;
+    obj->selector_index = selector_index;
     return obj;
 }

@@ -69,6 +69,9 @@ typedef struct Compiler {
     i32 localCount;
     Upvalue upvalues[U8_COUNT];
     i32 scopeDepth;
+    Token* globalNames;
+    i32 globalCount;
+    i32 globalCapacity;
 } Compiler;
 
 typedef struct Loop {
@@ -119,10 +122,24 @@ i32 emitJump(u8 instruction);
 void patchJump(i32 offset);
 void emitLoop(i32 loopStart);
 
+static inline void emitConstantOperandInstruction(u8 shortOp, u8 longOp, u32 operand) {
+    if (operand <= UINT8_MAX) {
+        emitBytes(shortOp, (u8)operand);
+        return;
+    }
+
+    emitByte(longOp);
+    emitByte((u8)(operand & 0xFF));
+    emitByte((u8)((operand >> 8) & 0xFF));
+    emitByte((u8)((operand >> 16) & 0xFF));
+}
+
 // Resolver (compiler_resolve.c)
 Token syntheticToken(const char* text);
 bool identifiersEqual(Token* a, Token* b);
 u32 identifierConstant(Token* name);
+bool hasKnownScriptGlobal(Token* name);
+void rememberScriptGlobal(Token* name);
 void addLocal(Token name);
 i32 resolveLocal(Compiler* compiler, Token* name);
 i32 resolveUpvalue(Compiler* compiler, Token* name);

@@ -257,6 +257,11 @@ i32 timeline_add_clip(Timeline* tl, i32 track_index, Clip* media, double start_t
     clip.source_in = media->in_point;
     clip.flags = 1;
     clip.effectChain = NULL;                    // 新增：初始化效果链
+    clip.position_mode = TIMELINE_POSITION_MODE_POSITION;
+    clip.alignment_target_type = TIMELINE_ALIGNMENT_TARGET_COMPOSITION;
+    clip.self_anchor = TIMELINE_ANCHOR_TOP_LEFT;
+    clip.target_anchor = TIMELINE_ANCHOR_TOP_LEFT;
+    clip.alignment_target_clip_id = 0;
   
     // Default Transform
     clip.transform.scale_x = (float)media->default_scale_x;

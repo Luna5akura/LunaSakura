@@ -1,0 +1,106 @@
+width = 640
+height = 360
+fps = 24
+duration = 6
+block = 30
+
+proj = Project(width, height, fps)
+tl = Timeline(width, height, fps)
+proj.setTimeline(tl)
+
+# 下层：纯色底板，先挂渐变，再走置换、色调分离，最后马赛克
+base = Solid(width, height, 255, 255, 255, 255)
+baseInst = tl.add(0, base, 0)
+    .setDuration(duration)
+
+ramp = baseInst.addEffect(
+    GradientRamp(
+        startX=0.0,
+        startY=0.0,
+        endX=1.0,
+        endY=1.0,
+        blend=1.0
+    )
+)
+
+# 起始色循环：红 -> 绿 -> 蓝 -> 红
+ramp.startColor.keyframes([
+    [0.0, [255, 0, 0, 255]],
+    [2.0, [0, 255, 0, 255]],
+    [4.0, [0, 0, 255, 255]],
+    [6.0, [255, 0, 0, 255]]
+])
+
+# 结束色循环：黄 -> 品红 -> 青 -> 黄
+ramp.endColor.keyframes([
+    [0.0, [255, 255, 0, 255]],
+    [2.0, [255, 0, 255, 255]],
+    [4.0, [0, 255, 255, 255]],
+    [6.0, [255, 255, 0, 255]]
+])
+
+# 置换图源：单独的分形杂色层，本身不显示，只作为 DisplacementMap 的 source
+noiseSource = Solid(width, height, 0, 0, 0, 255)
+noiseInst = tl.add(1, noiseSource, 0)
+    .setDuration(duration)
+    .setVisible(false)
+
+fractal = noiseInst.addEffect(
+    FractalNoise(
+        scale=54, 
+        contrast=1.8, 
+        brightness=0.02, 
+        octaves=5, 
+        amount=1.0, 
+        invert=false
+    )
+)
+fractal.evolution.keyframes([
+    [0.0, 0.0],
+    [duration, 90.0]
+])
+
+displacement = baseInst.addEffect(
+    DisplacementMap(
+        scaleX=600,
+        scaleY=60,
+        amount=1.0,
+        offsetX=0,
+        offsetY=0,
+        useLuma=true
+    )
+)
+displacement.setSource(noiseInst)
+
+# baseInst.addEffect(
+#     Posterize(
+#         levels=5,
+#         amount=1.0
+#     )
+# )
+
+baseInst.addEffect(
+    Mosaic(
+        blockSize=block,
+        sharpColors=true
+    )
+)
+
+# 上层：透明底板，只绘制黑色网格
+overlay = Solid(width, height, 0, 0, 0, 0)
+overlayInst = tl.add(2, overlay, 0)
+    .setDuration(duration)
+
+overlayInst.addEffect(
+    Grid(
+        sizeX=width / block,
+        sizeY=height / block,
+        lineWidth=0.25,
+        opacity=1.0,
+        color=[0, 0, 0, 255]
+    )
+)
+# overlayInst.setVisible(false)
+
+print tl.getDuration()
+proj.preview(0, duration)

@@ -6,6 +6,7 @@ Luna 是一个还在快速演进中的实验性项目：它把一门自定义脚
 
 - Luna 语言前端：扫描器、编译器、字节码、VM、GC。
 - 媒体与工程模型：`Clip`、`Image`、`Text`、`Solid`、`Adjustment`、`Timeline`、`Project`、`ClipInstance`。
+- 文字动画器增强阶段：`TextAnimator`、`RangeSelector`、`ExpressionSelector`、`WigglySelector`、逐字符文本动画。
 - 实时预览宿主：监听脚本变更并自动热重载。
 - 渲染管线：FFmpeg 解码，OpenGL 合成，文字渲染，基础变换与透明度。
 - 导出能力：按时间线逐帧渲染并编码输出。
@@ -99,6 +100,9 @@ Luna 适合被理解成一个“可编程视频原型引擎”，而不是传统
 - `Clip(path)`
 - `Image(path)`
 - `Text(content)`
+- `text.addAnimator()`
+- `text.getAnimatorCount()`
+- `text.getAnimator(index)`
 - `Solid(width, height, r, g, b[, a])`
 - `Adjustment(width, height)`
   `adjustment.setAffectsWholeFrame(true|false)` 可在“整帧”与“局部矩形区域”之间切换。
@@ -127,26 +131,26 @@ Luna 适合被理解成一个“可编程视频原型引擎”，而不是传统
 - `clip.setOpacity(...)`
 - `clip.volume(...)`
 - `solid.setColor(...)`
-- `clipInst.addKeyframe(...)`
-- `clipInst.setKeyframe(...)`
-- `clipInst.removeKeyframe(...)`
-- `clipInst.clearKeyframes(...)`
-- `clipInst.getKeyframeCount(...)`
-- `clipInst.getKeyframeTime(...)`
-- `clipInst.getKeyframeValue(...)`
-- `clipInst.getKeyframeType(...)`
-- `clipInst.getKeyframeWeight(...)`
+- `clipInst.x.add(...)`, `clipInst.opacity.keyframes([...])`
+- `clipInst.rotation.set(...)`, `clipInst.scale_x.withPreset(...)`
+- `clipInst.x.remove(...)`, `clipInst.opacity.clear()`
+- `clipInst.x.count()`, `clipInst.x.time(index)`, `clipInst.x.value(index)`
+- `clipInst.x.type(index)`, `clipInst.x.weight(index)`
 - `clipInst.setStart(...)`
 - `clipInst.setDuration(...)`
 - `clipInst.setInPoint(...)`
 - `clipInst.setZIndex(...)`
 - `clipInst.setVisible(...)`
+- `clipInst.setPositionMode("position" | "anchor")`
+- `clipInst.alignTo(otherClipInst, selfAnchor, targetAnchor)`
+- `clipInst.alignToComposition(selfAnchor, targetAnchor)`
+- `clipInst.getAlignmentTargetClipId()`
 - `clipInst.remove()`
 - `clipInst.moveToTrack(track[, start])`
 - `clipInst.duplicate(track[, start])`
-- `clipInst.shiftKeyframes(property, delta)`
-- `clipInst.scaleKeyframeTimes(property, factor)`
-- `clipInst.copyKeyframesFrom(property, otherClipInst, otherProperty)`
+- `clipInst.x.shift(delta)`
+- `clipInst.x.scaleTimes(factor)`
+- `clipInst.opacity.copyFrom(otherClipInst.x)`
 - `clipInst.addEffect(effect)`
   `Adjustment` 图层会把这些效果真正应用到它下方已经合成好的画面上，适合作为全局调色、模糊、海报化这类 adjustment layer；也可以切到矩形模式只影响一个局部区域，并叠加羽化、遮罩和混合模式。
   效果现在是直接可构造的类实例，例如 `FractalNoise(scale=72)`、`Mosaic(blockSize=12, sharpColors=true)`；同一个效果对象只能挂到一个 `ClipInstance`。
@@ -154,45 +158,43 @@ Luna 适合被理解成一个“可编程视频原型引擎”，而不是传统
 - `clipInst.getEffect(index)`
 - `clipInst.removeEffect(index)`
 - `clipInst.clearEffects()`
-- `clipInst.addKeyframeWithPreset(...)`
+- `clipInst.opacity.withPreset(...)`
+- `anim = text.addAnimator()`
+- `anim.y = 40`, `anim.tracking = 12`, `anim.skew = 16`, `anim.fillHue = 20`, `anim.characterOffset = 1`, `anim.fillColor = [255, 120, 80, 255]`
+- `anim.opacity.keyframes([...])`, `anim.strokeColor.keyframes([...])`
+- `selector = anim.addRangeSelector()`
+- `selector.start.keyframes([...])`, `selector.offset.keyframes([...])`
+- `selector.setShape("smooth")`
+- `selector.setBasedOn("words")`
+- `expr = anim.addExpressionSelector()`
+- `expr.setExpression("smoothstep(0, 100, position) * 100")`
+- `expr.setCallback(selectorFn)`
+- `expr.setMode("max")`
+- `expr.amount.keyframes([...])`
+- `wiggly = anim.addWigglySelector()`
+- `wiggly.wigglesPerSecond = 2.0`, `wiggly.correlation = 20`
+- `wiggly.setMode("subtract")`
 - `effect.getName()`
-- `effect.setNumber(key, value)`
-- `effect.getNumber(key)`
-- `effect.setBool(key, value)`
-- `effect.getBool(key)`
-- `effect.setColor(key, r, g, b[, a])`
+- `effect.someNumber = value`
+- `effect.someBool = value`
+- `effect.someColor = [r, g, b, a]`
 - `effect.setSource(clipInstance | nil)`
 - `effect.getSourceClipId()`
 - `effect.linkNumber(key, otherEffect, otherKey[, scale, offset])`
 - `effect.linkColor(key, otherEffect, otherKey)`
 - `effect.unlinkNumber(key)`
 - `effect.unlinkColor(key)`
-- `effect.addNumberKeyframe(key, time, value, type[, weight])`
-- `effect.setNumberKeyframe(key, time, value, type[, weight])`
-- `effect.removeNumberKeyframe(key, time)`
-- `effect.clearNumberKeyframes(key)`
-- `effect.getNumberKeyframeCount(key)`
-- `effect.getNumberKeyframeTime(key, index)`
-- `effect.getNumberKeyframeValue(key, index)`
-- `effect.getNumberKeyframeType(key, index)`
-- `effect.getNumberKeyframeWeight(key, index)`
-- `effect.shiftNumberKeyframes(key, delta)`
-- `effect.scaleNumberKeyframeTimes(key, factor)`
-- `effect.copyNumberKeyframesFrom(key, otherEffect, otherKey)`
-- `effect.addColorKeyframe(key, time, r, g, b, a, type[, weight])`
-- `effect.setColorKeyframe(key, time, r, g, b, a, type[, weight])`
-- `effect.removeColorKeyframe(key, time)`
-- `effect.clearColorKeyframes(key)`
-- `effect.getColorKeyframeCount(key)`
-- `effect.getColorKeyframeTime(key, index)`
-- `effect.getColorKeyframeValue(key, index, channel)`
-- `effect.getColorKeyframeType(key, index)`
-- `effect.getColorKeyframeWeight(key, index)`
-- `effect.shiftColorKeyframes(key, delta)`
-- `effect.scaleColorKeyframeTimes(key, factor)`
-- `effect.copyColorKeyframesFrom(key, otherEffect, otherKey)`
-  Built-in effects: `Tint`, `Fill`, `BrightnessContrast`, `Blur`, `Mosaic`, `Grid`, `GradientRamp`, `FractalNoise`, `DisplacementMap`, `Posterize`, `SliderControl`, `AngleControl`, `CheckboxControl`, `PointControl`, `ColorControl`
-  `DisplacementMap` 现在支持外部 `ClipInstance` 作为位移源，并会优先采样该图层应用效果后的结果；控制类效果也可以通过 `linkNumber` / `linkColor` 驱动其他效果参数。
+- `effect.amount.add(...)`, `effect.evolution.keyframes([...])`
+- `effect.amount.set(...)`, `effect.startColor.keyframes([...])`
+- `effect.amount.remove(...)`, `effect.startColor.clear()`
+- `effect.amount.count()`, `effect.amount.time(index)`, `effect.amount.value(index)`
+- `effect.amount.type(index)`, `effect.amount.weight(index)`
+- `effect.amount.shift(delta)`, `effect.amount.scaleTimes(factor)`
+- `effect.color.copyFrom(otherEffect.startColor)`
+  Built-in effects: `Tint`, `Fill`, `BrightnessContrast`, `Blur`, `Glow`, `Mosaic`, `Grid`, `GradientRamp`, `FractalNoise`, `DisplacementMap`, `Posterize`, `SliderControl`, `AngleControl`, `CheckboxControl`, `PointControl`, `ColorControl`
+  `DisplacementMap` 现在支持外部 `ClipInstance` 作为位移源，并会优先采样该图层应用效果后的结果；同时支持更接近 AE 的逐像素置换语义，包括 50% 灰中性点和横向/纵向独立通道选择。控制类效果也可以通过 `linkNumber` / `linkColor` 驱动其他效果参数。
+  `Glow` 则提供了一版偏 AE / Deep Glow 使用习惯的高光扩散效果，支持 `radius`、`intensity`、`threshold`、`softness` 和 `color`。
+- 当前文本动画器已经支持 `RangeSelector`、`ExpressionSelector` 和 `WigglySelector` 三类选择器，并支持 `characters / words / lines` 三种选择基础；更完整的 AE 高级 selector 行为和真正脚本级表达式系统仍在后续路线里。
 - `proj.setPreviewRange(...)`
 - `proj.clearPreviewRange()`
 - `proj.setBackgroundColor(...)`
@@ -272,29 +274,31 @@ make perf
 运行一个脚本：
 
 ```bash
-./luna engine.luna
+./luna examples/engine.luna
 ```
 
 如果你使用 Nix，仓库里也提供了 [shell.nix](/home/luna/Projects/VSCode/Clion/Luna/Luna/shell.nix:1)。
 
 ## 一个最小示例
 
-仓库中的 [engine.luna](/home/luna/Projects/VSCode/Clion/Luna/Luna/engine.luna:1) 展示了典型工作流。简化版示例如下：
+仓库中的 [engine.luna](/home/luna/Projects/VSCode/Clion/Luna/Luna/examples/engine.luna:1) 展示了典型工作流。简化版示例如下：
 
 ```luna
-var proj = Project(960, 540, 30)
-var tl = Timeline(960, 540, 30)
+proj = Project(960, 540, 30)
+tl = Timeline(960, 540, 30)
 proj.setTimeline(tl)
 
-var clip = Clip("test.mp4")
+clip = Clip("assets/media/test.mp4")
 clip.trim(0, 10)
 clip.setScale(0.5)
 clip.setPos(100, 200)
 clip.setOpacity(0.8)
 
-var inst = tl.add(0, clip, 0)
-inst.addKeyframe("opacity", 0, 1.0, "linear")
-inst.addKeyframe("opacity", 5, 0.0, "bezier", 0.5)
+inst = tl.add(0, clip, 0)
+inst.opacity.keyframes([
+  [0, 1.0],
+  [5, 0.0, "bezier", 0.5]
+])
 
 proj.preview()
 ```

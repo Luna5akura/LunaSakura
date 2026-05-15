@@ -2,7 +2,102 @@
 
 #pragma once
 #include "common.h"
+#include "allocator.h"
+#include "core/value.h"
+#include "engine/model/animation.h"
 #include "engine/model/transform.h"
+
+typedef enum {
+    TEXT_SELECTOR_BASED_ON_CHARACTERS = 0,
+    TEXT_SELECTOR_BASED_ON_WORDS = 1,
+    TEXT_SELECTOR_BASED_ON_LINES = 2
+} TextSelectorBasedOn;
+
+typedef enum {
+    TEXT_SELECTOR_SHAPE_SQUARE = 0,
+    TEXT_SELECTOR_SHAPE_RAMP_UP = 1,
+    TEXT_SELECTOR_SHAPE_RAMP_DOWN = 2,
+    TEXT_SELECTOR_SHAPE_TRIANGLE = 3,
+    TEXT_SELECTOR_SHAPE_SMOOTH = 4
+} TextSelectorShape;
+
+typedef enum {
+    TEXT_SELECTOR_MODE_ADD = 0,
+    TEXT_SELECTOR_MODE_SUBTRACT = 1,
+    TEXT_SELECTOR_MODE_INTERSECT = 2,
+    TEXT_SELECTOR_MODE_MIN = 3,
+    TEXT_SELECTOR_MODE_MAX = 4
+} TextSelectorMode;
+
+typedef struct {
+    Animation start;
+    Animation end;
+    Animation offset;
+    Animation amount;
+    Animation ease_high;
+    Animation ease_low;
+    TextSelectorBasedOn based_on;
+    TextSelectorShape shape;
+    TextSelectorMode mode;
+} TextRangeSelector;
+
+typedef struct {
+    Animation amount;
+    TextSelectorBasedOn based_on;
+    char* expression;
+    Value callback;
+    bool has_callback;
+    TextSelectorMode mode;
+} TextExpressionSelector;
+
+typedef struct {
+    Animation amount;
+    Animation wiggles_per_second;
+    Animation correlation;
+    Animation temporal_phase;
+    Animation spatial_phase;
+    Animation min_amount;
+    Animation max_amount;
+    TextSelectorBasedOn based_on;
+    TextSelectorMode mode;
+} TextWigglySelector;
+
+typedef struct {
+    Allocator* allocator;
+    Animation x;
+    Animation y;
+    Animation scale_x;
+    Animation scale_y;
+    Animation rotation;
+    Animation opacity;
+    Animation tracking;
+    Animation stroke_width;
+    Animation anchor_x;
+    Animation anchor_y;
+    Animation skew;
+    Animation skew_axis;
+    Animation fill_opacity;
+    Animation stroke_opacity;
+    Animation fill_hue;
+    Animation fill_saturation;
+    Animation fill_brightness;
+    Animation stroke_hue;
+    Animation stroke_saturation;
+    Animation stroke_brightness;
+    Animation character_offset;
+    Animation character_value;
+    Animation fill_color[4];
+    Animation stroke_color[4];
+    TextRangeSelector* range_selectors;
+    u32 range_selector_count;
+    u32 range_selector_capacity;
+    TextExpressionSelector* expression_selectors;
+    u32 expression_selector_count;
+    u32 expression_selector_capacity;
+    TextWigglySelector* wiggly_selectors;
+    u32 wiggly_selector_count;
+    u32 wiggly_selector_capacity;
+} TextAnimator;
 
 typedef enum {
     CLIP_TYPE_MEDIA,
@@ -34,6 +129,10 @@ typedef struct {
     // 缓存
     float cached_width;
     float cached_height;
+
+    TextAnimator* animators;
+    u32 animator_count;
+    u32 animator_capacity;
 } TextData;
 
 typedef struct {
@@ -98,3 +197,16 @@ Clip* clip_create_adjustment(u32 width, u32 height);
 Clip* clip_create_group(u32 width, u32 height, double fps);
 Clip* clip_create_precomp(u32 width, u32 height, double fps);
 void clip_free(Clip* clip);
+
+TextAnimator* clip_text_add_animator(Clip* clip);
+u32 clip_text_get_animator_count(const Clip* clip);
+TextAnimator* clip_text_get_animator(Clip* clip, u32 index);
+TextRangeSelector* text_animator_add_range_selector(TextAnimator* animator);
+u32 text_animator_get_range_selector_count(const TextAnimator* animator);
+TextRangeSelector* text_animator_get_range_selector(TextAnimator* animator, u32 index);
+TextExpressionSelector* text_animator_add_expression_selector(TextAnimator* animator);
+u32 text_animator_get_expression_selector_count(const TextAnimator* animator);
+TextExpressionSelector* text_animator_get_expression_selector(TextAnimator* animator, u32 index);
+TextWigglySelector* text_animator_add_wiggly_selector(TextAnimator* animator);
+u32 text_animator_get_wiggly_selector_count(const TextAnimator* animator);
+TextWigglySelector* text_animator_get_wiggly_selector(TextAnimator* animator, u32 index);

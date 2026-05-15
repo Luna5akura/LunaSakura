@@ -29,7 +29,7 @@ Luna 的编译器将源代码转换为字节码，由 VM 执行。语言使用�
   - 字典：`{"key": "value"}`。
 
  **运算符**：支持 `+ - * / == != > >= < <= ! -` 等。
-- **变量**：使用 `var` 声明，如 `var x = 10`。
+- **变量**：首次赋值即定义，如 `x = 10`。
 - **函数定义**：
   ```
   fun add(a, b=0):  # 默认参数 b=0
@@ -92,7 +92,7 @@ Luna 允许类通过定义特定名称的方法（魔术方法）来重载标准
 以下是一个简单脚本，展示变量、函数、类和控制流：
 
 ```
-var greeting = "Hello, Luna!"
+greeting = "Hello, Luna!"
 
 fun sayHello(name):
     print greeting + " " + name
@@ -104,10 +104,10 @@ class Person:
     fun greet():
         sayHello(this.name)
 
-var p = Person("User")
+p = Person("User")
 p.greet()  # 输出: Hello, Luna! User
 
-var numbers = [1, 2, 3]
+numbers = [1, 2, 3]
 for n in numbers:
     if n > 1:
         print n
@@ -115,7 +115,7 @@ for n in numbers:
         continue
 
 try:
-    var x = 1 / 0
+    x = 1 / 0
 except:
     print "Division error"
 ```
@@ -158,7 +158,7 @@ except:
 *   **参数**:
     *   `list`: `List` 实例。
 *   **返回值**: 弹出的元素（如果列表为空，返回 nil）。
-*   **示例**: `var item = pop(myList)`
+*   **示例**: `item = pop(myList)`
 
 #### `get(list, index)`
 
@@ -169,7 +169,7 @@ except:
     *   `index`: 索引（数字，从 0 开始）。
 *   **返回值**: 指定索引处的元素（如果索引越界，返回 nil 并打印错误）。
 *   **注意**: 索引必须是整数，且在 0 到列表长度-1 范围内；否则抛出运行时错误（"List index out of bounds."）。
-*   **示例**: `var value = get(myList, 0)`
+*   **示例**: `value = get(myList, 0)`
 
 #### `set(list, index, value)`
 
@@ -204,12 +204,12 @@ Luna 支持使用简洁的语法从一个可迭代对象（如 List、String 或
 *   **示例**:
     ```python
     # 传统写法
-    var list = []
+    list = []
     for i in range(5):
         push(list, i * 2)
     
     # 推导式写法 (等价且更高效)
-    var list = [i * 2 for i in range(5)]
+    list = [i * 2 for i in range(5)]
     ```
 *   **注意**: 推导式内部的变量作用域是隔离的，不会污染外部同名变量。
 
@@ -256,7 +256,7 @@ Luna 支持使用简洁的语法从一个可迭代对象（如 List、String 或
     *   `dict`: `Dict` 实例。
     *   `key`: 键。
 *   **返回值**: 对应的值（如果键不存在，返回 nil）。
-*   **示例**: `var value = dict_get(myDict, "name")`
+*   **示例**: `value = dict_get(myDict, "name")`
 
 #### `dict_remove(dict, key)`
 
@@ -266,7 +266,7 @@ Luna 支持使用简洁的语法从一个可迭代对象（如 List、String 或
     *   `dict`: `Dict` 实例。
     *   `key`: 键。
 *   **返回值**: 被移除的值（如果键不存在，返回 nil）。
-*   **示例**: `var removed = dict_remove(myDict, "name")`
+*   **示例**: `removed = dict_remove(myDict, "name")`
 
 #### `dict_has(dict, key)`
 
@@ -285,7 +285,7 @@ Luna 支持使用简洁的语法从一个可迭代对象（如 List、String 或
 *   **参数**:
     *   `dict`: `Dict` 实例。
 *   **返回值**: 包含所有键的 `List` 实例。
-*   **示例**: `var keys = dict_keys(myDict)`
+*   **示例**: `keys = dict_keys(myDict)`
 
 #### `dict_values(dict)`
 
@@ -294,7 +294,7 @@ Luna 支持使用简洁的语法从一个可迭代对象（如 List、String 或
 *   **参数**:
     *   `dict`: `Dict` 实例。
 *   **返回值**: 包含所有值的 `List` 实例。
-*   **示例**: `var values = dict_values(myDict)`
+*   **示例**: `values = dict_values(myDict)`
 
 #### `clear(dict)`
 
@@ -314,7 +314,7 @@ Luna 支持使用简洁的语法从一个可迭代对象（如 List、String 或
 *   **参数**:
     *   `obj`: `List` 或 `Dict` 实例。
 *   **返回值**: 长度（数字）。
-*   **示例**: `var size = len(myList)`
+*   **示例**: `size = len(myList)`
 
 #### `range(start, stop, step)`
 
@@ -335,7 +335,7 @@ Luna 支持使用简洁的语法从一个可迭代对象（如 List、String 或
 ```python
 
 # 1. 创建列表并操作
-var myList = List()
+myList = List()
 push(myList, 1)
 push(myList, 2)
 push(myList, 3)
@@ -349,13 +349,13 @@ set(myList, 0, 10)
 print get(myList, 0)  # 输出 10
 
 # 弹出和清空
-var popped = pop(myList)
+popped = pop(myList)
 print popped  # 输出 3
 clear(myList)
 print len(myList)  # 输出 0
 
 # 2. 创建字典并操作
-var myDict = Dict()
+myDict = Dict()
 dict_put(myDict, "name", "Luna")
 dict_put(myDict, "age", 42)
 dict_put(myDict, "active", true)
@@ -368,15 +368,15 @@ if dict_has(myDict, "name"):
     print dict_get(myDict, "name")  # 输出 Luna
 
 # 移除
-var removed = dict_remove(myDict, "age")
+removed = dict_remove(myDict, "age")
 print removed  # 输出 42
 print len(myDict)  # 输出 2
 
 # 获取键和值
-var keys = dict_keys(myDict)
+keys = dict_keys(myDict)
 print keys  # 输出 [ "name", "active" ] (顺序不保证)
 
-var values = dict_values(myDict)
+values = dict_values(myDict)
 print values  # 输出 [ "Luna", true ] (顺序不保证)
 
 # 清空
@@ -395,7 +395,7 @@ print divide(10, 2)  # 输出 5
 print divide(10, 0)  # 输出 Division error 和 nil
 
 # Lambda 示例
-var add = lam a, b: a + b
+add = lam a, b: a + b
 print add(3, 4)  # 输出 7
 
 # Range 与 循环控制流示例
@@ -422,10 +422,10 @@ class Vector:
     fun toString():
         return "(" + this.x + ", " + this.y + ")"
 
-var v1 = Vector(2, 3)
-var v2 = Vector(4, 5)
+v1 = Vector(2, 3)
+v2 = Vector(4, 5)
 
-var v3 = v1 + v2     # 自动调用 v1.__add(v2)
+v3 = v1 + v2     # 自动调用 v1.__add(v2)
 print v3.x           # 输出 6
 print v3.y           # 输出 8
 
@@ -433,10 +433,10 @@ if v1 < v2:          # 自动调用 v1.__lt(v2)
     print "v1 is smaller"
 
 # 列表推导式示例
-var squares = [x * x for x in range(10)]
+squares = [x * x for x in range(10)]
 print squares  # 输出 [0, 1, 4, 9, ..., 81]
 
 # 结合字符串
-var codes = [c for c in "ABC"]
+codes = [c for c in "ABC"]
 print codes    # 输出 ["A", "B", "C"]
 ```

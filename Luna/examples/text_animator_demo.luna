@@ -1,0 +1,79 @@
+width = 960
+height = 540
+fps = 24
+duration = 4
+
+proj = Project(width, height, fps)
+tl = Timeline(width, height, fps)
+proj.setTimeline(tl)
+tl.setBackgroundColor(10, 12, 18, 255)
+
+title = Text("Luna")
+    .setFont("assets/fonts/arial.ttf")
+    .setSize(112)
+    .setColor(245, 245, 245)
+    .setLetterSpacing(8)
+    .setStroke(true, 3, 12, 16, 24)
+    .setPos(220, 180)
+
+anim = title.addAnimator()
+selector = anim.addRangeSelector()
+expr = anim.addExpressionSelector()
+wiggly = anim.addWigglySelector()
+
+anim.opacity = -100
+anim.y = 48
+anim.tracking = 14
+anim.anchorY = -6
+anim.skew = 14
+anim.skewAxis = 40
+anim.fillOpacity = -20
+anim.fillHue = 22
+anim.fillSaturation = 12
+anim.fillBrightness = 8
+anim.fillColor = [255, 140, 90, 255]
+anim.strokeColor = [12, 16, 24, 255]
+
+selector.start = 0
+selector.end = 35
+selector.setShape("smooth")
+selector.setBasedOn("words")
+selector.offset.keyframes([
+    [0.0, -100.0],
+    [2.2, 100.0]
+])
+
+expr.setExpression("smoothstep(0, 100, position) * 100")
+expr.setBasedOn("characters")
+expr.amount.keyframes([
+    [0.0, 0.0],
+    [0.5, 100.0],
+    [4.0, 100.0]
+])
+
+wiggly.setBasedOn("characters")
+wiggly.amount = 30
+wiggly.wigglesPerSecond = 2.4
+wiggly.correlation = 25
+
+subtitle = Text("First-phase text animators")
+    .setFont("assets/fonts/arial.ttf")
+    .setSize(30)
+    .setColor(170, 178, 196)
+    .setLetterSpacing(2)
+    .setPos(226, 315)
+
+subtitleInst = tl.add(0, subtitle, 0)
+    .setDuration(duration)
+
+subtitleInst.opacity.keyframes([
+    [0.0, 0.0],
+    [0.7, 1.0],
+    [3.6, 1.0],
+    [4.0, 0.0]
+])
+
+titleInst = tl.add(1, title, 0)
+    .setDuration(duration)
+
+proj.preview(0, duration)

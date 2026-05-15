@@ -1,0 +1,13 @@
+p = Project(1280, 720, 30)
+tl = Timeline(1280, 720, 30)
+
+t = Text("Hello Luna!")
+    .setFont("assets/fonts/arial.ttf")
+    .setSize(72)
+    .setColor(255, 255, 255)
+    .setLetterSpacing(8)
+    .setStroke(true, 4, 255, 255, 0)
+
+tl.add(0, t, 0)
+p.setTimeline(tl)
+    .preview(0, 5)

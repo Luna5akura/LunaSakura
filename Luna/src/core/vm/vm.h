@@ -65,6 +65,9 @@ struct VM {
     // --- Exception Handling ---
     Handler handlers[FRAMES_MAX];
     int handlerCount;
+
+    bool captureReturn;
+    Value capturedReturn;
  
     // --- Storage ---
     Value stack[STACK_MAX];
@@ -75,6 +78,7 @@ void initVM(VM* vm);
 void freeVM(VM* vm);
 // 核心解释函数
 InterpretResult interpret(VM* vm, Chunk* chunk);
+InterpretResult vm_call_value(VM* vm, Value callee, i32 argCount, Value* args, Value* out_result);
 // 定义原生函数
 void defineNative(VM* vm, const char* name, NativeFn function);
 // 共享的 VM 操作

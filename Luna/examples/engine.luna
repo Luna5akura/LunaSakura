@@ -1,0 +1,49 @@
+proj = Project(960, 540, 30)
+print proj.width
+print proj.height
+print proj.fps
+print proj.duration
+
+tl = Timeline(960, 540, 30)
+proj.setTimeline(tl)
+
+clip = Clip("assets/media/test.mp4")
+if clip == nil:
+    print "Failed to load clip"
+else:
+    print clip.duration
+    print clip.width
+    print clip.height
+    print clip.fps
+
+clip.trim(0, 10)
+print clip.duration
+print clip.in_point
+
+clip
+    .setScale(0.5, 0.5)
+print clip.default_scale_x
+print clip.default_scale_y
+
+clip
+    .setPos(100, 200)
+print clip.default_x
+print clip.default_y
+
+clip
+    .setOpacity(0.8)
+print clip.default_opacity
+
+tl.add(0, clip, 0)
+print tl.duration
+
+clip2 = Clip("assets/media/test.mp4")
+clip2.trim(5, 10)
+clip2
+    .setScale(0.8)
+    .setPos(300, 400)
+    .setOpacity(0.6)
+tl.add(1, clip2, 10)
+print tl.duration
+
+proj.preview()

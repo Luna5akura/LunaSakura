@@ -1,0 +1,31 @@
+width = 640
+height = 360
+fps = 24
+duration = 6
+
+proj = Project(width, height, fps)
+tl = Timeline(width, height, fps)
+proj.setTimeline(tl)
+
+base = Solid(width, height, 0, 0, 0, 255)
+baseInst = tl.add(0, base, 0)
+    .setDuration(duration)
+
+fractal = baseInst.addEffect(
+    FractalNoise(
+        scale=72,
+        contrast=1.35,
+        brightness=0.05,
+        octaves=5,
+        amount=1.0,
+        offsetX=0,
+        offsetY=0
+    )
+)
+fractal.evolution.keyframes([
+    [0.0, 0.0],
+    [duration, 90.0]
+])
+
+print tl.getDuration()
+proj.preview(0, duration)

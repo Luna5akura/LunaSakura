@@ -257,7 +257,7 @@ static void function(FunctionType type) {
     block();
     
     ObjFunction* func = endCompiler();
-    emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(func)));
+    emitConstantOperandInstruction(OP_CLOSURE, OP_CLOSURE_LONG, makeConstant(OBJ_VAL(func)));
     for (i32 i = 0; i < func->upvalueCount; i++) {
         emitByte(compiler.upvalues[i].isLocal ? 1 : 0);
         emitByte(compiler.upvalues[i].index);
@@ -268,21 +268,22 @@ static void method() {
     // 如果不希望有 fun 关键字，可以注释掉这一行
     consume(TOKEN_FUN, "Expect 'fun' keyword before method definition."); 
     consume(TOKEN_IDENTIFIER, "Expect method name.");
-    u8 constant = identifierConstant(&parser.previous);
+    u32 constant = identifierConstant(&parser.previous);
     FunctionType type = TYPE_METHOD;
     if (parser.previous.length == 4 && memcmp(parser.previous.start, "init", 4) == 0) {
         type = TYPE_INITIALIZER;
     }
     function(type);
-    emitBytes(OP_METHOD, constant);
+    emitConstantOperandInstruction(OP_METHOD, OP_METHOD_LONG, constant);
 }
 
 static void classDeclaration() {
     consume(TOKEN_IDENTIFIER, "Expect class name.");
     Token className = parser.previous;
-    u8 nameConstant = identifierConstant(&parser.previous);
+    u32 nameConstant = identifierConstant(&parser.previous);
     declareVariable();
-    emitBytes(OP_CLASS, nameConstant);
+    emitConstantOperandInstruction(OP_CLASS, OP_CLASS_LONG, nameConstant);
+    if (current->scopeDepth == 0) rememberScriptGlobal(&className);
     defineVariable(nameConstant);
     ClassCompiler classCompiler;
     classCompiler.enclosing = currentClass;
@@ -315,16 +316,8 @@ static void funDeclaration() {
     u32 global = identifierConstant(&parser.previous);
     declareVariable();
     if (current->scopeDepth > 0) current->locals[current->localCount - 1].depth = current->scopeDepth;
+    if (current->scopeDepth == 0) rememberScriptGlobal(&parser.previous);
     function(TYPE_FUNCTION);
-    defineVariable(global);
-}
-
-static void varDeclaration() {
-    consume(TOKEN_IDENTIFIER, "Expect var name.");
-    Token name = parser.previous;
-    u32 global = identifierConstant(&name);
-    if (match(TOKEN_EQUAL)) expression(); else emitByte(OP_NIL);
-    consumeLineEnd();
     defineVariable(global);
 }
 
@@ -333,7 +326,6 @@ void declaration() {
     if (check(TOKEN_DEDENT)) return;
     if (match(TOKEN_CLASS)) classDeclaration();
     else if (match(TOKEN_FUN)) { advance(); funDeclaration(); }
-    else if (match(TOKEN_VAR)) varDeclaration();
     else statement();
     if (parser.panicMode) {
         parser.panicMode = false;

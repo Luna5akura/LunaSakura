@@ -36,6 +36,13 @@ typedef struct {
     int blur_u_texture;
     int blur_u_texel_size;
     int blur_u_radius;
+    int glow_u_texture;
+    int glow_u_texel_size;
+    int glow_u_radius;
+    int glow_u_intensity;
+    int glow_u_threshold;
+    int glow_u_softness;
+    int glow_u_color;
     int fractal_u_texture;
     int fractal_u_resolution;
     int fractal_u_scale;
@@ -53,6 +60,8 @@ typedef struct {
     int displacement_u_scale_y;
     int displacement_u_amount;
     int displacement_u_offset;
+    int displacement_u_horizontal_channel;
+    int displacement_u_vertical_channel;
     int displacement_u_use_luma;
     int posterize_u_texture;
     int posterize_u_levels;
@@ -69,6 +78,7 @@ typedef struct {
     unsigned int mosaic_shader_program;
     unsigned int brightness_contrast_shader_program;
     unsigned int blur_shader_program;
+    unsigned int glow_shader_program;
     unsigned int fractal_noise_shader_program;
     unsigned int displacement_map_shader_program;
     unsigned int posterize_shader_program;

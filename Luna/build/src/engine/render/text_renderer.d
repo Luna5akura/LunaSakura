@@ -1,6 +1,7 @@
 build/src/engine/render/text_renderer.o: \
  src/engine/render/text_renderer.c src/engine/render/text_renderer.h \
- src/common.h src/engine/model/clip.h src/engine/model/transform.h \
+ src/common.h src/engine/model/clip.h src/allocator.h src/core/value.h \
+ src/engine/model/animation.h src/engine/model/transform.h \
  include/glad/glad.h include/KHR/khrplatform.h \
  /nix/store/zykjcxzj7mg1x325xxfnrymf50daqvgb-freetype-2.13.3-dev/include/freetype2/ft2build.h \
  /nix/store/zykjcxzj7mg1x325xxfnrymf50daqvgb-freetype-2.13.3-dev/include/freetype2/freetype/config/ftheader.h \
@@ -20,6 +21,9 @@ build/src/engine/render/text_renderer.o: \
 src/engine/render/text_renderer.h:
 src/common.h:
 src/engine/model/clip.h:
+src/allocator.h:
+src/core/value.h:
+src/engine/model/animation.h:
 src/engine/model/transform.h:
 include/glad/glad.h:
 include/KHR/khrplatform.h:
